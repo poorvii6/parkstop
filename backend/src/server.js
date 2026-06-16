@@ -1,0 +1,125 @@
+const express = require('express');
+const http = require('http');
+const cors = require('cors');
+const helmet = require('helmet');
+const compression = require('compression');
+const morgan = require('morgan');
+const rateLimit = require('express-rate-limit');
+
+const config = require('./config/env');
+const db = require('./config/database');
+const { initializeSocket } = require('./config/socket');
+const logger = require('./utils/logger');
+const { errorHandler, notFound } = require('./middleware/errorHandler');
+
+const authRoutes = require('./routes/auth');
+const spotRoutes = require('./routes/spots');
+const bookingRoutes = require('./routes/bookings');
+const locationRoutes = require('./routes/locations');
+const startBookingExpiryJob = require('./services/bookingExpiryService');
+const analyticsRoutes = require('./routes/analytics'); 
+const chatbotRoutes = require('./routes/chatbot');
+const paymentRoutes = require('./routes/payments');
+const mapRoutes = require('./routes/maps');
+const savedRoutes = require('./routes/saved_spots');
+
+const app = express();
+const server = http.createServer(app);
+
+initializeSocket(server);
+
+// Security
+app.use(helmet());
+app.use(compression());
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 500, // Increased for development to prevent 429 errors
+});
+app.use(limiter);
+
+// CORS (mobile-safe)
+const allowedOrigins = process.env.ALLOWED_ORIGINS 
+  ? process.env.ALLOWED_ORIGINS.split(',') 
+  : ['http://localhost:3000', 'http://localhost:8081'];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Mobile apps and some server-to-server requests don't send an origin
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) === -1 && process.env.NODE_ENV === 'production') {
+      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  },
+  credentials: true,
+}));
+
+// Body parsing with limits
+app.use(express.json({ limit: '10kb' }));
+app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+
+// Logging
+if (config.env === 'production') {
+  app.use(morgan('combined', { stream: logger.stream }));
+} else {
+  app.use(morgan('dev'));
+}
+
+// Health check
+app.get('/health', async (req, res) => {
+  try {
+    const prisma = require('./config/prisma');
+    await prisma.$queryRaw`SELECT 1`;
+    
+    res.json({
+      success: true,
+      environment: config.env,
+      database: 'connected',
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      database: 'disconnected',
+      error: error.message
+    });
+  }
+});
+
+const API_PREFIX = '/api/v1';
+
+app.use(`${API_PREFIX}/auth`, authRoutes);
+app.use(`${API_PREFIX}/spots`, spotRoutes);
+app.use(`${API_PREFIX}/bookings`, bookingRoutes);
+app.use(`${API_PREFIX}/locations`, locationRoutes);
+app.use(`${API_PREFIX}/analytics`, analyticsRoutes);
+app.use(`${API_PREFIX}/chatbot`, chatbotRoutes);
+app.use(`${API_PREFIX}/payments`, paymentRoutes);
+app.use(`${API_PREFIX}/maps`, mapRoutes);
+app.use(`${API_PREFIX}/saved-spots`, savedRoutes);
+
+app.use(notFound);
+app.use(errorHandler);
+
+
+const PORT = process.env.PORT || 3000;
+
+server.listen(PORT, '0.0.0.0', async () => {
+  logger.info(`🚀 Server running on port ${PORT}`);
+
+  try {
+    const prisma = require('./config/prisma');
+    await prisma.$connect();
+    logger.info('✅ Database connected (Prisma)');
+  } catch (error) {
+    logger.error('❌ Database connection failed:', error);
+    process.exit(1);
+  }
+
+  startBookingExpiryJob();
+});
+
+
+module.exports = { app, server };

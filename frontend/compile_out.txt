@@ -1,0 +1,56 @@
+api/client.ts(8,26): error TS2307: Cannot find module 'react-native' or its corresponding type declarations.
+app/(tabs)/_layout.tsx(2,44): error TS7016: Could not find a declaration file for module 'react'. 'C:/Users/chilly/smart-parking-app/frontend/node_modules/react/index.js' implicitly has an 'any' type.
+  Try `npm i --save-dev @types/react` if it exists or add a new declaration (.d.ts) file containing `declare module 'react';`
+app/(tabs)/explore.tsx(1,44): error TS7016: Could not find a declaration file for module 'react'. 'C:/Users/chilly/smart-parking-app/frontend/node_modules/react/index.js' implicitly has an 'any' type.
+  Try `npm i --save-dev @types/react` if it exists or add a new declaration (.d.ts) file containing `declare module 'react';`
+app/(tabs)/explore.tsx(2,87): error TS2307: Cannot find module 'react-native' or its corresponding type declarations.
+app/(tabs)/explore.tsx(54,60): error TS2322: Type '{ name: "wallet"; size: number; color: string; style: any; }' is not assignable to type 'IconProps<"text" | "link" | "key" | "navigate" | "search" | "image" | "alert" | "checkbox" | "menu" | "radio" | "timer" | "scale" | "arrow-down" | "arrow-up" | "bar-chart" | "barcode" | ... 1340 more ... | "woman-sharp">'.
+  Property 'style' does not exist on type 'IconProps<"text" | "link" | "key" | "navigate" | "search" | "image" | "alert" | "checkbox" | "menu" | "radio" | "timer" | "scale" | "arrow-down" | "arrow-up" | "bar-chart" | "barcode" | ... 1340 more ... | "woman-sharp">'.
+app/(tabs)/index.tsx(1,44): error TS7016: Could not find a declaration file for module 'react'. 'C:/Users/chilly/smart-parking-app/frontend/node_modules/react/index.js' implicitly has an 'any' type.
+  Try `npm i --save-dev @types/react` if it exists or add a new declaration (.d.ts) file containing `declare module 'react';`
+app/(tabs)/index.tsx(2,78): error TS2307: Cannot find module 'react-native' or its corresponding type declarations.
+app/(tabs)/index.tsx(69,21): error TS7006: Parameter 'spot' implicitly has an 'any' type.
+app/_layout.tsx(5,37): error TS7016: Could not find a declaration file for module 'react'. 'C:/Users/chilly/smart-parking-app/frontend/node_modules/react/index.js' implicitly has an 'any' type.
+  Try `npm i --save-dev @types/react` if it exists or add a new declaration (.d.ts) file containing `declare module 'react';`
+app/_layout.tsx(40,6): error TS2741: Property 'children' is missing in type '{ value: Theme; }' but required in type 'Props'.
+app/login.tsx(1,33): error TS7016: Could not find a declaration file for module 'react'. 'C:/Users/chilly/smart-parking-app/frontend/node_modules/react/index.js' implicitly has an 'any' type.
+  Try `npm i --save-dev @types/react` if it exists or add a new declaration (.d.ts) file containing `declare module 'react';`
+app/login.tsx(2,95): error TS2307: Cannot find module 'react-native' or its corresponding type declarations.
+app/modal.tsx(2,28): error TS2307: Cannot find module 'react-native' or its corresponding type declarations.
+app/register.tsx(1,33): error TS7016: Could not find a declaration file for module 'react'. 'C:/Users/chilly/smart-parking-app/frontend/node_modules/react/index.js' implicitly has an 'any' type.
+  Try `npm i --save-dev @types/react` if it exists or add a new declaration (.d.ts) file containing `declare module 'react';`
+app/register.tsx(2,139): error TS2307: Cannot find module 'react-native' or its corresponding type declarations.
+components/external-link.tsx(2,63): error TS2307: Cannot find module 'expo-web-browser' or its corresponding type declarations.
+components/external-link.tsx(3,37): error TS7016: Could not find a declaration file for module 'react'. 'C:/Users/chilly/smart-parking-app/frontend/node_modules/react/index.js' implicitly has an 'any' type.
+  Try `npm i --save-dev @types/react` if it exists or add a new declaration (.d.ts) file containing `declare module 'react';`
+components/haptic-tab.tsx(3,26): error TS2307: Cannot find module 'expo-haptics' or its corresponding type declarations.
+components/haptic-tab.tsx(9,19): error TS7006: Parameter 'ev' implicitly has an 'any' type.
+components/parallax-scroll-view.tsx(1,54): error TS7016: Could not find a declaration file for module 'react'. 'C:/Users/chilly/smart-parking-app/frontend/node_modules/react/index.js' implicitly has an 'any' type.
+  Try `npm i --save-dev @types/react` if it exists or add a new declaration (.d.ts) file containing `declare module 'react';`
+components/parallax-scroll-view.tsx(2,28): error TS2307: Cannot find module 'react-native' or its corresponding type declarations.
+components/themed-text.tsx(1,50): error TS2307: Cannot find module 'react-native' or its corresponding type declarations.
+components/themed-view.tsx(1,38): error TS2307: Cannot find module 'react-native' or its corresponding type declarations.
+components/ui/collapsible.tsx(1,45): error TS7016: Could not find a declaration file for module 'react'. 'C:/Users/chilly/smart-parking-app/frontend/node_modules/react/index.js' implicitly has an 'any' type.
+  Try `npm i --save-dev @types/react` if it exists or add a new declaration (.d.ts) file containing `declare module 'react';`
+components/ui/collapsible.tsx(2,46): error TS2307: Cannot find module 'react-native' or its corresponding type declarations.
+components/ui/collapsible.tsx(18,35): error TS7006: Parameter 'value' implicitly has an 'any' type.
+components/ui/icon-symbol.ios.tsx(1,59): error TS2307: Cannot find module 'expo-symbols' or its corresponding type declarations.
+components/ui/icon-symbol.ios.tsx(2,38): error TS2307: Cannot find module 'react-native' or its corresponding type declarations.
+components/ui/icon-symbol.tsx(4,47): error TS2307: Cannot find module 'expo-symbols' or its corresponding type declarations.
+components/ui/icon-symbol.tsx(5,32): error TS7016: Could not find a declaration file for module 'react'. 'C:/Users/chilly/smart-parking-app/frontend/node_modules/react/index.js' implicitly has an 'any' type.
+  Try `npm i --save-dev @types/react` if it exists or add a new declaration (.d.ts) file containing `declare module 'react';`
+components/ui/icon-symbol.tsx(6,66): error TS2307: Cannot find module 'react-native' or its corresponding type declarations.
+components/ui/icon-symbol.tsx(40,72): error TS2322: Type '{ color: any; size: number; name: ComponentProps<Icon<"android" | "light" | "login" | "email" | "password" | "title" | "link" | "style" | "phone" | "padding" | "height" | "history" | "key" | "explore" | ... 2219 more ... | "zoom-out-map", "material">>; style: any; }' is not assignable to type 'IconProps<"android" | "light" | "login" | "email" | "password" | "title" | "link" | "style" | "phone" | "padding" | "height" | "history" | "key" | "explore" | "search" | "image" | "menu" | ... 2216 more ... | "zoom-out-map">'.
+  Property 'style' does not exist on type 'IconProps<"android" | "light" | "login" | "email" | "password" | "title" | "link" | "style" | "phone" | "padding" | "height" | "history" | "key" | "explore" | "search" | "image" | "menu" | ... 2216 more ... | "zoom-out-map">'.
+components/UniversalMap.tsx(1,19): error TS7016: Could not find a declaration file for module 'react'. 'C:/Users/chilly/smart-parking-app/frontend/node_modules/react/index.js' implicitly has an 'any' type.
+  Try `npm i --save-dev @types/react` if it exists or add a new declaration (.d.ts) file containing `declare module 'react';`
+components/UniversalMap.web.tsx(1,19): error TS7016: Could not find a declaration file for module 'react'. 'C:/Users/chilly/smart-parking-app/frontend/node_modules/react/index.js' implicitly has an 'any' type.
+  Try `npm i --save-dev @types/react` if it exists or add a new declaration (.d.ts) file containing `declare module 'react';`
+components/UniversalMap.web.tsx(2,40): error TS2307: Cannot find module 'react-native' or its corresponding type declarations.
+constants/theme.ts(6,26): error TS2307: Cannot find module 'react-native' or its corresponding type declarations.
+hooks/use-color-scheme.ts(1,32): error TS2307: Cannot find module 'react-native' or its corresponding type declarations.
+hooks/use-color-scheme.web.ts(1,37): error TS7016: Could not find a declaration file for module 'react'. 'C:/Users/chilly/smart-parking-app/frontend/node_modules/react/index.js' implicitly has an 'any' type.
+  Try `npm i --save-dev @types/react` if it exists or add a new declaration (.d.ts) file containing `declare module 'react';`
+hooks/use-color-scheme.web.ts(2,52): error TS2307: Cannot find module 'react-native' or its corresponding type declarations.
+hooks/use-theme-color.ts(14,26): error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type '{ light?: string | undefined; dark?: string | undefined; }'.
+hooks/use-theme-color.ts(19,12): error TS7053: Element implicitly has an 'any' type because expression of type 'any' can't be used to index type '{ light: { text: string; background: string; tint: string; icon: string; tabIconDefault: string; tabIconSelected: string; }; dark: { text: string; background: string; tint: string; icon: string; tabIconDefault: string; tabIconSelected: string; }; }'.

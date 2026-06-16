@@ -1,0 +1,13 @@
+{
+  "name": "smart-parking-app",
+  "version": "1.0.0",
+  "description": "Smart Parking App - Root Workspace",
+  "scripts": {
+    "frontend": "cd frontend && npm start",
+    "frontend:install": "cd frontend && npm install",
+    "backend": "cd backend && npm start",
+    "backend:install": "cd backend && npm install",
+    "dev": "npm run frontend & npm run backend",
+    "start": "npm run dev"
+  }
+}

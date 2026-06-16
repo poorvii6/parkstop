@@ -1,0 +1,21 @@
+
+> smart-parking-mobile@1.0.0 web
+> expo start --web
+
+Starting project at C:\Users\chilly\smart-parking-app\frontend
+SyntaxError: Invalid or unexpected token
+C:\Users\chilly\smart-parking-app\frontend\node_modules\expo\node_modules\@expo\cli\build\src\start\server\metro\externals.js:82
+        const shimDir = _path.default.join(projectRoot, METRO_EXTERNALS_FOLDER, moduleId.replace(/:/g, \'-\'));
+                                                                                                       ^
+
+SyntaxError: Invalid or unexpected token
+    at wrapSafe (node:internal/modules/cjs/loader:1691:18)
+    at Module._compile (node:internal/modules/cjs/loader:1734:20)
+    at Object..js (node:internal/modules/cjs/loader:1892:10)
+    at Module.load (node:internal/modules/cjs/loader:1480:32)
+    at Module._load (node:internal/modules/cjs/loader:1299:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:245:24)
+    at Module.require (node:internal/modules/cjs/loader:1503:12)
+    at require (node:internal/modules/helpers:152:16)
+    at Object.<anonymous> (C:\Users\chilly\smart-parking-app\frontend\node_modules\expo\node_modules\@expo\cli\src\start\server\metro\MetroTerminalReporter.ts:13:50)
