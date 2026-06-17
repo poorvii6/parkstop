@@ -3,33 +3,40 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
+
 let cachedApiUrl: string | null = null;
+
 const getAPIUrl = async () => {
   if (cachedApiUrl) return cachedApiUrl;
+
   const apiUrl =
     process.env.EXPO_PUBLIC_API_URL ||
     'https://parkstop-production.up.railway.app/api/v1';
+
   cachedApiUrl = apiUrl;
+
   console.log(`[API] Using backend: ${apiUrl}`);
   return apiUrl;
 };
+
 const apiClient = axios.create({
   timeout: 15000, // Reduced timeout for faster failure/retry
   headers: {
     'Bypass-Tunnel-Reminder': 'true',
   },
 });
+
 // REQUEST INTERCEPTOR: Inject dynamic URL and Auth token
 apiClient.interceptors.request.use(
   async (config) => {
-    // Ensure baseURL is set (Lazy initialization)
     if (!config.baseURL) {
-        config.baseURL = await getAPIUrl();
       config.baseURL = await getAPIUrl();
     }
+
     console.log('[API REQUEST]');
     console.log('Base URL:', config.baseURL);
     console.log('Final URL:', `${config.baseURL}${config.url}`);
+
     try {
       const token = await AsyncStorage.getItem('access_token');
       if (token) {
@@ -42,6 +49,7 @@ apiClient.interceptors.request.use(
   },
   (error) => Promise.reject(error)
 );
+
 apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
@@ -49,6 +57,7 @@ apiClient.interceptors.response.use(
       if (error.config.url?.includes('/auth/login')) {
         return Promise.reject(error);
       }
+
       const token = await AsyncStorage.getItem('access_token');
       if (token === 'offline_token') return Promise.reject(error);
       
@@ -66,4 +75,5 @@ apiClient.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
 export default apiClient;
