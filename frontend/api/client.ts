@@ -7,48 +7,16 @@ import Constants from 'expo-constants';
 let cachedApiUrl: string | null = null;
 
 const getAPIUrl = async () => {
-    // 1. Return cached version if available for speed
-    if (cachedApiUrl) return cachedApiUrl;
+  if (cachedApiUrl) return cachedApiUrl;
 
-    // 2. Check AsyncStorage for previously discovered IP
-    try {
-        const storedIp = await AsyncStorage.getItem('discovered_api_url');
-        if (storedIp) {
-            cachedApiUrl = storedIp;
-            return storedIp;
-        }
-    } catch (e) {}
+  const apiUrl =
+    process.env.EXPO_PUBLIC_API_URL ||
+    'https://parkstop-production.up.railway.app/api/v1';
 
-    let detectedUrl = '';
+  cachedApiUrl = apiUrl;
 
-    // 3. Explicit environment variable
-    if (process.env.EXPO_PUBLIC_API_URL) {
-        detectedUrl = `${process.env.EXPO_PUBLIC_API_URL}/api/v1`;
-    } 
-    // 4. Web
-    else if (Platform.OS === 'web') {
-        detectedUrl = 'https://parkstop-production.up.railway.app/api/v1';
-    } 
-    // 5. Android Emulator
-    else if (Platform.OS === 'android' && !Device.isDevice) {
-        detectedUrl = 'http://10.0.2.2:3000/api/v1'; 
-    } 
-    // 6. Dynamic IP detection for Expo Go
-    else {
-        const debuggerHost = Constants.expoConfig?.hostUri || Constants.manifest2?.extra?.expoGoConfig?.debuggerHost;
-        if (debuggerHost) {
-            const ipAddress = debuggerHost.split(':')[0];
-            detectedUrl = `http://${ipAddress}:3000/api/v1`;
-        } else {
-            // 7. Hardcoded Fallback
-            detectedUrl = 'http://192.168.31.68:3000/api/v1'; 
-        }
-    }
-
-    cachedApiUrl = detectedUrl;
-    AsyncStorage.setItem('discovered_api_url', detectedUrl).catch(() => {});
-    console.log(`[API] Optimized Discovery: ${detectedUrl}`);
-    return detectedUrl;
+  console.log(`[API] Using backend: ${apiUrl}`);
+  return apiUrl;
 };
 
 const apiClient = axios.create({
