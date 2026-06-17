@@ -42,7 +42,7 @@ app.use(limiter);
 // CORS (mobile-safe)
 const allowedOrigins = process.env.ALLOWED_ORIGINS 
   ? process.env.ALLOWED_ORIGINS.split(',') 
-  : ['http://localhost:3000', 'http://localhost:8081'];
+  : ['http://localhost:3000', 'http://localhost:8081', 'http://localhost:8080'];
 
 app.use(cors({
   origin: (origin, callback) => {
