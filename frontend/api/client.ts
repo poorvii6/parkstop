@@ -27,7 +27,7 @@ const getAPIUrl = async () => {
     } 
     // 4. Web
     else if (Platform.OS === 'web') {
-        detectedUrl = 'http://localhost:3000/api/v1';
+        detectedUrl = 'https://parkstop-production.up.railway.app/api/v1';
     } 
     // 5. Android Emulator
     else if (Platform.OS === 'android' && !Device.isDevice) {
