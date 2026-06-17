@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import io, { Socket } from 'socket.io-client';
 import apiClient from '../api/client';
 
-const SOCKET_URL = process.env.EXPO_PUBLIC_API_URL?.replace('/api/v1', '') || 'http://192.168.1.100:3000';
+const SOCKET_URL = process.env.EXPO_PUBLIC_API_URL?.replace('/api/v1', '') || 'https://parkstop-production.up.railway.app';
 
 export interface Spot {
   id: string;
