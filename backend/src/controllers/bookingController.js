@@ -4,6 +4,8 @@ const logger = require('../utils/logger');
 const { emitToUser } = require('../config/socket');
 const NotificationService = require('../services/notificationService');
 const PaymentService = require('../services/paymentService');
+const CommissionService = require('../services/CommissionService');
+const PayoutService = require('../services/payments/PayoutService');
 
 class BookingController {
 
@@ -143,6 +145,34 @@ class BookingController {
 
       const completedBooking = await Booking.verifyCheckoutOTP(bookingId, otp);
 
+      // 💰 Auto-payout: credit Spotter earnings after checkout
+      try {
+        const booking = await Booking.findById(bookingId);
+        if (booking && booking.payment_status === 'paid') {
+          const spot = await ParkingSpot.findById(booking.spot_id);
+          if (spot && spot.spotter_id) {
+            const { spotterEarning, platformFee } = CommissionService.calculateCommission(
+              booking.total_price, spot.location_type
+            );
+
+            // Update booking with commission split
+            await require('../config/prisma').bookings.update({
+              where: { id: parseInt(bookingId) },
+              data: {
+                platform_fee: platformFee,
+                spotter_earning: spotterEarning
+              }
+            });
+
+            // Trigger payout to Spotter
+            await PayoutService.processBookingPayout(bookingId, spotterEarning, spot.spotter_id);
+            logger.info(`Payout processed: ₹${spotterEarning} to spotter ${spot.spotter_id} for booking ${bookingId}`);
+          }
+        }
+      } catch (payoutErr) {
+        logger.error(`Payout error after checkout OTP for booking ${bookingId}:`, payoutErr);
+      }
+
       res.json({
         success: true,
         message: 'Checkout verified and booking completed',
@@ -192,6 +222,31 @@ class BookingController {
       }
 
       const completedBooking = await Booking.complete(bookingId, otp);
+
+      // 💰 Auto-payout: credit Spotter earnings after completion
+      try {
+        const completedData = await Booking.findById(bookingId);
+        if (completedData && completedData.payment_status === 'paid') {
+          const { spotterEarning, platformFee } = CommissionService.calculateCommission(
+            completedData.total_price, spot.location_type
+          );
+
+          // Update booking with commission split
+          await require('../config/prisma').bookings.update({
+            where: { id: parseInt(bookingId) },
+            data: {
+              platform_fee: platformFee,
+              spotter_earning: spotterEarning
+            }
+          });
+
+          // Trigger payout to Spotter
+          await PayoutService.processBookingPayout(bookingId, spotterEarning, spot.spotter_id);
+          logger.info(`Payout processed: ₹${spotterEarning} to spotter ${spot.spotter_id} for booking ${bookingId}`);
+        }
+      } catch (payoutErr) {
+        logger.error(`Payout error after booking completion ${bookingId}:`, payoutErr);
+      }
 
       res.json({
         success: true,

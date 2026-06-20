@@ -1,5 +1,6 @@
 const express = require('express');
 const http = require('http');
+const path = require('path');
 const cors = require('cors');
 const helmet = require('helmet');
 const compression = require('compression');
@@ -22,6 +23,7 @@ const chatbotRoutes = require('./routes/chatbot');
 const paymentRoutes = require('./routes/payments');
 const mapRoutes = require('./routes/maps');
 const savedRoutes = require('./routes/saved_spots');
+const payoutRoutes = require('./routes/payouts');
 
 const app = express();
 const server = http.createServer(app);
@@ -99,6 +101,13 @@ app.use(`${API_PREFIX}/chatbot`, chatbotRoutes);
 app.use(`${API_PREFIX}/payments`, paymentRoutes);
 app.use(`${API_PREFIX}/maps`, mapRoutes);
 app.use(`${API_PREFIX}/saved-spots`, savedRoutes);
+app.use(`${API_PREFIX}/payouts`, payoutRoutes);
+
+// Serve the ParkStop landing page at root URL
+app.use(express.static(path.join(__dirname, '..', 'public')));
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+});
 
 app.use(notFound);
 app.use(errorHandler);

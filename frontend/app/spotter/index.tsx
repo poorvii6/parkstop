@@ -122,6 +122,7 @@ export default function SpotterDashboard() {
     inventory: [] as any[],
     recent_traffic: [] as any[],
   });
+  const [payoutSetup, setPayoutSetup] = useState<boolean | null>(null);
 
   const fetchDashboardData = useCallback(async () => {
     try {
@@ -140,6 +141,10 @@ export default function SpotterDashboard() {
   useEffect(() => {
     fetchDashboardData();
     registerForPushNotificationsAsync();
+    // Check payout account status
+    apiClient.get('/payouts/account-status')
+      .then(res => { if (res.data?.success) setPayoutSetup(res.data.data.is_setup); })
+      .catch(() => setPayoutSetup(false));
   }, [fetchDashboardData]);
 
   const onRefresh = () => {
@@ -202,6 +207,24 @@ export default function SpotterDashboard() {
           />
         }
       >
+        {/* PAYOUT SETUP BANNER */}
+        {payoutSetup === false && (
+          <TouchableOpacity
+            style={s.payoutBanner}
+            onPress={() => router.push('/spotter/payout-setup')}
+            activeOpacity={0.85}
+          >
+            <View style={s.payoutBannerIcon}>
+              <Ionicons name="wallet-outline" size={22} color={SC.warning} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={s.payoutBannerTitle}>Set Up Payouts</Text>
+              <Text style={s.payoutBannerSub}>Link your UPI or bank account to receive earnings automatically</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={SC.textMuted} />
+          </TouchableOpacity>
+        )}
+
         {/* STAT CARDS */}
         <View style={s.statsRow}>
           <StatCard
@@ -492,5 +515,36 @@ const s = StyleSheet.create({
   statusChipText: {
     ...TF.chip,
     fontSize: 9,
+  },
+
+  // Payout Banner
+  payoutBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: SC.warningSoft,
+    borderRadius: RAD.md,
+    padding: SP.cardPadding,
+    marginBottom: SP.lg,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.2)',
+    gap: 12,
+  },
+  payoutBannerIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: 'rgba(245, 158, 11, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  payoutBannerTitle: {
+    color: SC.warning,
+    fontSize: 14,
+    fontWeight: '800',
+    marginBottom: 2,
+  },
+  payoutBannerSub: {
+    color: SC.textSecondary,
+    fontSize: 12,
   },
 });

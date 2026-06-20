@@ -63,6 +63,13 @@ export default function SpotterTabsLayout() {
           ),
         }}
       />
+      <Tabs.Screen
+        name="payout-setup"
+        options={{
+          title: 'Payout Setup',
+          href: null,
+        }}
+      />
     </Tabs>
   );
 }

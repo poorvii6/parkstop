@@ -108,3 +108,4 @@ class RazorpayAdapter {
 }
 
 module.exports = new RazorpayAdapter();
+module.exports.razorpayInstance = razorpay;

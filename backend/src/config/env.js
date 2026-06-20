@@ -47,6 +47,13 @@ const config = {
     serverKey: process.env.FIREBASE_SERVER_KEY || '',
   },
 
+  // Razorpay
+  razorpay: {
+    keyId: process.env.RAZORPAY_KEY_ID,
+    keySecret: process.env.RAZORPAY_KEY_SECRET,
+    accountNumber: process.env.RAZORPAY_ACCOUNT_NUMBER,
+  },
+
   // Rate Limiting
   rateLimit: {
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10) || 900000, // 15 minutes

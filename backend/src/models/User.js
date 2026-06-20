@@ -53,7 +53,13 @@ class User {
         role: true,
         address: true,
         dob: true,
-        created_at: true
+        created_at: true,
+        upi_id: true,
+        bank_account_number: true,
+        bank_ifsc: true,
+        bank_account_name: true,
+        payout_mode: true,
+        balance: true
       }
     });
     if (!user) return null;
@@ -65,12 +71,17 @@ class User {
   }
 
   static async update(id, updates) {
-    const { name, phone, address, dob } = updates;
+    const { name, phone, address, dob, upi_id, bank_account_number, bank_ifsc, bank_account_name, payout_mode } = updates;
     const updateData = {};
     if (name) { updateData.full_name = name; updateData.name = name; }
     if (phone) updateData.phone = phone;
     if (address) updateData.address = address;
     if (dob) updateData.dob = dob;
+    if (upi_id !== undefined) updateData.upi_id = upi_id;
+    if (bank_account_number !== undefined) updateData.bank_account_number = bank_account_number;
+    if (bank_ifsc !== undefined) updateData.bank_ifsc = bank_ifsc;
+    if (bank_account_name !== undefined) updateData.bank_account_name = bank_account_name;
+    if (payout_mode !== undefined) updateData.payout_mode = payout_mode;
 
     const user = await prisma.users.update({
       where: { id: parseInt(id) },
@@ -82,7 +93,10 @@ class User {
         phone: true,
         address: true,
         dob: true,
-        role: true
+        role: true,
+        upi_id: true,
+        payout_mode: true,
+        balance: true
       }
     });
 

@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="ParkStop — India's smart parking marketplace. Find, book, and pay for parking spots in seconds. Earn money by listing your unused parking space.">
+  <meta name="keywords" content="parking, smart parking, parking app, book parking, parking marketplace, India parking, ParkStop">
+  <meta name="author" content="ParkStop">
+  <title>ParkStop — Smart Parking, Instantly</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg-primary: #0A0E1A;
+      --bg-card: rgba(255, 255, 255, 0.04);
+      --bg-card-hover: rgba(255, 255, 255, 0.07);
+      --accent: #4F7CFF;
+      --accent-glow: rgba(79, 124, 255, 0.25);
+      --green: #34D399;
+      --orange: #FB923C;
+      --text-primary: #FFFFFF;
+      --text-secondary: rgba(255, 255, 255, 0.55);
+      --text-muted: rgba(255, 255, 255, 0.3);
+      --border: rgba(255, 255, 255, 0.08);
+      --radius: 16px;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      line-height: 1.6;
+      overflow-x: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* === BACKGROUND EFFECTS === */
+    .bg-glow {
+      position: fixed;
+      top: -200px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 800px;
+      height: 600px;
+      background: radial-gradient(ellipse, var(--accent-glow) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .bg-grid {
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+      background-size: 60px 60px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* === LAYOUT === */
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 24px;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* === NAV === */
+    nav {
+      padding: 20px 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .logo {
+      font-size: 24px;
+      font-weight: 900;
+      letter-spacing: -0.5px;
+      color: var(--text-primary);
+    }
+
+    .logo span { color: var(--accent); }
+
+    .nav-badge {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--green);
+      background: rgba(52, 211, 153, 0.1);
+      border: 1px solid rgba(52, 211, 153, 0.2);
+      padding: 6px 14px;
+      border-radius: 100px;
+    }
+
+    /* === HERO === */
+    .hero {
+      text-align: center;
+      padding: 100px 0 80px;
+    }
+
+    .hero-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--accent);
+      background: rgba(79, 124, 255, 0.08);
+      border: 1px solid rgba(79, 124, 255, 0.15);
+      padding: 8px 18px;
+      border-radius: 100px;
+      margin-bottom: 32px;
+    }
+
+    .hero h1 {
+      font-size: clamp(36px, 6vw, 64px);
+      font-weight: 900;
+      line-height: 1.1;
+      letter-spacing: -2px;
+      margin-bottom: 20px;
+    }
+
+    .hero h1 .highlight {
+      background: linear-gradient(135deg, var(--accent), #818CF8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero p {
+      font-size: 18px;
+      color: var(--text-secondary);
+      max-width: 560px;
+      margin: 0 auto 40px;
+      line-height: 1.7;
+    }
+
+    .hero-stats {
+      display: flex;
+      justify-content: center;
+      gap: 48px;
+      flex-wrap: wrap;
+    }
+
+    .stat { text-align: center; }
+    .stat-value {
+      font-size: 28px;
+      font-weight: 800;
+      color: var(--text-primary);
+    }
+    .stat-label {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 4px;
+      font-weight: 500;
+    }
+
+    /* === HOW IT WORKS === */
+    .section {
+      padding: 80px 0;
+    }
+
+    .section-label {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: var(--accent);
+      margin-bottom: 12px;
+    }
+
+    .section-title {
+      font-size: clamp(28px, 4vw, 40px);
+      font-weight: 800;
+      letter-spacing: -1px;
+      margin-bottom: 48px;
+    }
+
+    .steps-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+    }
+
+    .step-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 32px 28px;
+      transition: background 0.3s, border-color 0.3s, transform 0.3s;
+    }
+
+    .step-card:hover {
+      background: var(--bg-card-hover);
+      border-color: rgba(255,255,255,0.12);
+      transform: translateY(-4px);
+    }
+
+    .step-num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      border-radius: 12px;
+      background: rgba(79, 124, 255, 0.1);
+      color: var(--accent);
+      font-weight: 800;
+      font-size: 16px;
+      margin-bottom: 20px;
+    }
+
+    .step-card h3 {
+      font-size: 18px;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+
+    .step-card p {
+      font-size: 14px;
+      color: var(--text-secondary);
+      line-height: 1.7;
+    }
+
+    /* === FEATURES === */
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px;
+    }
+
+    .feature-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px 24px;
+      display: flex;
+      gap: 16px;
+      align-items: flex-start;
+      transition: background 0.3s, transform 0.3s;
+    }
+
+    .feature-card:hover {
+      background: var(--bg-card-hover);
+      transform: translateY(-2px);
+    }
+
+    .feature-icon {
+      font-size: 24px;
+      flex-shrink: 0;
+      width: 44px;
+      height: 44px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 12px;
+      background: rgba(79, 124, 255, 0.08);
+    }
+
+    .feature-card h3 {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+
+    .feature-card p {
+      font-size: 13px;
+      color: var(--text-secondary);
+      line-height: 1.6;
+    }
+
+    /* === PRICING === */
+    .pricing-box {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 40px;
+      text-align: center;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    .pricing-box h3 {
+      font-size: 22px;
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+
+    .pricing-box .price-desc {
+      color: var(--text-secondary);
+      font-size: 15px;
+      margin-bottom: 28px;
+    }
+
+    .pricing-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 14px;
+    }
+
+    .pricing-row:last-child { border-bottom: none; }
+    .pricing-row .label { color: var(--text-secondary); }
+    .pricing-row .value { font-weight: 700; }
+
+    /* === CTA === */
+    .cta-section {
+      text-align: center;
+      padding: 80px 0 60px;
+    }
+
+    .cta-section h2 {
+      font-size: clamp(28px, 4vw, 40px);
+      font-weight: 800;
+      letter-spacing: -1px;
+      margin-bottom: 16px;
+    }
+
+    .cta-section p {
+      color: var(--text-secondary);
+      font-size: 16px;
+      margin-bottom: 32px;
+    }
+
+    .cta-buttons {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 28px;
+      border-radius: 12px;
+      font-size: 15px;
+      font-weight: 700;
+      text-decoration: none;
+      transition: transform 0.2s, box-shadow 0.2s;
+      cursor: pointer;
+      border: none;
+    }
+
+    .btn:hover { transform: translateY(-2px); }
+
+    .btn-primary {
+      background: var(--accent);
+      color: white;
+      box-shadow: 0 4px 20px var(--accent-glow);
+    }
+
+    .btn-secondary {
+      background: var(--bg-card);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+    }
+
+    /* === FOOTER === */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 40px 0;
+      text-align: center;
+    }
+
+    .footer-brand {
+      font-size: 20px;
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+
+    .footer-brand span { color: var(--accent); }
+
+    .footer-text {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+    }
+
+    .footer-links {
+      display: flex;
+      gap: 20px;
+      justify-content: center;
+      margin-top: 16px;
+    }
+
+    .footer-links a {
+      font-size: 13px;
+      color: var(--text-secondary);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    .footer-links a:hover { color: var(--accent); }
+
+    /* === RESPONSIVE === */
+    @media (max-width: 640px) {
+      .hero { padding: 60px 0 40px; }
+      .hero-stats { gap: 32px; }
+      .section { padding: 48px 0; }
+      .pricing-box { padding: 28px 20px; }
+      .features-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="bg-glow"></div>
+  <div class="bg-grid"></div>
+
+  <div class="container">
+
+    <!-- NAV -->
+    <nav>
+      <div class="logo"><span>P</span>arkStop</div>
+      <div class="nav-badge">🟢 Live Platform</div>
+    </nav>
+
+    <!-- HERO -->
+    <section class="hero">
+      <div class="hero-pill">🚗 India's Smart Parking Marketplace</div>
+      <h1>Park Smarter.<br><span class="highlight">Earn Effortlessly.</span></h1>
+      <p>ParkStop connects drivers looking for parking with people who have unused spots. Book instantly, pay securely, and never circle the block again.</p>
+      <div class="hero-stats">
+        <div class="stat">
+          <div class="stat-value">Instant</div>
+          <div class="stat-label">Spot Booking</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">₹/hr</div>
+          <div class="stat-label">Pay-Per-Use Pricing</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">Secure</div>
+          <div class="stat-label">Razorpay Payments</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- HOW IT WORKS -->
+    <section class="section">
+      <div class="section-label">How It Works</div>
+      <h2 class="section-title">Three steps to stress-free parking</h2>
+      <div class="steps-grid">
+        <div class="step-card">
+          <div class="step-num">1</div>
+          <h3>Search Nearby Spots</h3>
+          <p>Open ParkStop, see real-time available parking spots near you on a live map. Filter by price, distance, and vehicle type.</p>
+        </div>
+        <div class="step-card">
+          <div class="step-num">2</div>
+          <h3>Book & Pay Securely</h3>
+          <p>Reserve your spot with one tap. Pay securely through Razorpay — UPI, cards, or net banking. Receive an OTP to confirm arrival.</p>
+        </div>
+        <div class="step-card">
+          <div class="step-num">3</div>
+          <h3>Park & Go</h3>
+          <p>Show your OTP to the Spotter, park your vehicle, and drive away when done. Spotters earn their commission automatically.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- FOR SPOTTERS -->
+    <section class="section">
+      <div class="section-label">For Space Owners</div>
+      <h2 class="section-title">Turn unused space into income</h2>
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">🏠</div>
+          <div>
+            <h3>List Any Space</h3>
+            <p>Driveway, garage, compound — if a vehicle fits, you can list it. Set your own hourly price.</p>
+          </div>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">💰</div>
+          <div>
+            <h3>Earn Automatically</h3>
+            <p>Get paid for every booking. Earnings are credited to your account instantly when the booking completes.</p>
+          </div>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📊</div>
+          <div>
+            <h3>Track Everything</h3>
+            <p>See your bookings, earnings, and analytics in real-time from the Spotter dashboard.</p>
+          </div>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🔔</div>
+          <div>
+            <h3>Instant Notifications</h3>
+            <p>Get push notifications for new bookings, check-ins, and completed sessions. Never miss a booking.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PRICING -->
+    <section class="section">
+      <div class="section-label">Transparent Pricing</div>
+      <h2 class="section-title">Simple, fair pricing for everyone</h2>
+      <div class="pricing-box">
+        <h3>Marketplace Commission Model</h3>
+        <p class="price-desc">Spotters set their own prices. ParkStop takes a small platform fee.</p>
+        <div class="pricing-row">
+          <span class="label">Spotter sets price</span>
+          <span class="value">₹ per hour</span>
+        </div>
+        <div class="pricing-row">
+          <span class="label">Spotter receives</span>
+          <span class="value">80% of booking</span>
+        </div>
+        <div class="pricing-row">
+          <span class="label">Platform fee</span>
+          <span class="value">20%</span>
+        </div>
+        <div class="pricing-row">
+          <span class="label">Driver pays</span>
+          <span class="value">Listed price only</span>
+        </div>
+        <div class="pricing-row">
+          <span class="label">Hidden charges</span>
+          <span class="value" style="color: var(--green);">None</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- PLATFORM FEATURES -->
+    <section class="section">
+      <div class="section-label">Platform</div>
+      <h2 class="section-title">Built for reliability</h2>
+      <div class="features-grid">
+        <div class="feature-card">
+          <div class="feature-icon">🔒</div>
+          <div>
+            <h3>Secure Payments</h3>
+            <p>All transactions powered by Razorpay with end-to-end encryption. PCI DSS compliant.</p>
+          </div>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">📍</div>
+          <div>
+            <h3>GPS-Powered Search</h3>
+            <p>Real-time location-based spot discovery. Find the closest available parking in seconds.</p>
+          </div>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">⚡</div>
+          <div>
+            <h3>Real-Time Updates</h3>
+            <p>Live availability, instant booking confirmations, and real-time notifications via WebSockets.</p>
+          </div>
+        </div>
+        <div class="feature-card">
+          <div class="feature-icon">🔑</div>
+          <div>
+            <h3>OTP Verification</h3>
+            <p>Secure check-in and check-out with one-time passwords. Prevents fraudulent bookings.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="cta-section">
+      <h2>Ready to park smarter?</h2>
+      <p>Download ParkStop and find your spot in seconds.</p>
+      <div class="cta-buttons">
+        <a href="mailto:parkstopapp@gmail.com" class="btn btn-primary">📧 Contact Us</a>
+        <a href="/health" class="btn btn-secondary">⚡ API Status</a>
+      </div>
+    </section>
+
+    <!-- FOOTER -->
+    <footer>
+      <div class="footer-brand"><span>P</span>arkStop</div>
+      <p class="footer-text">Smart Parking Marketplace — Made in India 🇮🇳</p>
+      <p class="footer-text">© 2025 ParkStop. All rights reserved.</p>
+      <div class="footer-links">
+        <a href="mailto:parkstopapp@gmail.com">Contact</a>
+        <a href="/health">API Status</a>
+      </div>
+    </footer>
+
+  </div>
+
+</body>
+</html>
