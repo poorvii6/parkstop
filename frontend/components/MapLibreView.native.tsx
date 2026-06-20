@@ -395,10 +395,25 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
               !isNaN(finalDest[0]) && 
               !isNaN(finalDest[1]) && 
               (finalDest[0] !== 0 || finalDest[1] !== 0)) {
-            destEl.style.display = 'block';
             if (destMarker) {
-              destMarker.setLngLat(finalDest);
-              if (!destVis) { destMarker.addTo(map); destVis = true; }
+              var currentLngLat = destMarker.getLngLat();
+              var isNewPos = !destVis || !currentLngLat || 
+                             Math.abs(currentLngLat.lng - finalDest[0]) > 0.00001 || 
+                             Math.abs(currentLngLat.lat - finalDest[1]) > 0.00001;
+
+              if (isNewPos) {
+                destEl.style.display = 'none';
+                destMarker.setLngLat(finalDest);
+                if (!destVis) {
+                  destMarker.addTo(map);
+                  destVis = true;
+                }
+                setTimeout(function() {
+                  destEl.style.display = 'block';
+                }, 80);
+              } else {
+                destEl.style.display = 'block';
+              }
             }
           } else {
             destEl.style.display = 'none';

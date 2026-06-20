@@ -256,6 +256,7 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
     }
 
     const el = document.createElement('div');
+    el.style.display = 'none'; // Hide initially to prevent layout flash before MapLibre positions the marker
     el.innerHTML = `
       <div style="position:relative;animation:dropIn 0.4s cubic-bezier(0.175,0.885,0.32,1.275);">
         <svg width="40" height="56" viewBox="0 0 40 56" xmlns="http://www.w3.org/2000/svg">
@@ -271,6 +272,13 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
     destMarkerRef.current = new maplibregl.Marker({ element: el, anchor: 'bottom' })
       .setLngLat([destination.lng, destination.lat])
       .addTo(map.current);
+
+    // Fade/show marker after layout positioning completes
+    const timer = setTimeout(() => {
+      el.style.display = 'block';
+    }, 80);
+
+    return () => clearTimeout(timer);
   }, [isActiveNavigation, destination]);
 
   // ─── Parking Spot Markers ──────────────────────────────────────────────
