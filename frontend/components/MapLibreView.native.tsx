@@ -408,9 +408,21 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
                   destMarker.addTo(map);
                   destVis = true;
                 }
-                setTimeout(function() {
-                  destEl.style.display = 'block';
-                }, 80);
+                
+                var checkCount = 0;
+                var showPinWithGuard = function() {
+                  if (!destVis) return;
+                  var parent = destEl.parentElement;
+                  if (parent && parent.style.transform && parent.style.transform.indexOf('translate') !== -1) {
+                    destEl.style.display = 'block';
+                  } else {
+                    checkCount++;
+                    if (checkCount < 60) {
+                      requestAnimationFrame(showPinWithGuard);
+                    }
+                  }
+                };
+                requestAnimationFrame(showPinWithGuard);
               } else {
                 destEl.style.display = 'block';
               }

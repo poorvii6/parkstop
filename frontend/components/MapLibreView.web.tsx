@@ -273,12 +273,27 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
       .setLngLat([destination.lng, destination.lat])
       .addTo(map.current);
 
-    // Fade/show marker after layout positioning completes
-    const timer = setTimeout(() => {
-      el.style.display = 'block';
-    }, 80);
+    let checkCount = 0;
+    let active = true;
+    const showPinWithGuard = () => {
+      if (!active) return;
+      const parent = el.parentElement;
+      if (parent && parent.style.transform && parent.style.transform.indexOf('translate') !== -1) {
+        el.style.display = 'block';
+      } else {
+        checkCount++;
+        if (checkCount < 60) {
+          requestAnimationFrame(showPinWithGuard);
+        }
+      }
+    };
+    requestAnimationFrame(showPinWithGuard);
 
-    return () => clearTimeout(timer);
+    return () => {
+      active = false;
+      destMarkerRef.current?.remove();
+      destMarkerRef.current = null;
+    };
   }, [isActiveNavigation, destination]);
 
   // ─── Parking Spot Markers ──────────────────────────────────────────────
