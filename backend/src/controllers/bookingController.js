@@ -21,7 +21,7 @@ class BookingController {
         });
       }
 
-      const { spot_id, start_time, end_time, slot_name, vehicle_type, vehicle_subtype } = req.body;
+      const { spot_id, start_time, end_time, slot_name, vehicle_type, vehicle_subtype, payment_mode } = req.body;
 
       const booking = await Booking.create({
         user_id: req.user.id,
@@ -30,7 +30,8 @@ class BookingController {
         end_time,
         slot_name: slot_name || null,
         vehicle_type: vehicle_type || 'car',
-        vehicle_subtype: vehicle_subtype || null
+        vehicle_subtype: vehicle_subtype || null,
+        payment_mode: payment_mode || 'online'
       });
 
       // Real-time notification to Spotter
@@ -145,10 +146,10 @@ class BookingController {
 
       const completedBooking = await Booking.verifyCheckoutOTP(bookingId, otp);
 
-      // 💰 Auto-payout: credit Spotter earnings after checkout
+      // 💰 Auto-payout or Cash Ledger logic
       try {
         const booking = await Booking.findById(bookingId);
-        if (booking && booking.payment_status === 'paid') {
+        if (booking && (booking.payment_status === 'paid' || booking.payment_mode === 'cash')) {
           const spot = await ParkingSpot.findById(booking.spot_id);
           if (spot && spot.spotter_id) {
             const { spotterEarning, platformFee } = CommissionService.calculateCommission(
@@ -160,17 +161,27 @@ class BookingController {
               where: { id: parseInt(bookingId) },
               data: {
                 platform_fee: platformFee,
-                spotter_earning: spotterEarning
+                spotter_earning: spotterEarning,
+                payment_status: booking.payment_mode === 'cash' ? 'paid' : booking.payment_status
               }
             });
 
-            // Trigger payout to Spotter
-            await PayoutService.processBookingPayout(bookingId, spotterEarning, spot.spotter_id);
-            logger.info(`Payout processed: ₹${spotterEarning} to spotter ${spot.spotter_id} for booking ${bookingId}`);
+            if (booking.payment_mode === 'cash') {
+              // Deduct platform fee from spotter balance for cash payments
+              await require('../config/prisma').users.update({
+                where: { id: spot.spotter_id },
+                data: { balance: { decrement: platformFee } }
+              });
+              logger.info(`Cash booking ${bookingId}: Deducted ₹${platformFee} from spotter ${spot.spotter_id} wallet`);
+            } else {
+              // Trigger online payout to Spotter
+              await PayoutService.processBookingPayout(bookingId, spotterEarning, spot.spotter_id);
+              logger.info(`Payout processed: ₹${spotterEarning} to spotter ${spot.spotter_id} for booking ${bookingId}`);
+            }
           }
         }
       } catch (payoutErr) {
-        logger.error(`Payout error after checkout OTP for booking ${bookingId}:`, payoutErr);
+        logger.error(`Payout/Ledger error after checkout OTP for booking ${bookingId}:`, payoutErr);
       }
 
       res.json({
@@ -223,10 +234,10 @@ class BookingController {
 
       const completedBooking = await Booking.complete(bookingId, otp);
 
-      // 💰 Auto-payout: credit Spotter earnings after completion
+      // 💰 Auto-payout or Cash Ledger logic
       try {
         const completedData = await Booking.findById(bookingId);
-        if (completedData && completedData.payment_status === 'paid') {
+        if (completedData && (completedData.payment_status === 'paid' || completedData.payment_mode === 'cash')) {
           const { spotterEarning, platformFee } = CommissionService.calculateCommission(
             completedData.total_price, spot.location_type
           );
@@ -236,16 +247,26 @@ class BookingController {
             where: { id: parseInt(bookingId) },
             data: {
               platform_fee: platformFee,
-              spotter_earning: spotterEarning
+              spotter_earning: spotterEarning,
+              payment_status: completedData.payment_mode === 'cash' ? 'paid' : completedData.payment_status
             }
           });
 
-          // Trigger payout to Spotter
-          await PayoutService.processBookingPayout(bookingId, spotterEarning, spot.spotter_id);
-          logger.info(`Payout processed: ₹${spotterEarning} to spotter ${spot.spotter_id} for booking ${bookingId}`);
+          if (completedData.payment_mode === 'cash') {
+            // Deduct platform fee from spotter balance for cash payments
+            await require('../config/prisma').users.update({
+              where: { id: spot.spotter_id },
+              data: { balance: { decrement: platformFee } }
+            });
+            logger.info(`Cash booking ${bookingId}: Deducted ₹${platformFee} from spotter ${spot.spotter_id} wallet`);
+          } else {
+            // Trigger online payout to Spotter
+            await PayoutService.processBookingPayout(bookingId, spotterEarning, spot.spotter_id);
+            logger.info(`Payout processed: ₹${spotterEarning} to spotter ${spot.spotter_id} for booking ${bookingId}`);
+          }
         }
       } catch (payoutErr) {
-        logger.error(`Payout error after booking completion ${bookingId}:`, payoutErr);
+        logger.error(`Payout/Ledger error after booking completion ${bookingId}:`, payoutErr);
       }
 
       res.json({

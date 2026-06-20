@@ -69,7 +69,7 @@ class ParkingSpot {
   static async findNearby(lat, lng, radius) {
     // Prisma doesn't support distance calcs in findMany, use raw query
     return prisma.$queryRaw`
-      SELECT *,
+      SELECT parking_spots.*,
       (
         6371 *
         acos(
@@ -81,7 +81,9 @@ class ParkingSpot {
         )
       ) AS distance
       FROM parking_spots
+      JOIN users u ON parking_spots.spotter_id = u.id
       WHERE is_active = true
+      AND u.balance >= -500
       AND (
         6371 *
         acos(
@@ -98,7 +100,7 @@ class ParkingSpot {
 
   static async findAbsoluteNearest(lat, lng, limit = 5) {
     return prisma.$queryRaw`
-      SELECT *,
+      SELECT parking_spots.*,
       (
         6371 *
         acos(
@@ -110,9 +112,11 @@ class ParkingSpot {
         )
       ) AS distance
       FROM parking_spots
+      JOIN users u ON parking_spots.spotter_id = u.id
       WHERE is_active = true
         AND is_available = true
         AND available_slots > 0
+        AND u.balance >= -500
       ORDER BY distance ASC
       LIMIT ${limit}
     `;
@@ -123,7 +127,10 @@ class ParkingSpot {
       where: {
         is_active: true,
         is_available: true,
-        available_slots: { gt: 0 }
+        available_slots: { gt: 0 },
+        users: {
+          balance: { gte: -500 }
+        }
       },
       include: {
         users: {

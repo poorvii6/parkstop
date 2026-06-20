@@ -32,6 +32,7 @@ model bookings {
   payment_id        String?        @db.VarChar(100)
   payment_method_id Int?
   payment_status    String?        @default("pending") @db.VarChar(20)
+  payment_mode      String?        @default("online") @db.VarChar(20)
   checkout_otp      String?        @db.VarChar(10)
   slot_name         String?        @db.VarChar(50)
   parking_spots     parking_spots? @relation(fields: [spot_id], references: [id], onDelete: NoAction, onUpdate: NoAction)

@@ -19,9 +19,17 @@ class SpotController {
       
       const stats = await ParkingSpot.getSpotterDashboard(req.user.id);
       
+      const user = await require('../config/prisma').users.findUnique({
+        where: { id: req.user.id },
+        select: { balance: true }
+      });
+
       res.json({
         success: true,
-        data: stats
+        data: {
+          ...stats,
+          balance: user?.balance || 0
+        }
       });
     } catch (error) {
       logger.error('Dashboard Stats Error:', error);

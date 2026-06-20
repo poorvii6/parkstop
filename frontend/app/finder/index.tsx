@@ -150,12 +150,14 @@ export default function FinderDashboard() {
 
 
   const [selectedSpotId, setSelectedSpotId] = useState<string | null>(null);
-  const [bookingDetails, setBookingDetails] = useState<{ id: string, otp: string, total_price?: number, totalPrice?: number, pricing?: PricingBreakdown, checkout_otp?: string, checkoutOtp?: string, started_at?: string, created_at?: string, updated_at?: string, start_time?: string } | null>(null);
+  const [bookingDetails, setBookingDetails] = useState<{ id: string, otp: string, total_price?: number, totalPrice?: number, pricing?: PricingBreakdown, checkout_otp?: string, checkoutOtp?: string, started_at?: string, created_at?: string, updated_at?: string, start_time?: string, payment_mode?: string } | null>(null);
   const [elapsedMinutes, setElapsedMinutes] = useState(0);
   const [hasLocationPermission, setHasLocationPermission] = useState(true);
   const [extendModalOpen, setExtendModalOpen] = useState(false);
   const [selectedExtendHours, setSelectedExtendHours] = useState(1);
   const [isExtending, setIsExtending] = useState(false);
+  const [showPaymentMethodModal, setShowPaymentMethodModal] = useState(false);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'online' | 'cash'>('online');
 
   useEffect(() => {
     if (step !== 'active_parking') {
@@ -940,6 +942,14 @@ export default function FinderDashboard() {
   const processPayment = async () => {
     if (!bookingDetails?.id) return;
     setIsLoading(true);
+
+    if (bookingDetails.payment_mode === 'cash') {
+      // For cash, just proceed to receipt
+      setStep('receipt');
+      setIsLoading(false);
+      return;
+    }
+
     try {
       const res = await apiClient.post('/payments/checkout', { bookingId: Number(bookingDetails.id) });
       if (res.data.success) {
@@ -1057,6 +1067,65 @@ export default function FinderDashboard() {
     } finally {
       setIsSlotLoading(false);
     }
+  };
+  const handleCreateBooking = async (method: 'online' | 'cash') => {
+    if (!selectedSpotId) return;
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setIsLoading(true);
+    setShowPaymentMethodModal(false);
+    try {
+      let hours = parkingHours + (parkingMinutes / 60);
+      let end = new Date(Date.now() + hours * 3600000);
+      if (isLongParking && parkingEndDate) {
+        const parts = parkingEndDate.split(/[-/]/);
+        if (parts.length === 3) {
+          const [dd, mm, yyyy] = parts;
+          end = new Date(`${yyyy}-${mm}-${dd}T23:59:59`);
+          if (isNaN(end.getTime())) {
+            Alert.alert("Invalid Date", "Please check your date format (DD-MM-YYYY).");
+            setIsLoading(false);
+            return;
+          }
+        } else {
+          Alert.alert("Invalid Format", "Please use DD-MM-YYYY format.");
+          setIsLoading(false);
+          return;
+        }
+        hours = Math.ceil((end.getTime() - Date.now()) / 3600000);
+      }
+
+      const res = await apiClient.post('/bookings', {
+        spot_id: parseInt(selectedSpotId, 10),
+        start_time: new Date().toISOString(),
+        end_time: end.toISOString(),
+        slot_name: selectedSlot,
+        vehicle_type: vehicleType,
+        vehicle_subtype: vehicleSubType,
+        payment_mode: method
+      });
+      if (res.data.success) {
+        setBookingDetails({
+          id: res.data.data.id.toString(),
+          otp: res.data.data.otp_code.toString(),
+          totalPrice: res.data.data.total_price,
+          checkoutOtp: res.data.data.checkout_otp,
+          created_at: res.data.data.created_at || new Date().toISOString(),
+          start_time: res.data.data.start_time || new Date().toISOString(),
+          payment_mode: res.data.data.payment_mode || method
+        });
+        setStep('booking_confirm');
+      }
+    } catch (e: any) { 
+      const errMsg = e.response?.data?.message || 'Error';
+      if (errMsg.toLowerCase().includes('slots') || errMsg.toLowerCase().includes('full')) {
+        Alert.alert('Booking Failed', 'This parking spot is currently full and cannot be booked right now.');
+      } else if (errMsg.toLowerCase().includes('balance') || errMsg.toLowerCase().includes('dues')) {
+        Alert.alert('Spot Unavailable', 'This spot is temporarily unavailable.');
+      } else {
+        Alert.alert('Booking Failed', errMsg);
+      }
+    }
+    finally { setIsLoading(false); }
   };
 
   return (
@@ -1648,7 +1717,7 @@ export default function FinderDashboard() {
                 <TouchableOpacity onPress={handleSearch} style={{ padding: 8, marginLeft: 4, backgroundColor: '#4f46e5', borderRadius: 12, paddingHorizontal: 14 }}>
                   <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>Search</Text>
                 </TouchableOpacity>
-                {isSearching && <View style={styles.searchLoader} />}
+                {isSearching && <ActivityIndicator size="small" color="#4f46e5" style={{ marginLeft: 10 }} />}
               </View>
 
               {suggestions.length > 0 && (
@@ -2034,6 +2103,14 @@ export default function FinderDashboard() {
                       </View>
                     </View>
 
+                    {bookingDetails?.payment_mode === 'cash' && (
+                      <View style={{ backgroundColor: 'rgba(16,185,129,0.1)', padding: 12, borderRadius: 12, marginBottom: 12 }}>
+                        <Text style={{ color: '#10b981', fontSize: 14, fontWeight: '800', textAlign: 'center' }}>
+                          💵 Please pay the Spotter directly in cash.
+                        </Text>
+                      </View>
+                    )}
+
                     <TouchableOpacity 
                       activeOpacity={0.9}
                       style={{ 
@@ -2046,7 +2123,9 @@ export default function FinderDashboard() {
                         processPayment();
                       }}
                     >
-                      <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>{isLoading ? 'Processing...' : 'Proceed to Payment'}</Text>
+                      <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>
+                        {isLoading ? 'Processing...' : (bookingDetails?.payment_mode === 'cash' ? 'Complete Checkout' : 'Proceed to Payment')}
+                      </Text>
                     </TouchableOpacity>
                   </View>
                 )}
@@ -2093,6 +2172,52 @@ export default function FinderDashboard() {
       <TouchableOpacity style={styles.chatFab} onPress={() => setChatOpen(true)}>
         <Text style={styles.chatFabText}>💬</Text>
       </TouchableOpacity>
+
+      {/* PAYMENT METHOD MODAL */}
+      <Modal visible={showPaymentMethodModal} transparent animationType="slide">
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'flex-end' }}>
+          <View style={{ backgroundColor: '#1e293b', padding: 24, borderTopLeftRadius: 32, borderTopRightRadius: 32 }}>
+            <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900', marginBottom: 16 }}>Choose Payment Method</Text>
+            
+            <TouchableOpacity 
+              style={{ backgroundColor: selectedPaymentMethod === 'online' ? 'rgba(99,102,241,0.2)' : 'rgba(255,255,255,0.05)', padding: 16, borderRadius: 16, marginBottom: 12, borderWidth: 2, borderColor: selectedPaymentMethod === 'online' ? '#6366f1' : 'transparent', flexDirection: 'row', alignItems: 'center' }}
+              onPress={() => { Haptics.selectionAsync(); setSelectedPaymentMethod('online'); }}
+            >
+              <Text style={{ fontSize: 24, marginRight: 16 }}>💳</Text>
+              <View>
+                <Text style={{ color: '#fff', fontSize: 18, fontWeight: '800' }}>Pay Online</Text>
+                <Text style={{ color: '#94a3b8', fontSize: 13, marginTop: 2 }}>UPI, Cards, NetBanking via Razorpay</Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={{ backgroundColor: selectedPaymentMethod === 'cash' ? 'rgba(16,185,129,0.2)' : 'rgba(255,255,255,0.05)', padding: 16, borderRadius: 16, marginBottom: 24, borderWidth: 2, borderColor: selectedPaymentMethod === 'cash' ? '#10b981' : 'transparent', flexDirection: 'row', alignItems: 'center' }}
+              onPress={() => { Haptics.selectionAsync(); setSelectedPaymentMethod('cash'); }}
+            >
+              <Text style={{ fontSize: 24, marginRight: 16 }}>💵</Text>
+              <View>
+                <Text style={{ color: '#fff', fontSize: 18, fontWeight: '800' }}>Pay with Cash</Text>
+                <Text style={{ color: '#94a3b8', fontSize: 13, marginTop: 2 }}>Pay the spotter directly at checkout</Text>
+              </View>
+            </TouchableOpacity>
+
+            <View style={{ flexDirection: 'row', gap: 12 }}>
+              <TouchableOpacity 
+                style={{ flex: 1, backgroundColor: 'rgba(255,255,255,0.1)', padding: 16, borderRadius: 16, alignItems: 'center' }}
+                onPress={() => setShowPaymentMethodModal(false)}
+              >
+                <Text style={{ color: '#fff', fontSize: 16, fontWeight: '800' }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={{ flex: 2, backgroundColor: selectedPaymentMethod === 'cash' ? '#10b981' : '#6366f1', padding: 16, borderRadius: 16, alignItems: 'center' }}
+                onPress={() => handleCreateBooking(selectedPaymentMethod)}
+              >
+                <Text style={{ color: '#fff', fontSize: 16, fontWeight: '800' }}>Confirm Payment</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* 💳 RAZORPAY CHECKOUT MODAL */}
       {razorpayOrder && (
@@ -2425,62 +2550,13 @@ export default function FinderDashboard() {
               paddingVertical: 18, borderRadius: 20, 
               alignItems: 'center', marginTop: 'auto', marginBottom: 30,
             }} 
-            onPress={async () => {
+            onPress={() => {
               if (!selectedSpotId) return;
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-              setIsLoading(true);
-              try {
-                let hours = parkingHours + (parkingMinutes / 60);
-                let end = new Date(Date.now() + hours * 3600000);
-                if (isLongParking && parkingEndDate) {
-                  const parts = parkingEndDate.split(/[-/]/);
-                  if (parts.length === 3) {
-                    const [dd, mm, yyyy] = parts;
-                    end = new Date(`${yyyy}-${mm}-${dd}T23:59:59`);
-                    if (isNaN(end.getTime())) {
-                      Alert.alert("Invalid Date", "Please check your date format (DD-MM-YYYY).");
-                      setIsLoading(false);
-                      return;
-                    }
-                  } else {
-                    Alert.alert("Invalid Format", "Please use DD-MM-YYYY format.");
-                    setIsLoading(false);
-                    return;
-                  }
-                  hours = Math.ceil((end.getTime() - Date.now()) / 3600000);
-                }
-
-                const res = await apiClient.post('/bookings', {
-                  spot_id: parseInt(selectedSpotId, 10),
-                  start_time: new Date().toISOString(),
-                  end_time: end.toISOString(),
-                  slot_name: selectedSlot,
-                  vehicle_type: vehicleType,
-                  vehicle_subtype: vehicleSubType
-                });
-                if (res.data.success) {
-                  setBookingDetails({
-                    id: res.data.data.id.toString(),
-                    otp: res.data.data.otp_code.toString(),
-                    totalPrice: res.data.data.total_price,
-                    checkoutOtp: res.data.data.checkout_otp,
-                    created_at: res.data.data.created_at || new Date().toISOString(),
-                    start_time: res.data.data.start_time || new Date().toISOString(),
-                  });
-                  setStep('booking_confirm');
-                }
-              } catch (e: any) { 
-                const errMsg = e.response?.data?.message || 'Error';
-                if (errMsg.toLowerCase().includes('slots') || errMsg.toLowerCase().includes('full')) {
-                  Alert.alert('Booking Failed', 'This parking spot is currently full and cannot be booked right now.');
-                } else {
-                  Alert.alert('Booking Failed', errMsg);
-                }
-              }
-              finally { setIsLoading(false); }
+              setShowPaymentMethodModal(true);
             }}
           >
-            <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900' }}>{isLoading ? 'Reserving...' : 'Confirm Reservation'}</Text>
+            <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900' }}>Confirm Reservation</Text>
           </TouchableOpacity>
           </View>
         </SafeAreaView>

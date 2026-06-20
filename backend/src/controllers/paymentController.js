@@ -326,6 +326,64 @@ class PaymentController {
       res.status(500).json({ success: false, message: 'Failed to verify Stripe payment' });
     }
   }
+
+  /**
+   * 🛒 CREATE CLEAR DUES ORDER
+   */
+  static async createClearDuesOrder(req, res) {
+    try {
+      const user = await require('../config/prisma').users.findUnique({
+        where: { id: req.user.id }
+      });
+      if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+      
+      const dues = Math.abs(Number(user.balance));
+      if (user.balance >= 0) {
+        return res.status(400).json({ success: false, message: 'No dues to clear' });
+      }
+
+      const receipt = `dues_${req.user.id}_${Date.now()}`;
+      const order = await require('../services/payments/RazorpayAdapter').createOrder(dues, receipt, {
+        user_id: req.user.id,
+        purpose: 'clear_dues'
+      });
+
+      res.json({
+        success: true,
+        order_id: order.orderId,
+        amount: order.amount,
+        currency: order.currency,
+        key_id: process.env.RAZORPAY_KEY_ID
+      });
+    } catch (err) {
+      logger.error('Clear Dues Order Error:', err);
+      res.status(500).json({ success: false, message: 'Failed to create dues order' });
+    }
+  }
+
+  /**
+   * ✅ VERIFY CLEAR DUES PAYMENT
+   */
+  static async verifyClearDuesPayment(req, res) {
+    try {
+      const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
+      const isValid = await require('../services/payments/RazorpayAdapter').verifySignature(
+        razorpay_order_id, razorpay_payment_id, razorpay_signature
+      );
+      if (!isValid) return res.status(400).json({ success: false, message: 'Invalid payment signature' });
+
+      // Reset balance to 0
+      await require('../config/prisma').users.update({
+        where: { id: req.user.id },
+        data: { balance: 0 }
+      });
+
+      res.json({ success: true, message: 'Dues cleared successfully' });
+    } catch (err) {
+      logger.error('Verify Dues Payment Error:', err);
+      res.status(500).json({ success: false, message: 'Failed to verify dues payment' });
+    }
+  }
 }
 
 module.exports = PaymentController;

@@ -6,6 +6,8 @@ import { Ionicons, FontAwesome5, MaterialCommunityIcons } from '@expo/vector-ico
 import apiClient from '../../api/client';
 import { SC, TF, SP, RAD, SS } from '../../constants/SpotterTheme';
 import { registerForPushNotificationsAsync } from '../../services/notifications';
+import RazorpayCheckout from '../../components/RazorpayCheckout';
+import { Alert } from 'react-native';
 
 const { width } = Dimensions.get('window');
 
@@ -121,8 +123,62 @@ export default function SpotterDashboard() {
     surge_factor: 1,
     inventory: [] as any[],
     recent_traffic: [] as any[],
+    balance: 0
   });
   const [payoutSetup, setPayoutSetup] = useState<boolean | null>(null);
+
+  const [isRazorpayVisible, setIsRazorpayVisible] = useState(false);
+  const [razorpayOrder, setRazorpayOrder] = useState<any>(null);
+  const [isClearingDues, setIsClearingDues] = useState(false);
+
+  const handleClearDues = async () => {
+    try {
+      setIsClearingDues(true);
+      const res = await apiClient.post('/payments/create-dues-order');
+      if (res.data.success) {
+        setRazorpayOrder({
+          orderId: res.data.order_id,
+          amount: res.data.amount,
+          currency: res.data.currency,
+          keyId: res.data.key_id
+        });
+        setIsRazorpayVisible(true);
+      } else {
+        Alert.alert('Error', res.data.message || 'Failed to create dues order');
+      }
+    } catch (e: any) {
+      Alert.alert('Error', e.response?.data?.message || 'Failed to process dues payment');
+    } finally {
+      setIsClearingDues(false);
+    }
+  };
+
+  const handleRazorpaySuccess = async (data: any) => {
+    setIsRazorpayVisible(false);
+    try {
+      setLoading(true);
+      const res = await apiClient.post('/payments/verify-dues', {
+        razorpay_order_id: data.razorpay_order_id,
+        razorpay_payment_id: data.razorpay_payment_id,
+        razorpay_signature: data.razorpay_signature,
+      });
+      if (res.data.success) {
+        Alert.alert('Success', 'Dues cleared successfully!');
+        fetchDashboardData();
+      } else {
+        Alert.alert('Error', 'Payment verification failed');
+      }
+    } catch (e) {
+      Alert.alert('Error', 'Payment verification failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRazorpayFailure = (data: any) => {
+    setIsRazorpayVisible(false);
+    Alert.alert('Payment Failed', data.error?.description || 'Your payment could not be processed.');
+  };
 
   const fetchDashboardData = useCallback(async () => {
     try {
@@ -207,6 +263,28 @@ export default function SpotterDashboard() {
           />
         }
       >
+        {/* DUES WARNING BANNER */}
+        {dashboardData.balance < 0 && (
+          <View style={{ backgroundColor: 'rgba(239,68,68,0.1)', padding: 16, borderRadius: 16, marginBottom: 24, borderWidth: 1, borderColor: 'rgba(239,68,68,0.3)' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
+              <Ionicons name="warning" size={24} color="#ef4444" style={{ marginRight: 8 }} />
+              <Text style={{ color: '#ef4444', fontSize: 18, fontWeight: '800' }}>Platform Dues: ₹{Math.abs(dashboardData.balance).toFixed(2)}</Text>
+            </View>
+            <Text style={{ color: '#f87171', fontSize: 14, marginBottom: 12 }}>
+              {dashboardData.balance <= -500 
+                ? "Your parking spots are hidden from Finders because your dues exceeded ₹500. Clear dues to reactivate."
+                : "You have pending platform fees from cash bookings. Clear them soon to avoid suspension."}
+            </Text>
+            <TouchableOpacity 
+              style={{ backgroundColor: '#ef4444', paddingVertical: 12, borderRadius: 12, alignItems: 'center' }}
+              onPress={handleClearDues}
+              disabled={isClearingDues}
+            >
+              {isClearingDues ? <ActivityIndicator color="#fff" /> : <Text style={{ color: '#fff', fontWeight: '800', fontSize: 16 }}>Clear Dues via Razorpay</Text>}
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* PAYOUT SETUP BANNER */}
         {payoutSetup === false && (
           <TouchableOpacity
@@ -403,6 +481,20 @@ export default function SpotterDashboard() {
           )}
         </View>
       </ScrollView>
+
+      {/* 💳 RAZORPAY CHECKOUT MODAL */}
+      {razorpayOrder && (
+        <RazorpayCheckout
+          visible={isRazorpayVisible}
+          orderId={razorpayOrder.orderId}
+          amount={razorpayOrder.amount}
+          currency={razorpayOrder.currency}
+          keyId={razorpayOrder.keyId}
+          onSuccess={handleRazorpaySuccess}
+          onCancel={handleRazorpayFailure}
+          onFailure={handleRazorpayFailure}
+        />
+      )}
     </View>
   );
 }

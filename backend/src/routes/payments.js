@@ -105,5 +105,22 @@ router.post(
   PaymentController.verifyStripePayment
 );
 
+/**
+ * 💳 CLEAR DUES (Spotter)
+ */
+router.post(
+  '/create-dues-order',
+  authenticate,
+  authorize('SPOTTER'),
+  PaymentController.createClearDuesOrder
+);
+
+router.post(
+  '/verify-dues',
+  authenticate,
+  authorize('SPOTTER'),
+  PaymentController.verifyClearDuesPayment
+);
+
 module.exports = router;
 

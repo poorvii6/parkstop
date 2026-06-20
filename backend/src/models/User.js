@@ -54,6 +54,7 @@ class User {
         address: true,
         dob: true,
         created_at: true,
+        balance: true,
         upi_id: true,
         bank_account_number: true,
         bank_ifsc: true,

@@ -7,7 +7,7 @@ const PaymentService = require('../services/paymentService');
 
 class Booking {
 
-  static async create({ user_id, spot_id, start_time, end_time, vehicle_type = 'car', vehicle_subtype = null, slot_name = null }) {
+  static async create({ user_id, spot_id, start_time, end_time, vehicle_type = 'car', vehicle_subtype = null, slot_name = null, payment_mode = 'online' }) {
     return prisma.$transaction(async (tx) => {
       // 1. Get spot with lock
       const spot = await tx.parking_spots.findUnique({
@@ -75,7 +75,9 @@ class Booking {
           checkout_otp,
           otp_expires_at,
           platform_fee: commission.platformFee,
-          spotter_earning: commission.spotterEarning
+          spotter_earning: commission.spotterEarning,
+          payment_mode,
+          payment_status: payment_mode === 'cash' ? 'pending_cash' : 'pending'
         }
       });
 

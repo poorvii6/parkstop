@@ -82,10 +82,17 @@ export default function LoginScreen() {
             </TouchableOpacity>
 
             <TouchableOpacity 
-              style={styles.googleBtn} 
+              style={[styles.googleBtn, { backgroundColor: '#FFFFFF' }]} 
               onPress={() => Alert.alert('Coming Soon', 'Google sign-in is not yet implemented.')}
             >
-              <Text style={styles.googleBtnText}>Continue with Google</Text>
+              <Text style={[styles.googleBtnText, { color: '#000000' }]}>Continue with Google</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={[styles.googleBtn, { backgroundColor: '#000000', borderColor: '#FFFFFF', marginTop: 12 }]} 
+              onPress={() => Alert.alert('Coming Soon', 'Apple sign-in is not yet implemented.')}
+            >
+              <Text style={styles.googleBtnText}>Continue with Apple</Text>
             </TouchableOpacity>
 
             <TouchableOpacity onPress={() => router.replace('/register')} style={styles.registerLink}>
