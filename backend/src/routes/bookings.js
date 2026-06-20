@@ -131,4 +131,20 @@ router.get(
   BookingController.getSpotterBookings
 );
 
+/**
+ * ✅ CALCULATE UPFRONT PRICE (Finder only)
+ */
+router.post(
+  '/calculate-price',
+  authenticate,
+  authorize('FINDER'),
+  [
+    body('spot_id').isInt().withMessage('Spot ID must be an integer'),
+    body('start_time').isISO8601().withMessage('Invalid start time'),
+    body('end_time').isISO8601().withMessage('Invalid end time'),
+    validate
+  ],
+  BookingController.calculateUpfrontPrice
+);
+
 module.exports = router;

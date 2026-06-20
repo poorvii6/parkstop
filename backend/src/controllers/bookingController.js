@@ -424,6 +424,54 @@ class BookingController {
     }
   }
 
+  /**
+   * CALCULATE UPFRONT DYNAMIC PRICE
+   */
+  static async calculateUpfrontPrice(req, res) {
+    try {
+      const { spot_id, start_time, end_time } = req.body;
+
+      if (!spot_id || !start_time || !end_time) {
+        return res.status(400).json({ success: false, message: 'Missing required fields' });
+      }
+
+      const spot = await ParkingSpot.findById(spot_id);
+      if (!spot) {
+        return res.status(404).json({ success: false, message: 'Spot not found' });
+      }
+
+      const start = new Date(start_time);
+      const end = new Date(end_time);
+      if (end <= start) {
+        return res.status(400).json({ success: false, message: 'Invalid duration' });
+      }
+
+      const diffMs = end - start;
+      const hours = Math.max(1, Math.ceil(diffMs / (1000 * 60)) / 60);
+
+      const PricingService = require('../services/PricingService');
+      const pricing = await PricingService.calculatePrice({
+        basePrice: Number(spot.price_per_hour),
+        locationType: spot.location_type || 'urban',
+        spotId: spot.id
+      });
+
+      const total_price = Number((hours * pricing.finalPrice).toFixed(2));
+
+      res.json({
+        success: true,
+        data: {
+          hours,
+          pricing,
+          total_price
+        }
+      });
+
+    } catch (error) {
+      logger.error('Error calculating upfront price:', error);
+      res.status(500).json({ success: false, message: 'Error calculating price' });
+    }
+  }
 
 }
 

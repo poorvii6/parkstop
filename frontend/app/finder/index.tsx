@@ -102,6 +102,8 @@ export default function FinderDashboard() {
   const [parkingMinutes, setParkingMinutes] = useState<number>(0);
   const [isLongParking, setIsLongParking] = useState(false);
   const [parkingEndDate, setParkingEndDate] = useState<string>('');
+  const [calculatedPrice, setCalculatedPrice] = useState<number | null>(null);
+  const [isCalculatingPrice, setIsCalculatingPrice] = useState(false);
   const [slotData, setSlotData] = useState<Array<{ name: string; status: string }>>([]);
   const [arrivalDetected, setArrivalDetected] = useState(false);
   const [simulatedLocation, setSimulatedLocation] = useState<{ lat: number, lng: number } | null>(null);
@@ -175,6 +177,44 @@ export default function FinderDashboard() {
 
     return () => clearInterval(interval);
   }, [step, bookingDetails]);
+
+  useEffect(() => {
+    if (step !== 'time_select' || !selectedSpotId) return;
+    
+    let hours = parkingHours + (parkingMinutes / 60);
+    let end = new Date(Date.now() + hours * 3600000);
+
+    if (isLongParking && parkingEndDate) {
+      const parts = parkingEndDate.split(/[-/]/);
+      if (parts.length === 3) {
+        const [dd, mm, yyyy] = parts;
+        end = new Date(`${yyyy}-${mm}-${dd}T23:59:59`);
+        if (!isNaN(end.getTime())) {
+          hours = Math.ceil((end.getTime() - Date.now()) / 3600000);
+        }
+      }
+    }
+
+    const delayDebounceFn = setTimeout(async () => {
+      setIsCalculatingPrice(true);
+      try {
+        const res = await apiClient.post('/bookings/calculate-price', {
+          spot_id: parseInt(selectedSpotId, 10),
+          start_time: new Date().toISOString(),
+          end_time: end.toISOString(),
+        });
+        if (res.data.success) {
+          setCalculatedPrice(res.data.data.total_price);
+        }
+      } catch (err) {
+        console.error('Failed to calculate dynamic price', err);
+      } finally {
+        setIsCalculatingPrice(false);
+      }
+    }, 500);
+
+    return () => clearTimeout(delayDebounceFn);
+  }, [step, selectedSpotId, parkingHours, parkingMinutes, isLongParking, parkingEndDate]);
 
   const [isRazorpayVisible, setIsRazorpayVisible] = useState(false);
   const [razorpayOrder, setRazorpayOrder] = useState<{
@@ -1590,7 +1630,7 @@ export default function FinderDashboard() {
           {['search'].includes(step) && !isInPip && (
             <View style={styles.floatingSearchContainer}>
               <View style={styles.searchBarWrapper}>
-                <Text style={styles.searchIconPrefix}>🔍</Text>
+                <Ionicons name="search" size={20} color={BlueprintColors.textSecondary} style={{ marginRight: 10 }} />
                 <TextInput
                   style={styles.searchBar}
                   placeholder="Search for a destination..."
@@ -2357,10 +2397,21 @@ export default function FinderDashboard() {
 
           <View style={{ backgroundColor: 'rgba(16,185,129,0.05)', padding: 18, borderRadius: 24, marginBottom: 24, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(16,185,129,0.1)' }}>
             <View>
-              <Text style={{ color: '#10b981', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' }}>Total</Text>
-              <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900', marginTop: 2 }}>
-                ₹{isLongParking ? '---' : ((parkingHours + (parkingMinutes / 60)) * (spots.find(s => s.id === selectedSpotId)?.price || 0)).toFixed(2)}
-              </Text>
+              <Text style={{ color: '#10b981', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' }}>Total Price (Dynamic)</Text>
+              {isCalculatingPrice ? (
+                <ActivityIndicator size="small" color="#10b981" style={{ marginTop: 6, alignSelf: 'flex-start' }} />
+              ) : (
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900', marginTop: 2 }}>
+                    ₹{calculatedPrice !== null ? calculatedPrice.toFixed(2) : (isLongParking ? '---' : ((parkingHours + (parkingMinutes / 60)) * (spots.find(s => s.id === selectedSpotId)?.price || 0)).toFixed(2))}
+                  </Text>
+                  {calculatedPrice !== null && calculatedPrice > ((parkingHours + (parkingMinutes / 60)) * (spots.find(s => s.id === selectedSpotId)?.price || 0)) && (
+                    <View style={{ marginLeft: 10, backgroundColor: 'rgba(239,68,68,0.2)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
+                      <Text style={{ color: '#ef4444', fontSize: 10, fontWeight: '800' }}>⚡ SURGE</Text>
+                    </View>
+                  )}
+                </View>
+              )}
             </View>
             <View style={{ padding: 10, backgroundColor: 'rgba(16,185,129,0.1)', borderRadius: 12 }}>
               <Text style={{ fontSize: 20 }}>💸</Text>
