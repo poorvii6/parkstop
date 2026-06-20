@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Modal, StyleSheet, View, Text, TouchableOpacity, ActivityIndicator, SafeAreaView, Platform } from 'react-native';
+import { Modal, StyleSheet, View, Text, TouchableOpacity, ActivityIndicator, SafeAreaView, Platform, Linking, Alert } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -154,6 +154,23 @@ export default function RazorpayCheckout({
     }
   };
 
+  const onShouldStartLoadWithRequest = (request: any) => {
+    const { url } = request;
+    if (
+      url.startsWith('upi://') ||
+      url.startsWith('gpay://') ||
+      url.startsWith('paytmmp://') ||
+      url.startsWith('phonepe://') ||
+      url.startsWith('tez://')
+    ) {
+      Linking.openURL(url).catch(() => {
+        Alert.alert('Error', 'Payment app not found');
+      });
+      return false;
+    }
+    return true;
+  };
+
   return (
     <Modal
       visible={visible}
@@ -177,6 +194,7 @@ export default function RazorpayCheckout({
             onLoadStart={() => setLoading(true)}
             onLoadEnd={() => setLoading(false)}
             onMessage={handleMessage}
+            onShouldStartLoadWithRequest={onShouldStartLoadWithRequest}
             javaScriptEnabled={true}
             domStorageEnabled={true}
             style={{ flex: 1, backgroundColor: '#0f172a' }}
