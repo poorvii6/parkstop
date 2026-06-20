@@ -278,12 +278,20 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
     const showPinWithGuard = () => {
       if (!active) return;
       const parent = el.parentElement;
-      if (parent && parent.style.transform && parent.style.transform.indexOf('translate') !== -1) {
+      const isPositioned = parent && (
+        (parent.style.transform && parent.style.transform.indexOf('translate') !== -1) ||
+        (parent.style.webkitTransform && parent.style.webkitTransform.indexOf('translate') !== -1) ||
+        (parent.style.cssText && parent.style.cssText.indexOf('translate') !== -1)
+      );
+
+      if (isPositioned) {
         el.style.display = 'block';
       } else {
         checkCount++;
-        if (checkCount < 60) {
+        if (checkCount < 15) {
           requestAnimationFrame(showPinWithGuard);
+        } else {
+          el.style.display = 'block';
         }
       }
     };

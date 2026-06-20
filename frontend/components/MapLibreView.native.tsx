@@ -413,12 +413,21 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
                 var showPinWithGuard = function() {
                   if (!destVis) return;
                   var parent = destEl.parentElement;
-                  if (parent && parent.style.transform && parent.style.transform.indexOf('translate') !== -1) {
+                  var isPositioned = parent && (
+                    (parent.style.transform && parent.style.transform.indexOf('translate') !== -1) ||
+                    (parent.style.webkitTransform && parent.style.webkitTransform.indexOf('translate') !== -1) ||
+                    (parent.style.cssText && parent.style.cssText.indexOf('translate') !== -1)
+                  );
+
+                  if (isPositioned) {
                     destEl.style.display = 'block';
                   } else {
                     checkCount++;
-                    if (checkCount < 60) {
+                    if (checkCount < 15) { // Check up to 15 frames (~240ms)
                       requestAnimationFrame(showPinWithGuard);
+                    } else {
+                      // Fallback: show the pin anyway
+                      destEl.style.display = 'block';
                     }
                   }
                 };
