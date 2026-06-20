@@ -491,7 +491,7 @@ export default function SpotterDashboard() {
           currency={razorpayOrder.currency}
           keyId={razorpayOrder.keyId}
           onSuccess={handleRazorpaySuccess}
-          onCancel={handleRazorpayFailure}
+          onCancel={() => handleRazorpayFailure(null)}
           onFailure={handleRazorpayFailure}
         />
       )}

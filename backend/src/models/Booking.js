@@ -343,6 +343,52 @@ class Booking {
     });
   }
 
+  static async updatePaymentMode(bookingId, userId, paymentMode) {
+    return prisma.$transaction(async (tx) => {
+      const booking = await tx.bookings.findFirst({
+        where: {
+          id: parseInt(bookingId),
+          user_id: parseInt(userId)
+        },
+        include: {
+          parking_spots: true
+        }
+      });
+
+      if (!booking) throw new Error('Booking not found or unauthorized');
+      if (booking.payment_status === 'paid') throw new Error('Booking is already paid');
+
+      const isCash = paymentMode === 'cash';
+
+      const updated = await tx.bookings.update({
+        where: { id: parseInt(bookingId) },
+        data: {
+          payment_mode: paymentMode,
+          payment_status: isCash ? 'paid' : 'pending',
+          updated_at: new Date()
+        }
+      });
+
+      if (isCash) {
+        // If cash, deduct the platform fee from the Spotter's balance
+        const spot = booking.parking_spots;
+        if (spot && spot.spotter_id) {
+          await tx.users.update({
+            where: { id: spot.spotter_id },
+            data: {
+              balance: {
+                decrement: booking.platform_fee || 0
+              }
+            }
+          });
+          logger.info(`Cash booking ${bookingId} (updated at checkout): Deducted ₹${booking.platform_fee} from spotter ${spot.spotter_id} wallet`);
+        }
+      }
+
+      return updated;
+    });
+  }
+
   static async findById(id) {
     return prisma.bookings.findUnique({
       where: { id: parseInt(id) },

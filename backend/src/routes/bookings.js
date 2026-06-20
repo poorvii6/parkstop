@@ -83,6 +83,21 @@ router.put(
 );
 
 /**
+ * ✅ UPDATE PAYMENT MODE (Finder only)
+ */
+router.patch(
+  '/:id/payment-mode',
+  authenticate,
+  authorize('FINDER'),
+  [
+    param('id').isInt().withMessage('Booking ID must be an integer'),
+    body('payment_mode').isIn(['online', 'cash']).withMessage('Payment mode must be either online or cash'),
+    validate
+  ],
+  BookingController.updatePaymentMode
+);
+
+/**
  * ✅ CANCEL BOOKING (Finder only)
  */
 router.put(

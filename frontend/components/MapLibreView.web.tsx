@@ -245,8 +245,15 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
     destMarkerRef.current?.remove();
     destMarkerRef.current = null;
 
-    // Only show destination pin when actively navigating to a spot
-    if (!isActiveNavigation || !destination) return;
+    // Only show destination pin when actively navigating to a spot with valid coordinates
+    if (!isActiveNavigation || !destination || 
+        typeof destination.lat !== 'number' || 
+        typeof destination.lng !== 'number' || 
+        isNaN(destination.lat) || 
+        isNaN(destination.lng) || 
+        (destination.lat === 0 && destination.lng === 0)) {
+      return;
+    }
 
     const el = document.createElement('div');
     el.innerHTML = `

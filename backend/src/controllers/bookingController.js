@@ -494,6 +494,45 @@ class BookingController {
     }
   }
 
+  /**
+   * UPDATE PAYMENT MODE (Finder Only)
+   */
+  static async updatePaymentMode(req, res) {
+    try {
+      if (!req.user.role || req.user.role.toLowerCase() !== 'finder') {
+        return res.status(403).json({
+          success: false,
+          message: 'Only finders can update payment mode'
+        });
+      }
+
+      const bookingId = req.params.id;
+      const { payment_mode } = req.body;
+
+      if (!payment_mode || !['online', 'cash'].includes(payment_mode)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Valid payment_mode is required (online or cash)'
+        });
+      }
+
+      const updatedBooking = await Booking.updatePaymentMode(bookingId, req.user.id, payment_mode);
+
+      res.json({
+        success: true,
+        message: 'Payment mode updated successfully',
+        data: updatedBooking
+      });
+
+    } catch (error) {
+      logger.error('Update payment mode error:', error);
+      res.status(400).json({
+        success: false,
+        message: error.message || 'Error updating payment mode'
+      });
+    }
+  }
+
 }
 
 module.exports = BookingController;

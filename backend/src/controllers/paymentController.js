@@ -308,14 +308,32 @@ class PaymentController {
         return res.status(400).json({ success: false, message: 'Booking ID and PaymentIntent ID are required' });
       }
 
-      await require('../config/prisma').bookings.update({
+      const booking = await require('../config/prisma').bookings.update({
         where: { id: parseInt(bookingId) },
         data: {
           payment_id: paymentIntentId,
           payment_status: 'paid',
           updated_at: new Date()
+        },
+        include: {
+          parking_spots: true
         }
       });
+
+      // Trigger online payout to Spotter
+      try {
+        if (booking && booking.parking_spots) {
+          const PayoutService = require('../services/payments/PayoutService');
+          const spotterEarning = booking.spotter_earning || 0;
+          const spotterId = booking.parking_spots.spotter_id;
+          if (spotterId && spotterEarning > 0) {
+            await PayoutService.processBookingPayout(bookingId, spotterEarning, spotterId);
+            logger.info(`Payout processed: ₹${spotterEarning} to spotter ${spotterId} for booking ${bookingId}`);
+          }
+        }
+      } catch (payoutErr) {
+        logger.error(`Failed to process payout for booking ${bookingId} after Stripe verification:`, payoutErr);
+      }
 
       res.json({
         success: true,

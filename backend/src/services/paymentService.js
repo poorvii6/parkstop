@@ -52,14 +52,32 @@ class PaymentService {
       }
 
       // Mark the booking as paid
-      await prisma.bookings.update({
+      const updatedBooking = await prisma.bookings.update({
         where: { id: parseInt(bookingId) },
         data: {
           payment_id: paymentId,
           payment_status: 'paid',
           updated_at: new Date()
+        },
+        include: {
+          parking_spots: true
         }
       });
+
+      // Trigger online payout to Spotter
+      try {
+        if (updatedBooking && updatedBooking.parking_spots) {
+          const PayoutService = require('./payments/PayoutService');
+          const spotterEarning = updatedBooking.spotter_earning || 0;
+          const spotterId = updatedBooking.parking_spots.spotter_id;
+          if (spotterId && spotterEarning > 0) {
+            await PayoutService.processBookingPayout(bookingId, spotterEarning, spotterId);
+            logger.info(`Payout processed: ₹${spotterEarning} to spotter ${spotterId} for booking ${bookingId}`);
+          }
+        }
+      } catch (payoutErr) {
+        logger.error(`Failed to process payout for booking ${bookingId} after Razorpay verification:`, payoutErr);
+      }
 
       return { success: true, paymentId };
     } catch (error) {

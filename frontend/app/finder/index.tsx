@@ -943,14 +943,28 @@ export default function FinderDashboard() {
     if (!bookingDetails?.id) return;
     setIsLoading(true);
 
-    if (bookingDetails.payment_mode === 'cash') {
-      // For cash, just proceed to receipt
-      setStep('receipt');
-      setIsLoading(false);
-      return;
-    }
-
     try {
+      // First update the payment mode on the backend based on user's checkout selection
+      const patchRes = await apiClient.patch(`/bookings/${bookingDetails.id}/payment-mode`, {
+        payment_mode: selectedPaymentMethod
+      });
+
+      if (!patchRes.data.success) {
+        throw new Error('Failed to update payment mode');
+      }
+
+      setBookingDetails(prev => prev ? {
+        ...prev,
+        payment_mode: selectedPaymentMethod
+      } : null);
+
+      if (selectedPaymentMethod === 'cash') {
+        // For cash, just proceed to receipt
+        setStep('receipt');
+        setIsLoading(false);
+        return;
+      }
+
       const res = await apiClient.post('/payments/checkout', { bookingId: Number(bookingDetails.id) });
       if (res.data.success) {
         if (res.data.provider === 'stripe' && res.data.clientSecret) {
@@ -1072,6 +1086,7 @@ export default function FinderDashboard() {
     if (!selectedSpotId) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setIsLoading(true);
+    setSearchedPlace(null);
     setShowPaymentMethodModal(false);
     try {
       let hours = parkingHours + (parkingMinutes / 60);
@@ -1104,6 +1119,7 @@ export default function FinderDashboard() {
         payment_mode: method
       });
       if (res.data.success) {
+        setSearchedPlace(null);
         setBookingDetails({
           id: res.data.data.id.toString(),
           otp: res.data.data.otp_code.toString(),
@@ -2085,7 +2101,7 @@ export default function FinderDashboard() {
                   <View style={{ paddingVertical: 10 }}>
                     <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', marginBottom: 16, letterSpacing: -0.5 }}>Review & Pay</Text>
                     
-                    <View style={{ backgroundColor: 'rgba(255,255,255,0.03)', padding: 18, borderRadius: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', marginBottom: 24 }}>
+                    <View style={{ backgroundColor: 'rgba(255,255,255,0.03)', padding: 18, borderRadius: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', marginBottom: 20 }}>
                       <View style={{ gap: 12 }}>
                         <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                           <Text style={{ color: '#94a3b8', fontWeight: '600', fontSize: 13 }}>Stay</Text>
@@ -2103,10 +2119,53 @@ export default function FinderDashboard() {
                       </View>
                     </View>
 
-                    {bookingDetails?.payment_mode === 'cash' && (
-                      <View style={{ backgroundColor: 'rgba(16,185,129,0.1)', padding: 12, borderRadius: 12, marginBottom: 12 }}>
-                        <Text style={{ color: '#10b981', fontSize: 14, fontWeight: '800', textAlign: 'center' }}>
-                          💵 Please pay the Spotter directly in cash.
+                    <Text style={{ color: '#94a3b8', fontSize: 11, fontWeight: '800', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>Select Payment Method</Text>
+                    <View style={{ flexDirection: 'row', gap: 12, marginBottom: 20 }}>
+                      <TouchableOpacity 
+                        style={{
+                          flex: 1,
+                          backgroundColor: selectedPaymentMethod === 'online' ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)',
+                          padding: 16,
+                          borderRadius: 16,
+                          borderWidth: 2,
+                          borderColor: selectedPaymentMethod === 'online' ? '#6366f1' : 'transparent',
+                          alignItems: 'center',
+                          gap: 6
+                        }}
+                        onPress={() => {
+                          Haptics.selectionAsync();
+                          setSelectedPaymentMethod('online');
+                        }}
+                      >
+                        <Text style={{ fontSize: 22 }}>💳</Text>
+                        <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>Online Payment</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity 
+                        style={{
+                          flex: 1,
+                          backgroundColor: selectedPaymentMethod === 'cash' ? 'rgba(16,185,129,0.15)' : 'rgba(255,255,255,0.03)',
+                          padding: 16,
+                          borderRadius: 16,
+                          borderWidth: 2,
+                          borderColor: selectedPaymentMethod === 'cash' ? '#10b981' : 'transparent',
+                          alignItems: 'center',
+                          gap: 6
+                        }}
+                        onPress={() => {
+                          Haptics.selectionAsync();
+                          setSelectedPaymentMethod('cash');
+                        }}
+                      >
+                        <Text style={{ fontSize: 22 }}>💵</Text>
+                        <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>Pay Cash</Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    {selectedPaymentMethod === 'cash' && (
+                      <View style={{ backgroundColor: 'rgba(16,185,129,0.1)', padding: 12, borderRadius: 12, marginBottom: 16 }}>
+                        <Text style={{ color: '#10b981', fontSize: 13, fontWeight: '800', textAlign: 'center' }}>
+                          💵 Please hand over cash to the spotter.
                         </Text>
                       </View>
                     )}
@@ -2114,7 +2173,7 @@ export default function FinderDashboard() {
                     <TouchableOpacity 
                       activeOpacity={0.9}
                       style={{ 
-                        backgroundColor: '#6366f1', 
+                        backgroundColor: selectedPaymentMethod === 'cash' ? '#10b981' : '#6366f1', 
                         paddingVertical: 18, borderRadius: 20, 
                         alignItems: 'center',
                       }} 
@@ -2124,7 +2183,7 @@ export default function FinderDashboard() {
                       }}
                     >
                       <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>
-                        {isLoading ? 'Processing...' : (bookingDetails?.payment_mode === 'cash' ? 'Complete Checkout' : 'Proceed to Payment')}
+                        {isLoading ? 'Processing...' : (selectedPaymentMethod === 'cash' ? 'Complete Checkout' : 'Proceed to Payment')}
                       </Text>
                     </TouchableOpacity>
                   </View>
@@ -2173,51 +2232,7 @@ export default function FinderDashboard() {
         <Text style={styles.chatFabText}>💬</Text>
       </TouchableOpacity>
 
-      {/* PAYMENT METHOD MODAL */}
-      <Modal visible={showPaymentMethodModal} transparent animationType="slide">
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.8)', justifyContent: 'flex-end' }}>
-          <View style={{ backgroundColor: '#1e293b', padding: 24, borderTopLeftRadius: 32, borderTopRightRadius: 32 }}>
-            <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900', marginBottom: 16 }}>Choose Payment Method</Text>
-            
-            <TouchableOpacity 
-              style={{ backgroundColor: selectedPaymentMethod === 'online' ? 'rgba(99,102,241,0.2)' : 'rgba(255,255,255,0.05)', padding: 16, borderRadius: 16, marginBottom: 12, borderWidth: 2, borderColor: selectedPaymentMethod === 'online' ? '#6366f1' : 'transparent', flexDirection: 'row', alignItems: 'center' }}
-              onPress={() => { Haptics.selectionAsync(); setSelectedPaymentMethod('online'); }}
-            >
-              <Text style={{ fontSize: 24, marginRight: 16 }}>💳</Text>
-              <View>
-                <Text style={{ color: '#fff', fontSize: 18, fontWeight: '800' }}>Pay Online</Text>
-                <Text style={{ color: '#94a3b8', fontSize: 13, marginTop: 2 }}>UPI, Cards, NetBanking via Razorpay</Text>
-              </View>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={{ backgroundColor: selectedPaymentMethod === 'cash' ? 'rgba(16,185,129,0.2)' : 'rgba(255,255,255,0.05)', padding: 16, borderRadius: 16, marginBottom: 24, borderWidth: 2, borderColor: selectedPaymentMethod === 'cash' ? '#10b981' : 'transparent', flexDirection: 'row', alignItems: 'center' }}
-              onPress={() => { Haptics.selectionAsync(); setSelectedPaymentMethod('cash'); }}
-            >
-              <Text style={{ fontSize: 24, marginRight: 16 }}>💵</Text>
-              <View>
-                <Text style={{ color: '#fff', fontSize: 18, fontWeight: '800' }}>Pay with Cash</Text>
-                <Text style={{ color: '#94a3b8', fontSize: 13, marginTop: 2 }}>Pay the spotter directly at checkout</Text>
-              </View>
-            </TouchableOpacity>
-
-            <View style={{ flexDirection: 'row', gap: 12 }}>
-              <TouchableOpacity 
-                style={{ flex: 1, backgroundColor: 'rgba(255,255,255,0.1)', padding: 16, borderRadius: 16, alignItems: 'center' }}
-                onPress={() => setShowPaymentMethodModal(false)}
-              >
-                <Text style={{ color: '#fff', fontSize: 16, fontWeight: '800' }}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={{ flex: 2, backgroundColor: selectedPaymentMethod === 'cash' ? '#10b981' : '#6366f1', padding: 16, borderRadius: 16, alignItems: 'center' }}
-                onPress={() => handleCreateBooking(selectedPaymentMethod)}
-              >
-                <Text style={{ color: '#fff', fontSize: 16, fontWeight: '800' }}>Confirm Payment</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+      {/* Upfront Payment Modal removed - Payment selection is now done at checkout */}
 
       {/* 💳 RAZORPAY CHECKOUT MODAL */}
       {razorpayOrder && (
@@ -2553,10 +2568,12 @@ export default function FinderDashboard() {
             onPress={() => {
               if (!selectedSpotId) return;
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-              setShowPaymentMethodModal(true);
+              handleCreateBooking('online');
             }}
           >
-            <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900' }}>Confirm Reservation</Text>
+            <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900' }}>
+              {isLoading ? 'Reserving...' : 'Confirm Reservation'}
+            </Text>
           </TouchableOpacity>
           </View>
         </SafeAreaView>
