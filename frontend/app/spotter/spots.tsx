@@ -25,6 +25,7 @@ export default function SpotsScreen() {
   const [latitude, setLatitude] = useState('');
   const [longitude, setLongitude] = useState('');
   const [creating, setCreating] = useState(false);
+  const [editingSpotId, setEditingSpotId] = useState<number | null>(null);
 
   useEffect(() => {
     fetchMySpots();
@@ -69,7 +70,7 @@ export default function SpotsScreen() {
 
     setCreating(true);
     try {
-      const res = await apiClient.post('/spots', {
+      const payload = {
         title: title.trim(),
         description: description.trim(),
         price_per_hour: parseFloat(price),
@@ -79,27 +80,50 @@ export default function SpotsScreen() {
         total_slots: totalSlots,
         car_slots: parseInt(carSlots || '0'),
         bike_slots: parseInt(bikeSlots || '0'),
-      });
+      };
 
-      if (res.data?.success) {
-        Alert.alert('🎉 Spot Created!', `"${title}" is now live on ParkStop.`);
-        setTitle('');
-        setDescription('');
-        setCarSlots('1');
-        setBikeSlots('0');
-        setPrice('');
-        setAddress('');
-        setLatitude('');
-        setLongitude('');
-        setMode('list');
-        setLoadingSpots(true);
-        fetchMySpots();
+      if (editingSpotId) {
+        const res = await apiClient.put(`/spots/${editingSpotId}`, payload);
+        if (res.data?.success) {
+          Alert.alert('🎉 Spot Updated!', `"${title}" has been updated.`);
+        }
+      } else {
+        const res = await apiClient.post('/spots', payload);
+        if (res.data?.success) {
+          Alert.alert('🎉 Spot Created!', `"${title}" is now live on ParkStop.`);
+        }
       }
+
+      setTitle('');
+      setDescription('');
+      setCarSlots('1');
+      setBikeSlots('0');
+      setPrice('');
+      setAddress('');
+      setLatitude('');
+      setLongitude('');
+      setEditingSpotId(null);
+      setMode('list');
+      setLoadingSpots(true);
+      fetchMySpots();
     } catch (e: any) {
-      Alert.alert('Error', e.response?.data?.message || 'Failed to create spot.');
+      Alert.alert('Error', e.response?.data?.message || 'Failed to save spot.');
     } finally {
       setCreating(false);
     }
+  };
+
+  const handleEditClick = (spot: any) => {
+    setEditingSpotId(spot.id);
+    setTitle(spot.title || '');
+    setDescription(spot.description || '');
+    setCarSlots(spot.car_slots?.toString() || '0');
+    setBikeSlots(spot.bike_slots?.toString() || '0');
+    setPrice(spot.price_per_hour?.toString() || '');
+    setAddress(spot.address || '');
+    setLatitude(spot.latitude?.toString() || '');
+    setLongitude(spot.longitude?.toString() || '');
+    setMode('create');
   };
 
   const handleDelete = async (spotId: number) => {
@@ -148,27 +172,27 @@ export default function SpotsScreen() {
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={SS.scrollContent}>
         {/* TITLE & MODE TOGGLE */}
         <Text style={{ color: SC.textPrimary, ...TF.h1, marginBottom: 6 }}>
-          {mode === 'list' ? 'My Spots' : 'New Listing'}
+          {mode === 'list' ? 'My Spots' : (editingSpotId ? 'Edit Listing' : 'New Listing')}
         </Text>
         <Text style={{ color: SC.textSecondary, ...TF.bodySm, marginBottom: SP.xl }}>
-          {mode === 'list' ? 'Manage your parking listings.' : 'List a new parking space on ParkStop.'}
+          {mode === 'list' ? 'Manage your parking listings.' : 'Update or list a parking space on ParkStop.'}
         </Text>
 
         {/* MODE TOGGLE */}
         <View style={s.toggleRow}>
           <TouchableOpacity
             style={[s.toggleBtn, mode === 'list' && s.toggleActive]}
-            onPress={() => setMode('list')}
+            onPress={() => { setMode('list'); setEditingSpotId(null); setTitle(''); setAddress(''); setPrice(''); }}
           >
             <Ionicons name="list" size={18} color={mode === 'list' ? '#FFF' : SC.textMuted} />
             <Text style={[s.toggleText, mode === 'list' && { color: '#FFF' }]}>My Spots</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[s.toggleBtn, mode === 'create' && s.toggleActive]}
-            onPress={() => setMode('create')}
+            onPress={() => { setMode('create'); setEditingSpotId(null); setTitle(''); setAddress(''); setPrice(''); }}
           >
             <Ionicons name="add-circle" size={18} color={mode === 'create' ? '#FFF' : SC.textMuted} />
-            <Text style={[s.toggleText, mode === 'create' && { color: '#FFF' }]}>Create New</Text>
+            <Text style={[s.toggleText, mode === 'create' && { color: '#FFF' }]}>{editingSpotId ? 'Edit Spot' : 'Create New'}</Text>
           </TouchableOpacity>
         </View>
 
@@ -206,12 +230,20 @@ export default function SpotsScreen() {
                         {spot.car_slots} Car · {spot.bike_slots} Bike
                       </Text>
                     </View>
-                    <TouchableOpacity
-                      style={s.deleteBtn}
-                      onPress={() => handleDelete(spot.id)}
-                    >
-                      <Ionicons name="trash-outline" size={16} color={SC.error} />
-                    </TouchableOpacity>
+                    <View style={{ flexDirection: 'row', gap: 6 }}>
+                      <TouchableOpacity
+                        style={[s.deleteBtn, { backgroundColor: 'rgba(59,130,246,0.1)' }]}
+                        onPress={() => handleEditClick(spot)}
+                      >
+                        <Ionicons name="pencil" size={16} color="#3b82f6" />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={s.deleteBtn}
+                        onPress={() => handleDelete(spot.id)}
+                      >
+                        <Ionicons name="trash-outline" size={16} color={SC.error} />
+                      </TouchableOpacity>
+                    </View>
                   </View>
                   <View style={s.spotStatsRow}>
                     <View style={s.spotStat}>
@@ -349,7 +381,7 @@ export default function SpotsScreen() {
               {creating ? (
                 <ActivityIndicator color="#FFF" size="small" />
               ) : (
-                <Text style={SS.primaryBtnText}>List Property</Text>
+                <Text style={SS.primaryBtnText}>{editingSpotId ? 'Save Changes' : 'Create Spot'}</Text>
               )}
             </TouchableOpacity>
           </View>

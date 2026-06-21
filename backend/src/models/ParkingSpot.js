@@ -242,26 +242,35 @@ class ParkingSpot {
       }
     });
 
-    const revenueByDay = await prisma.bookings.groupBy({
-      by: ['created_at'],
+    // Fetch bookings completed in the last 7 days
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    
+    const recentCompletedBookings = await prisma.bookings.findMany({
       where: {
         parking_spots: {
           spotter_id: parseInt(userId)
         },
-        status: 'completed'
+        status: 'completed',
+        created_at: {
+          gte: sevenDaysAgo
+        }
       },
-      _sum: {
+      select: {
+        created_at: true,
         total_price: true
       }
     });
 
-    // Map to last 7 days trend (simplified for now)
+    // Map to last 7 days trend
     const trend = Array(7).fill(0);
     const today = new Date();
-    revenueByDay.forEach(item => {
+    today.setHours(23, 59, 59, 999); // set to end of today
+    
+    recentCompletedBookings.forEach(item => {
       const dayDiff = Math.floor((today - new Date(item.created_at)) / (1000 * 60 * 60 * 24));
       if (dayDiff >= 0 && dayDiff < 7) {
-        trend[6 - dayDiff] += Number(item._sum.total_price || 0);
+        trend[6 - dayDiff] += Number(item.total_price || 0);
       }
     });
 

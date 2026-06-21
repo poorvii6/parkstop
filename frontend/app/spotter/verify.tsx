@@ -19,9 +19,25 @@ export default function VerifyScreen() {
   const [fetchingBookings, setFetchingBookings] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  const [spotterUpiId, setSpotterUpiId] = useState<string | null>(null);
+  const [accountName, setAccountName] = useState<string | null>(null);
+
   useEffect(() => {
     fetchActiveBookings();
+    checkPayoutStatus();
   }, []);
+
+  const checkPayoutStatus = async () => {
+    try {
+      const res = await apiClient.get('/payouts/account-status');
+      if (res.data?.success) {
+        if (res.data.data.upi_id) setSpotterUpiId(res.data.data.upi_id);
+        if (res.data.data.bank_account_name) setAccountName(res.data.data.bank_account_name);
+      }
+    } catch (e) {
+      console.log('Error fetching payout status', e);
+    }
+  };
 
   const fetchActiveBookings = async () => {
     try {
@@ -221,7 +237,7 @@ export default function VerifyScreen() {
               <View style={{ padding: 12, backgroundColor: '#FFF', borderRadius: RAD.md, marginBottom: SP.xl, alignItems: 'center' }}>
                 <View style={{ width: 200, height: 200 }}>
                   <Image 
-                    source={{ uri: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`upi://pay?pa=parkstop@upi&pn=ParkStop&am=${checkoutData.total_amount}&tr=${checkoutData.booking_id}`)}` }}
+                    source={{ uri: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`upi://pay?pa=${spotterUpiId || 'parkstop@upi'}&pn=${accountName || 'ParkStop'}&am=${checkoutData.total_amount}&tr=${checkoutData.booking_id}`)}` }}
                     style={{ width: 200, height: 200 }}
                   />
                 </View>
