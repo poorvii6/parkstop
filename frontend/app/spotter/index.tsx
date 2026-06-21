@@ -177,7 +177,8 @@ export default function SpotterDashboard() {
 
   const handleRazorpayFailure = (data: any) => {
     setIsRazorpayVisible(false);
-    Alert.alert('Payment Failed', data.error?.description || 'Your payment could not be processed.');
+    const errorMessage = data && data.error ? data.error.description : 'Your payment could not be processed or was cancelled.';
+    Alert.alert('Payment Failed', errorMessage);
   };
 
   const fetchDashboardData = useCallback(async () => {
