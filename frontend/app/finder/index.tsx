@@ -2164,9 +2164,11 @@ export default function FinderDashboard() {
 
                 {step === 'checkout_verification' && (
                   <View style={{ alignItems: 'center', paddingVertical: 10 }}>
-                    <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', marginBottom: 4, letterSpacing: -0.5 }}>Check-Out</Text>
-                    <Text style={{ color: '#94a3b8', fontSize: 13, marginBottom: 20, fontWeight: '500', textAlign: 'center' }}>
-                      Please approach the spotter to generate your Exit QR Code.
+                    <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', marginBottom: 8, letterSpacing: -0.5, textAlign: 'center' }}>
+                      Checkout, please approach the spotter to generate your exit QR code.
+                    </Text>
+                    <Text style={{ color: '#94a3b8', fontSize: 16, marginBottom: 20, fontWeight: '600', textAlign: 'center' }}>
+                      Thank you.
                     </Text>
 
                     <View style={{ backgroundColor: 'rgba(255,255,255,0.03)', padding: 18, borderRadius: 24, width: '100%', marginBottom: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', alignItems: 'center' }}>
