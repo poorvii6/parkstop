@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, Alert, ScrollView, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, Alert, ScrollView, ActivityIndicator, RefreshControl, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -218,17 +218,12 @@ export default function VerifyScreen() {
                 Ask the Finder to scan this QR code using PhonePe, GPay, or Paytm.
               </Text>
 
-              <View style={{ padding: 12, backgroundColor: '#FFF', borderRadius: RAD.md, marginBottom: SP.xl }}>
+              <View style={{ padding: 12, backgroundColor: '#FFF', borderRadius: RAD.md, marginBottom: SP.xl, alignItems: 'center' }}>
                 <View style={{ width: 200, height: 200 }}>
-                  <Text style={{ color: '#000', textAlign: 'center', marginTop: 80 }}>
-                    {/* Fallback API QR. In production, we'd use react-native-qrcode-svg */}
-                  </Text>
-                  <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
-                    <Text style={{ opacity: 0 }}>upi://pay?pa=mock@upi&pn=ParkStop&am={checkoutData.total_amount}&tr={checkoutData.booking_id}</Text>
-                    <View style={{ width: 200, height: 200, backgroundColor: '#000' }}>
-                      <Text style={{ color: '#FFF', textAlign: 'center', marginTop: 90 }}>[ QR CODE ]</Text>
-                    </View>
-                  </View>
+                  <Image 
+                    source={{ uri: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`upi://pay?pa=parkstop@upi&pn=ParkStop&am=${checkoutData.total_amount}&tr=${checkoutData.booking_id}`)}` }}
+                    style={{ width: 200, height: 200 }}
+                  />
                 </View>
               </View>
 
