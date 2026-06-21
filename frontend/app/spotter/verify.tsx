@@ -227,9 +227,9 @@ export default function VerifyScreen() {
                 </View>
               </View>
 
-              <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
+              <View style={{ flexDirection: 'column', gap: 12, width: '100%' }}>
                 <TouchableOpacity
-                  style={[SS.primaryBtn, { backgroundColor: SC.success, flex: 1 }, loading && { opacity: 0.7 }]}
+                  style={[SS.primaryBtn, { backgroundColor: SC.success, width: '100%' }, loading && { opacity: 0.7 }]}
                   onPress={handleCollectCash}
                   disabled={loading}
                 >
@@ -237,7 +237,7 @@ export default function VerifyScreen() {
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={[SS.primaryBtn, { backgroundColor: SC.error, flex: 1 }, loading && { opacity: 0.7 }]}
+                  style={[SS.primaryBtn, { backgroundColor: SC.error, width: '100%' }, loading && { opacity: 0.7 }]}
                   onPress={handleCheckoutUnpaid}
                   disabled={loading}
                 >
