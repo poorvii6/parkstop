@@ -273,29 +273,15 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
       .setLngLat([destination.lng, destination.lat])
       .addTo(map.current);
 
-    let checkCount = 0;
     let active = true;
-    const showPinWithGuard = () => {
-      if (!active) return;
-      const parent = el.parentElement;
-      const isPositioned = parent && (
-        (parent.style.transform && parent.style.transform.indexOf('translate') !== -1) ||
-        (parent.style.webkitTransform && parent.style.webkitTransform.indexOf('translate') !== -1) ||
-        (parent.style.cssText && parent.style.cssText.indexOf('translate') !== -1)
-      );
-
-      if (isPositioned) {
-        el.style.display = 'block';
-      } else {
-        checkCount++;
-        if (checkCount < 15) {
-          requestAnimationFrame(showPinWithGuard);
-        } else {
+    // Double-rAF to wait for MapLibre to apply the transform in the DOM before showing
+    requestAnimationFrame(function() {
+      requestAnimationFrame(function() {
+        if (active) {
           el.style.display = 'block';
         }
-      }
-    };
-    requestAnimationFrame(showPinWithGuard);
+      });
+    });
 
     return () => {
       active = false;

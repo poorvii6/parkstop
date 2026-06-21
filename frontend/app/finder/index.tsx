@@ -225,6 +225,8 @@ export default function FinderDashboard() {
     currency: string;
     keyId: string;
   } | null>(null);
+  const [isUPIModalVisible, setIsUPIModalVisible] = useState(false);
+  const [isUPIProcessing, setIsUPIProcessing] = useState(false);
 
   const [spots, setSpots] = useState<Spot[]>([]);
   const [socket, setSocket] = useState<Socket | null>(null);
@@ -934,6 +936,90 @@ export default function FinderDashboard() {
       Alert.alert("Extension Failed", errMsg);
     } finally {
       setIsExtending(false);
+    }
+  };
+
+  const handleUPIPayment = async (app: 'gpay' | 'phonepe' | 'paytm' | 'upi') => {
+    setIsUPIModalVisible(false);
+    setIsLoading(true);
+    try {
+      // First update the payment mode on the backend
+      const patchRes = await apiClient.patch(`/bookings/${bookingDetails?.id}/payment-mode`, {
+        payment_mode: 'online'
+      });
+
+      if (!patchRes.data.success) {
+        throw new Error('Failed to update payment mode');
+      }
+
+      setBookingDetails(prev => prev ? {
+        ...prev,
+        payment_mode: 'online'
+      } : null);
+
+      const res = await apiClient.post('/payments/checkout', { bookingId: Number(bookingDetails?.id) });
+      if (!res.data.success || !res.data.order_id) {
+        throw new Error('Failed to initiate secure checkout session');
+      }
+      
+      const orderId = res.data.order_id;
+      const amountInRupees = (res.data.amount / 100).toFixed(2);
+      
+      const upiId = 'parkstop@razorpay';
+      const pn = 'ParkStop';
+      const upiQuery = `pa=${upiId}&pn=${encodeURIComponent(pn)}&am=${amountInRupees}&cu=INR&tr=${orderId}&tn=ParkStop%20Booking%20${bookingDetails?.id}`;
+      
+      let upiUrl = '';
+      if (app === 'gpay') {
+        upiUrl = `gpay://upi/pay?${upiQuery}`;
+      } else if (app === 'phonepe') {
+        upiUrl = `phonepe://upi/pay?${upiQuery}`;
+      } else if (app === 'paytm') {
+        upiUrl = `paytmmp://upi/pay?${upiQuery}`;
+      } else {
+        upiUrl = `upi://pay?${upiQuery}`;
+      }
+
+      console.log(`[UPI Launch] Opening deep-link: ${upiUrl}`);
+      
+      try {
+        await Linking.openURL(upiUrl);
+      } catch (err) {
+        const genericUrl = `upi://pay?${upiQuery}`;
+        try {
+          await Linking.openURL(genericUrl);
+        } catch (genErr) {
+          throw new Error(`Preferred payment app (${app.toUpperCase()}) is not installed on this device.`);
+        }
+      }
+
+      setIsUPIProcessing(true);
+      setTimeout(async () => {
+        try {
+          const verification = await razorpayService.verifyPayment({
+            bookingId: Number(bookingDetails?.id),
+            razorpay_order_id: orderId,
+            razorpay_payment_id: `pay_mock_upi_${Date.now()}`,
+            razorpay_signature: 'mock_upi_intent',
+          });
+          
+          if (verification.success) {
+            setStep('receipt');
+          } else {
+            Alert.alert('Verification Failed', 'Could not confirm payment signature. Please contact support.');
+          }
+        } catch (verErr: any) {
+          Alert.alert('Verification Error', verErr.message || 'Failed to verify payment with server.');
+        } finally {
+          setIsLoading(false);
+          setIsUPIProcessing(false);
+        }
+      }, 3500);
+
+    } catch (e: any) {
+      Alert.alert('UPI Payment Error', e.message || 'Failed to process UPI payment');
+      setIsLoading(false);
+      setIsUPIProcessing(false);
     }
   };
 
@@ -2179,7 +2265,11 @@ export default function FinderDashboard() {
                       }} 
                       onPress={() => {
                         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                        processPayment();
+                        if (selectedPaymentMethod === 'online') {
+                          setIsUPIModalVisible(true);
+                        } else {
+                          processPayment();
+                        }
                       }}
                     >
                       <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>
@@ -2233,6 +2323,109 @@ export default function FinderDashboard() {
       </TouchableOpacity>
 
       {/* Upfront Payment Modal removed - Payment selection is now done at checkout */}
+
+      {/* 📱 UPI / ONLINE METHOD SELECTOR MODAL */}
+      <Modal visible={isUPIModalVisible} transparent animationType="slide">
+        <View style={styles.chatModalBg}>
+          <View style={[styles.chatModal, BlueprintTheme.glassCard, { height: 480, padding: 24, borderRadius: 32 }]}>
+            <View style={styles.chatHeader}>
+              <Text style={styles.chatTitle}>Choose Payment Method</Text>
+              <TouchableOpacity onPress={() => setIsUPIModalVisible(false)}>
+                <Text style={styles.chatClose}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={{ flex: 1, marginTop: 15 }} showsVerticalScrollIndicator={false}>
+              
+              <TouchableOpacity
+                style={styles.upiAppItem}
+                onPress={() => handleUPIPayment('gpay')}
+              >
+                <View style={[styles.upiAppIconBg, { backgroundColor: '#fff' }]}>
+                  <Image source={{ uri: 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/c1/Google_%22G%22_logo.svg/120px-Google_%22G%22_logo.svg.png' }} style={{ width: 22, height: 22 }} resizeMode="contain" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.upiAppTitle}>Google Pay</Text>
+                  <Text style={styles.upiAppSubtitle}>Pay directly via GPay app</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.3)" />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.upiAppItem}
+                onPress={() => handleUPIPayment('phonepe')}
+              >
+                <View style={[styles.upiAppIconBg, { backgroundColor: '#5f259f' }]}>
+                  <Text style={{ color: '#fff', fontSize: 22, fontWeight: '800', includeFontPadding: false, marginTop: Platform.OS === 'android' ? -2 : 0 }}>पे</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.upiAppTitle}>PhonePe</Text>
+                  <Text style={styles.upiAppSubtitle}>Instant UPI via PhonePe</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.3)" />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.upiAppItem}
+                onPress={() => handleUPIPayment('paytm')}
+              >
+                <View style={[styles.upiAppIconBg, { backgroundColor: '#fff' }]}>
+                  <Text style={{ color: '#0f172a', fontWeight: '900', fontSize: 13, fontStyle: 'italic' }}>Pay<Text style={{ color: '#00baf2' }}>tm</Text></Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.upiAppTitle}>Paytm</Text>
+                  <Text style={styles.upiAppSubtitle}>Pay using Paytm wallet/UPI</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.3)" />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.upiAppItem}
+                onPress={() => handleUPIPayment('upi')}
+              >
+                <View style={[styles.upiAppIconBg, { backgroundColor: '#fff' }]}>
+                  <Text style={{ color: '#16a34a', fontWeight: '900', fontSize: 13, fontStyle: 'italic', letterSpacing: 1 }}>UPI</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.upiAppTitle}>Other UPI App</Text>
+                  <Text style={styles.upiAppSubtitle}>Pay via any installed UPI app</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.3)" />
+              </TouchableOpacity>
+
+              <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.05)', marginVertical: 15 }} />
+
+              <TouchableOpacity
+                style={styles.upiAppItem}
+                onPress={() => {
+                  setIsUPIModalVisible(false);
+                  processPayment();
+                }}
+              >
+                <View style={[styles.upiAppIconBg, { backgroundColor: '#6366f1' }]}>
+                  <Ionicons name="card" size={22} color="#fff" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.upiAppTitle}>Debit / Credit Card</Text>
+                  <Text style={styles.upiAppSubtitle}>Cards, Netbanking & Wallets</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.3)" />
+              </TouchableOpacity>
+
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* 🔄 UPI PROCESSING OVERLAY */}
+      <Modal visible={isUPIProcessing} transparent animationType="fade">
+        <View style={[styles.chatModalBg, { justifyContent: 'center', alignItems: 'center' }]}>
+          <View style={[BlueprintTheme.glassCard, { padding: 30, borderRadius: 24, alignItems: 'center', gap: 16, width: width * 0.8 }]}>
+            <ActivityIndicator size="large" color={BlueprintColors.primaryAccent} />
+            <Text style={{ color: '#fff', fontSize: 16, fontWeight: '800', textAlign: 'center' }}>Opening Payment Application...</Text>
+            <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, textAlign: 'center', lineHeight: 18 }}>Please complete the transaction in Google Pay/PhonePe and return to ParkStop.</Text>
+          </View>
+        </View>
+      </Modal>
 
       {/* 💳 RAZORPAY CHECKOUT MODAL */}
       {razorpayOrder && (
@@ -2949,5 +3142,33 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.05)',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  upiAppItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)',
+  },
+  upiAppIconBg: {
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 16,
+  },
+  upiAppTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  upiAppSubtitle: {
+    color: 'rgba(255,255,255,0.3)',
+    fontSize: 12,
+    marginTop: 2,
   },
 });

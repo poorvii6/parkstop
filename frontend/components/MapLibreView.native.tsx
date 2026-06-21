@@ -135,14 +135,8 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
         /* Destination pin */
         .dest-pin {
           width: 36px; height: 50px;
-          animation: pinDrop 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
           transform-origin: bottom center;
           display: none;
-        }
-        @keyframes pinDrop {
-          0% { transform: translateY(-80px) scale(0.3); opacity: 0; }
-          60% { transform: translateY(5px) scale(1.05); opacity: 1; }
-          100% { transform: translateY(0) scale(1); opacity: 1; }
         }
 
         /* ETA overlay on map */
@@ -374,13 +368,13 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
           var showDest = false;
           var finalDest = null;
           
-          if (routeArr.length > 0) {
+          if (isNav && routeArr.length > 0) {
             finalDest = routeArr[routeArr.length - 1];
             showDest = true;
           } else if (data.searchedPlace) {
             finalDest = data.searchedPlace;
             showDest = true;
-          } else if (data.destination) {
+          } else if (data.destination && isNav) {
             finalDest = data.destination;
             // Only show red pin if it's NOT a parking spot marker
             var overlapsSpot = (data.markers || []).some(function(m) {
@@ -409,29 +403,14 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
                   destVis = true;
                 }
                 
-                var checkCount = 0;
-                var showPinWithGuard = function() {
-                  if (!destVis) return;
-                  var parent = destEl.parentElement;
-                  var isPositioned = parent && (
-                    (parent.style.transform && parent.style.transform.indexOf('translate') !== -1) ||
-                    (parent.style.webkitTransform && parent.style.webkitTransform.indexOf('translate') !== -1) ||
-                    (parent.style.cssText && parent.style.cssText.indexOf('translate') !== -1)
-                  );
-
-                  if (isPositioned) {
-                    destEl.style.display = 'block';
-                  } else {
-                    checkCount++;
-                    if (checkCount < 15) { // Check up to 15 frames (~240ms)
-                      requestAnimationFrame(showPinWithGuard);
-                    } else {
-                      // Fallback: show the pin anyway
+                // Double-rAF: wait for MapLibre to apply the transform in the DOM before showing
+                requestAnimationFrame(function() {
+                  requestAnimationFrame(function() {
+                    if (destVis) {
                       destEl.style.display = 'block';
                     }
-                  }
-                };
-                requestAnimationFrame(showPinWithGuard);
+                  });
+                });
               } else {
                 destEl.style.display = 'block';
               }
