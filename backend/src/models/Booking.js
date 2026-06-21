@@ -17,14 +17,18 @@ class Booking {
       if (!spot || !spot.is_active) throw new Error('Parking spot not found');
       
       // Check specific vehicle slots
-      if (vehicle_type === 'car' && spot.car_slots <= 0) {
-        logger.error(`Booking failed: No car slots available for spot ${spot_id}`);
-        throw new Error('No car slots available');
+      if (vehicle_type === 'car') {
+        if (spot.car_slots !== null && spot.car_slots <= 0 && spot.available_slots <= 0) {
+          logger.error(`Booking failed: No car slots available for spot ${spot_id}`);
+          throw new Error('No car slots available');
+        }
+      } else if (vehicle_type === 'bike') {
+        if (spot.bike_slots !== null && spot.bike_slots <= 0 && spot.available_slots <= 0) {
+          logger.error(`Booking failed: No bike slots available for spot ${spot_id}`);
+          throw new Error('No bike slots available');
+        }
       }
-      if (vehicle_type === 'bike' && spot.bike_slots <= 0) {
-        logger.error(`Booking failed: No bike slots available for spot ${spot_id}`);
-        throw new Error('No bike slots available');
-      }
+
       if (spot.available_slots <= 0) {
         logger.error(`Booking failed: No total slots available for spot ${spot_id}`);
         throw new Error('No total slots available');
@@ -87,8 +91,8 @@ class Booking {
         is_available: (spot.available_slots - 1 > 0)
       };
       
-      if (vehicle_type === 'car') updateData.car_slots = { decrement: 1 };
-      else if (vehicle_type === 'bike') updateData.bike_slots = { decrement: 1 };
+      if (vehicle_type === 'car' && spot.car_slots > 0) updateData.car_slots = { decrement: 1 };
+      else if (vehicle_type === 'bike' && spot.bike_slots > 0) updateData.bike_slots = { decrement: 1 };
 
       await tx.parking_spots.update({
         where: { id: parseInt(spot_id) },
