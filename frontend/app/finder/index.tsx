@@ -227,6 +227,32 @@ export default function FinderDashboard() {
   } | null>(null);
   const [isUPIModalVisible, setIsUPIModalVisible] = useState(false);
   const [isUPIProcessing, setIsUPIProcessing] = useState(false);
+  const [mockSimulatorApp, setMockSimulatorApp] = useState<'gpay' | 'phonepe' | 'paytm' | 'upi' | null>(null);
+  const [mockSimulatorOrderId, setMockSimulatorOrderId] = useState<string | null>(null);
+
+  const executeUPIVerification = async (orderId: string) => {
+    setIsUPIProcessing(true);
+    setMockSimulatorApp(null);
+    try {
+      const verification = await razorpayService.verifyPayment({
+        bookingId: Number(bookingDetails?.id),
+        razorpay_order_id: orderId,
+        razorpay_payment_id: `pay_mock_upi_${Date.now()}`,
+        razorpay_signature: 'mock_upi_intent',
+      });
+      if (verification.success) {
+        setStep('receipt');
+      } else {
+        Alert.alert('Verification Failed', 'Could not confirm payment signature.');
+      }
+    } catch (verErr: any) {
+      Alert.alert('Verification Error', verErr.message || 'Failed to verify payment with server.');
+    } finally {
+      setIsLoading(false);
+      setIsUPIProcessing(false);
+      setMockSimulatorOrderId(null);
+    }
+  };
 
   const [spots, setSpots] = useState<Spot[]>([]);
   const [socket, setSocket] = useState<Socket | null>(null);
@@ -982,39 +1008,32 @@ export default function FinderDashboard() {
 
       console.log(`[UPI Launch] Opening deep-link: ${upiUrl}`);
       
+      let canOpen = false;
       try {
-        await Linking.openURL(upiUrl);
-      } catch (err) {
-        const genericUrl = `upi://pay?${upiQuery}`;
-        try {
-          await Linking.openURL(genericUrl);
-        } catch (genErr) {
-          throw new Error(`Preferred payment app (${app.toUpperCase()}) is not installed on this device.`);
-        }
+        canOpen = await Linking.canOpenURL(upiUrl);
+      } catch (e) {
+        console.log("canOpenURL check failed", e);
       }
 
-      setIsUPIProcessing(true);
-      setTimeout(async () => {
+      if (canOpen) {
         try {
-          const verification = await razorpayService.verifyPayment({
-            bookingId: Number(bookingDetails?.id),
-            razorpay_order_id: orderId,
-            razorpay_payment_id: `pay_mock_upi_${Date.now()}`,
-            razorpay_signature: 'mock_upi_intent',
-          });
-          
-          if (verification.success) {
-            setStep('receipt');
-          } else {
-            Alert.alert('Verification Failed', 'Could not confirm payment signature. Please contact support.');
-          }
-        } catch (verErr: any) {
-          Alert.alert('Verification Error', verErr.message || 'Failed to verify payment with server.');
-        } finally {
-          setIsLoading(false);
-          setIsUPIProcessing(false);
+          await Linking.openURL(upiUrl);
+          // Wait 3.5 seconds to simulate returning to app after checkout
+          setIsUPIProcessing(true);
+          setTimeout(() => {
+            executeUPIVerification(orderId);
+          }, 3500);
+        } catch (err) {
+          console.log("openURL failed despite canOpen=true", err);
+          setMockSimulatorOrderId(orderId);
+          setMockSimulatorApp(app);
         }
-      }, 3500);
+      } else {
+        // Mock fallback simulator
+        console.log("UPI App not installed. Triggering Mock Simulator.");
+        setMockSimulatorOrderId(orderId);
+        setMockSimulatorApp(app);
+      }
 
     } catch (e: any) {
       Alert.alert('UPI Payment Error', e.message || 'Failed to process UPI payment');
@@ -2412,6 +2431,47 @@ export default function FinderDashboard() {
               </TouchableOpacity>
 
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* 📱 MOCK SIMULATOR MODAL */}
+      <Modal visible={!!mockSimulatorApp} transparent animationType="slide">
+        <View style={{ flex: 1, backgroundColor: mockSimulatorApp === 'phonepe' ? '#5f259f' : mockSimulatorApp === 'paytm' ? '#00baf2' : mockSimulatorApp === 'gpay' ? '#1A73E8' : '#0f172a', justifyContent: 'center', padding: 20 }}>
+          <View style={{ alignItems: 'center', marginBottom: 40 }}>
+            {mockSimulatorApp === 'phonepe' && <Text style={{ color: '#fff', fontSize: 48, fontWeight: '900', marginBottom: 10 }}>पे</Text>}
+            {mockSimulatorApp === 'paytm' && <Text style={{ color: '#0f172a', fontSize: 32, fontWeight: '900', fontStyle: 'italic', backgroundColor: '#fff', paddingHorizontal: 16, paddingVertical: 4, borderRadius: 8, overflow: 'hidden' }}>Pay<Text style={{ color: '#00baf2' }}>tm</Text></Text>}
+            {mockSimulatorApp === 'gpay' && <Image source={{ uri: 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/c1/Google_%22G%22_logo.svg/120px-Google_%22G%22_logo.svg.png' }} style={{ width: 60, height: 60, backgroundColor: '#fff', borderRadius: 30, marginBottom: 10 }} />}
+            {mockSimulatorApp === 'upi' && <Text style={{ color: '#fff', fontSize: 36, fontWeight: '900', fontStyle: 'italic' }}>UPI</Text>}
+            <Text style={{ color: '#fff', fontSize: 24, fontWeight: '700', marginTop: 20 }}>Test Environment</Text>
+            <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 16, textAlign: 'center', marginTop: 10 }}>The app {mockSimulatorApp} is not installed or unavailable. You are viewing the mock simulator fallback.</Text>
+          </View>
+          
+          <View style={{ backgroundColor: '#fff', borderRadius: 24, padding: 24, elevation: 10 }}>
+            <Text style={{ color: '#64748b', fontSize: 14, fontWeight: '600', textAlign: 'center' }}>Amount to Pay</Text>
+            <Text style={{ color: '#0f172a', fontSize: 40, fontWeight: '900', textAlign: 'center', marginVertical: 10 }}>₹{bookingDetails?.totalPrice || bookingDetails?.total_price || bookingDetails?.pricing?.finalPrice || '0.00'}</Text>
+            
+            <TouchableOpacity 
+              style={{ backgroundColor: mockSimulatorApp === 'phonepe' ? '#5f259f' : mockSimulatorApp === 'paytm' ? '#00baf2' : mockSimulatorApp === 'gpay' ? '#1A73E8' : '#16a34a', paddingVertical: 18, borderRadius: 16, alignItems: 'center', marginTop: 20 }}
+              onPress={() => {
+                if (mockSimulatorOrderId) {
+                  executeUPIVerification(mockSimulatorOrderId);
+                }
+              }}
+            >
+              <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Complete Mock Payment</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={{ paddingVertical: 18, alignItems: 'center', marginTop: 10 }}
+              onPress={() => {
+                setMockSimulatorApp(null);
+                setMockSimulatorOrderId(null);
+                setIsLoading(false);
+              }}
+            >
+              <Text style={{ color: '#64748b', fontSize: 16, fontWeight: '700' }}>Cancel Payment</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
