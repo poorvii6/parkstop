@@ -422,11 +422,14 @@ class BookingController {
       // Lock-in the quoted price from booking time
       const basePrice = Number(booking.total_price || 0);
 
-      // Fetch Finder's arrears
-      const finder = await require('../config/prisma').users.findUnique({
-        where: { id: booking.user_id }
-      });
-      const arrears = finder && finder.balance < 0 ? Math.abs(Number(finder.balance)) : 0;
+      // Fetch Finder's arrears safely
+      let arrears = 0;
+      if (booking.user_id) {
+        const finder = await require('../config/prisma').users.findUnique({
+          where: { id: booking.user_id }
+        });
+        arrears = finder && finder.balance < 0 ? Math.abs(Number(finder.balance)) : 0;
+      }
 
       res.json({
         success: true,
