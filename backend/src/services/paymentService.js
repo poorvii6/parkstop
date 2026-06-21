@@ -45,7 +45,7 @@ class PaymentService {
    */
   static async verifyRazorpayPayment(orderId, paymentId, signature, bookingId) {
     try {
-      const isValid = signature === 'mock_upi_intent' ? true : razorpayAdapter.verifyPaymentSignature(orderId, paymentId, signature);
+      const isValid = (signature === 'mock_upi_intent' && process.env.NODE_ENV !== 'production') ? true : razorpayAdapter.verifyPaymentSignature(orderId, paymentId, signature);
       
       if (!isValid) {
         throw new Error('Payment signature verification failed.');
