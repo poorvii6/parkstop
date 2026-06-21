@@ -40,16 +40,14 @@ class PricingService {
       let multiplier = 1.0;
 
       /**
-       * ⏱ TIME MULTIPLIER
+       * ⏱ TIME MULTIPLIER (Disabled for Uber-style strictly demand-based pricing)
        */
-      const timeMultiplier = this.getTimeMultiplier(bookingTime);
-      multiplier *= timeMultiplier;
+      const timeMultiplier = 1.0;
 
       /**
-       * 📍 LOCATION MULTIPLIER
+       * 📍 LOCATION MULTIPLIER (Disabled)
        */
-      const locationMultiplier = this.getLocationMultiplier(location);
-      multiplier *= locationMultiplier;
+      const locationMultiplier = 1.0;
 
       /**
        * 🔥 DEMAND MULTIPLIER

@@ -419,10 +419,8 @@ class BookingController {
         return res.status(404).json({ success: false, message: 'Booking not found' });
       }
 
-      // Calculate base price
-      const spot = await ParkingSpot.findById(booking.spot_id);
-      const hours = Math.max(1, Math.ceil((new Date() - new Date(booking.start_time)) / (1000 * 60 * 60)));
-      const basePrice = Number(spot.price_per_hour) * hours;
+      // Lock-in the quoted price from booking time
+      const basePrice = Number(booking.total_price || 0);
 
       // Fetch Finder's arrears
       const finder = await require('../config/prisma').users.findUnique({
