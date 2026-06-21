@@ -83,6 +83,47 @@ router.put(
 );
 
 /**
+ * ✅ CHECKOUT UNPAID / ARREARS (Spotter only)
+ */
+router.put(
+  '/:id/checkout-unpaid',
+  authenticate,
+  authorize('SPOTTER'),
+  [
+    param('id').isInt().withMessage('Booking ID must be an integer'),
+    validate
+  ],
+  BookingController.checkoutUnpaid
+);
+
+/**
+ * ✅ CHECKOUT CASH (Spotter only)
+ */
+router.put(
+  '/:id/checkout-cash',
+  authenticate,
+  authorize('SPOTTER'),
+  [
+    param('id').isInt().withMessage('Booking ID must be an integer'),
+    validate
+  ],
+  BookingController.checkoutCash
+);
+
+/**
+ * ✅ GET CHECKOUT AMOUNT (Spotter or Finder)
+ */
+router.get(
+  '/:id/checkout-amount',
+  authenticate,
+  [
+    param('id').isInt().withMessage('Booking ID must be an integer'),
+    validate
+  ],
+  BookingController.getCheckoutAmount
+);
+
+/**
  * ✅ UPDATE PAYMENT MODE (Finder only)
  */
 router.patch(

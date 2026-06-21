@@ -12,6 +12,7 @@ export default function VerifyScreen() {
   const [otp, setOtp] = useState('');
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<'checkin' | 'checkout'>('checkin');
+  const [checkoutData, setCheckoutData] = useState<any>(null);
 
   // Active bookings for quick-verify
   const [activeBookings, setActiveBookings] = useState<any[]>([]);
@@ -61,6 +62,60 @@ export default function VerifyScreen() {
       }
     } catch (e: any) {
       Alert.alert('Verification Failed', e.response?.data?.message || 'Invalid OTP or Booking ID');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGenerateQR = async () => {
+    if (!bookingId) {
+      Alert.alert('Missing Info', 'Please enter a Booking ID.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await apiClient.get(`/bookings/${bookingId}/checkout-amount`);
+      if (res.data?.success) {
+        setCheckoutData(res.data.data);
+      }
+    } catch (e: any) {
+      Alert.alert('Failed to generate QR', e.response?.data?.message || 'Could not fetch amount');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCheckoutUnpaid = async () => {
+    if (!bookingId) return;
+    setLoading(true);
+    try {
+      const res = await apiClient.put(`/bookings/${bookingId}/checkout-unpaid`);
+      if (res.data?.success) {
+        Alert.alert('Arrears Applied', 'The Finder has been marked as unpaid. Your wallet was credited with your earnings!');
+        setCheckoutData(null);
+        setBookingId('');
+        fetchActiveBookings();
+      }
+    } catch (e: any) {
+      Alert.alert('Error', e.response?.data?.message || 'Could not process unpaid checkout');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCollectCash = async () => {
+    if (!bookingId) return;
+    setLoading(true);
+    try {
+      const res = await apiClient.put(`/bookings/${bookingId}/checkout-cash`);
+      if (res.data?.success) {
+        Alert.alert('Cash Collected', 'Booking completed. The platform fee has been deducted from your digital wallet.');
+        setCheckoutData(null);
+        setBookingId('');
+        fetchActiveBookings();
+      }
+    } catch (e: any) {
+      Alert.alert('Error', e.response?.data?.message || 'Could not process cash checkout');
     } finally {
       setLoading(false);
     }
@@ -133,46 +188,119 @@ export default function VerifyScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* VERIFY FORM */}
+        {/* VERIFY FORM OR QR CODE */}
         <View style={SS.glassCard}>
-          <View style={SS.inputGroup}>
-            <Text style={SS.inputLabel}>BOOKING ID</Text>
-            <TextInput
-              style={SS.input}
-              placeholder="e.g. 42"
-              placeholderTextColor={SC.textDisabled}
-              value={bookingId}
-              onChangeText={setBookingId}
-              keyboardType="number-pad"
-            />
-          </View>
-          <View style={SS.inputGroup}>
-            <Text style={SS.inputLabel}>
-              {mode === 'checkin' ? 'CHECK-IN OTP' : 'CHECKOUT OTP'}
-            </Text>
-            <TextInput
-              style={SS.input}
-              placeholder="000000"
-              placeholderTextColor={SC.textDisabled}
-              value={otp}
-              onChangeText={setOtp}
-              keyboardType="number-pad"
-              maxLength={6}
-            />
-          </View>
-          <TouchableOpacity
-            style={[SS.primaryBtn, loading && { opacity: 0.7 }]}
-            onPress={handleVerify}
-            disabled={loading}
-          >
-            {loading ? (
-              <ActivityIndicator color="#FFF" size="small" />
-            ) : (
-              <Text style={SS.primaryBtnText}>
-                {mode === 'checkin' ? 'Verify & Park' : 'Verify & Complete'}
+          {mode === 'checkout' && checkoutData ? (
+            <View style={{ alignItems: 'center', paddingVertical: SP.md }}>
+              <Text style={{ color: SC.textPrimary, ...TF.h2, marginBottom: 8 }}>
+                Booking #{checkoutData.booking_id}
               </Text>
-            )}
-          </TouchableOpacity>
+              
+              <View style={{ width: '100%', backgroundColor: SC.bgApp, padding: SP.md, borderRadius: RAD.sm, marginBottom: SP.lg }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <Text style={{ color: SC.textSecondary }}>Base Fare</Text>
+                  <Text style={{ color: SC.textPrimary }}>₹{checkoutData.base_price}</Text>
+                </View>
+                {checkoutData.arrears > 0 && (
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <Text style={{ color: SC.error }}>Previous Arrears</Text>
+                    <Text style={{ color: SC.error }}>₹{checkoutData.arrears}</Text>
+                  </View>
+                )}
+                <View style={{ height: 1, backgroundColor: SC.border, marginVertical: 8 }} />
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                  <Text style={{ color: SC.textPrimary, ...TF.bodyBold }}>Total Due</Text>
+                  <Text style={{ color: SC.accent, ...TF.h2 }}>₹{checkoutData.total_amount}</Text>
+                </View>
+              </View>
+
+              <Text style={{ color: SC.textSecondary, marginBottom: SP.md, textAlign: 'center' }}>
+                Ask the Finder to scan this QR code using PhonePe, GPay, or Paytm.
+              </Text>
+
+              <View style={{ padding: 12, backgroundColor: '#FFF', borderRadius: RAD.md, marginBottom: SP.xl }}>
+                <View style={{ width: 200, height: 200 }}>
+                  <Text style={{ color: '#000', textAlign: 'center', marginTop: 80 }}>
+                    {/* Fallback API QR. In production, we'd use react-native-qrcode-svg */}
+                  </Text>
+                  <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}>
+                    <Text style={{ opacity: 0 }}>upi://pay?pa=mock@upi&pn=ParkStop&am={checkoutData.total_amount}&tr={checkoutData.booking_id}</Text>
+                    <View style={{ width: 200, height: 200, backgroundColor: '#000' }}>
+                      <Text style={{ color: '#FFF', textAlign: 'center', marginTop: 90 }}>[ QR CODE ]</Text>
+                    </View>
+                  </View>
+                </View>
+              </View>
+
+              <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
+                <TouchableOpacity
+                  style={[SS.primaryBtn, { backgroundColor: SC.success, flex: 1 }, loading && { opacity: 0.7 }]}
+                  onPress={handleCollectCash}
+                  disabled={loading}
+                >
+                  {loading ? <ActivityIndicator color="#FFF" size="small" /> : <Text style={SS.primaryBtnText}>Collected Cash & Complete</Text>}
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[SS.primaryBtn, { backgroundColor: SC.error, flex: 1 }, loading && { opacity: 0.7 }]}
+                  onPress={handleCheckoutUnpaid}
+                  disabled={loading}
+                >
+                  {loading ? <ActivityIndicator color="#FFF" size="small" /> : <Text style={SS.primaryBtnText}>Mark as Unpaid (Arrears)</Text>}
+                </TouchableOpacity>
+              </View>
+              
+              <TouchableOpacity
+                style={{ marginTop: SP.md, padding: 8 }}
+                onPress={() => setCheckoutData(null)}
+              >
+                <Text style={{ color: SC.textMuted }}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <>
+              <View style={SS.inputGroup}>
+                <Text style={SS.inputLabel}>BOOKING ID</Text>
+                <TextInput
+                  style={SS.input}
+                  placeholder="e.g. 42"
+                  placeholderTextColor={SC.textDisabled}
+                  value={bookingId}
+                  onChangeText={setBookingId}
+                  keyboardType="number-pad"
+                />
+              </View>
+              
+              {mode === 'checkin' && (
+                <View style={SS.inputGroup}>
+                  <Text style={SS.inputLabel}>CHECK-IN OTP</Text>
+                  <TextInput
+                    style={SS.input}
+                    placeholder="000000"
+                    placeholderTextColor={SC.textDisabled}
+                    value={otp}
+                    onChangeText={setOtp}
+                    keyboardType="number-pad"
+                    maxLength={6}
+                  />
+                </View>
+              )}
+
+              <TouchableOpacity
+                style={[SS.primaryBtn, mode === 'checkout' && { backgroundColor: SC.info }, loading && { opacity: 0.7 }]}
+                onPress={mode === 'checkin' ? handleVerify : handleGenerateQR}
+                disabled={loading}
+              >
+                {loading ? (
+                  <ActivityIndicator color="#FFF" size="small" />
+                ) : (
+                  <Text style={SS.primaryBtnText}>
+                    {mode === 'checkin' ? 'Verify & Park' : 'Generate Exit QR'}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </>
+          )}
         </View>
 
         {/* QUICK STATS */}

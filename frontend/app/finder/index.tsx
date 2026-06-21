@@ -2192,8 +2192,21 @@ export default function FinderDashboard() {
                         borderWidth: 1, borderColor: 'rgba(16,185,129,0.3)', 
                         width: '100%', alignItems: 'center' 
                       }} 
-                      onPress={() => {
+                      onPress={async () => {
                         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                        try {
+                          const res = await apiClient.get(`/bookings/${bookingDetails?.id}/checkout-amount`);
+                          if (res.data?.success) {
+                            setBookingDetails({
+                              ...bookingDetails,
+                              basePrice: res.data.data.base_price,
+                              arrears: res.data.data.arrears,
+                              finalAmount: res.data.data.total_amount
+                            });
+                          }
+                        } catch (e) {
+                          console.log('Failed to fetch checkout amount', e);
+                        }
                         setStep('payment');
                       }}
                     >
@@ -2218,8 +2231,19 @@ export default function FinderDashboard() {
                         </View>
                         <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.05)', marginVertical: 4 }} />
                         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Total</Text>
-                          <Text style={{ color: '#6366f1', fontSize: 24, fontWeight: '900' }}>₹{Number(bookingDetails?.totalPrice || 0).toFixed(2)}</Text>
+                          <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Base Price</Text>
+                          <Text style={{ color: '#6366f1', fontSize: 18, fontWeight: '900' }}>₹{Number(bookingDetails?.basePrice || bookingDetails?.totalPrice || 0).toFixed(2)}</Text>
+                        </View>
+                        {bookingDetails?.arrears > 0 && (
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+                            <Text style={{ color: '#f43f5e', fontSize: 14, fontWeight: '800' }}>Previous Arrears</Text>
+                            <Text style={{ color: '#f43f5e', fontSize: 16, fontWeight: '900' }}>₹{Number(bookingDetails?.arrears || 0).toFixed(2)}</Text>
+                          </View>
+                        )}
+                        <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.05)', marginVertical: 8 }} />
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <Text style={{ color: '#fff', fontSize: 20, fontWeight: '900' }}>Total Due</Text>
+                          <Text style={{ color: '#6366f1', fontSize: 28, fontWeight: '900' }}>₹{Number(bookingDetails?.finalAmount || bookingDetails?.totalPrice || 0).toFixed(2)}</Text>
                         </View>
                       </View>
                     </View>

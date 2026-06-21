@@ -60,9 +60,20 @@ class PaymentService {
           updated_at: new Date()
         },
         include: {
-          parking_spots: true
+          parking_spots: true,
+          users: true
         }
       });
+
+      // Clear any arrears the Finder had, since they just paid for it in the combined Order
+      if (updatedBooking.users && updatedBooking.users.balance < 0) {
+        const arrearsToClear = Math.abs(Number(updatedBooking.users.balance));
+        await prisma.users.update({
+          where: { id: updatedBooking.user_id },
+          data: { balance: { increment: arrearsToClear } }
+        });
+        logger.info(`Cleared ₹${arrearsToClear} arrears for user ${updatedBooking.user_id} during checkout of booking ${bookingId}`);
+      }
 
       // Trigger online payout to Spotter
       try {

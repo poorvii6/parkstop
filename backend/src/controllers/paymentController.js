@@ -29,6 +29,13 @@ class PaymentController {
          return res.status(403).json({ success: false, message: 'Unauthorized access to this booking' });
       }
 
+      // Fetch user to check for arrears
+      const user = await require('../config/prisma').users.findUnique({
+        where: { id: req.user.id }
+      });
+      const arrears = user.balance < 0 ? Math.abs(Number(user.balance)) : 0;
+      const finalAmountToCharge = Number(booking.total_price) + arrears;
+
       // Find the spot and the spotter
       const spot = await require('../config/prisma').parking_spots.findUnique({
         where: { id: booking.spot_id },
@@ -40,22 +47,26 @@ class PaymentController {
       const useRazorpay = true;
 
       if (useRazorpay) {
-        const order = await PaymentService.createRazorpayOrder(booking.total_price, req.user.id, bookingId);
+        const order = await PaymentService.createRazorpayOrder(finalAmountToCharge, req.user.id, bookingId);
         res.json({
           success: true,
           provider: 'razorpay',
           order_id: order.orderId,
           amount: order.amount,
           currency: order.currency,
-          key_id: process.env.RAZORPAY_KEY_ID
+          key_id: process.env.RAZORPAY_KEY_ID,
+          base_price: booking.total_price,
+          arrears_included: arrears
         });
       } else {
-        const paymentIntent = await PaymentService.createPaymentIntent(booking.total_price, req.user.id, bookingId);
+        const paymentIntent = await PaymentService.createPaymentIntent(finalAmountToCharge, req.user.id, bookingId);
         res.json({
           success: true,
           provider: 'stripe',
           clientSecret: paymentIntent.client_secret,
-          amount: booking.total_price
+          amount: finalAmountToCharge,
+          base_price: booking.total_price,
+          arrears_included: arrears
         });
       }
     } catch (error) {
