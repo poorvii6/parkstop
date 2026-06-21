@@ -263,179 +263,76 @@ export default function SpotterDashboard() {
           />
         }
       >
-        {/* DUES WARNING BANNER */}
-        {dashboardData.balance < 0 && (
-          <View style={{ backgroundColor: 'rgba(239,68,68,0.1)', padding: 16, borderRadius: 16, marginBottom: 24, borderWidth: 1, borderColor: 'rgba(239,68,68,0.3)' }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8 }}>
-              <Ionicons name="warning" size={24} color="#ef4444" style={{ marginRight: 8 }} />
-              <Text style={{ color: '#ef4444', fontSize: 18, fontWeight: '800' }}>Platform Dues: ₹{Math.abs(dashboardData.balance).toFixed(2)}</Text>
-            </View>
-            <Text style={{ color: '#f87171', fontSize: 14, marginBottom: 12 }}>
-              {dashboardData.balance <= -500 
-                ? "Your parking spots are hidden from Finders because your dues exceeded ₹500. Clear dues to reactivate."
-                : "You have pending platform fees from cash bookings. Clear them soon to avoid suspension."}
-            </Text>
+        {/* QUICK ACTIONS HUB */}
+        <View style={{ flexDirection: 'row', gap: 12, marginBottom: SP.xl }}>
+          <TouchableOpacity
+            style={[SS.primaryBtn, { flex: 1, backgroundColor: SC.info, paddingVertical: 14 }]}
+            onPress={() => router.push('/spotter/verify')}
+          >
+            <Ionicons name="scan-circle-outline" size={24} color="#FFF" style={{ marginBottom: 4 }} />
+            <Text style={{ color: '#FFF', fontWeight: '800', fontSize: 13 }}>Verify Finder</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[SS.primaryBtn, { flex: 1, backgroundColor: SC.success, paddingVertical: 14 }]}
+            onPress={() => router.push('/spotter/spots')}
+          >
+            <Ionicons name="add-circle-outline" size={24} color="#FFF" style={{ marginBottom: 4 }} />
+            <Text style={{ color: '#FFF', fontWeight: '800', fontSize: 13 }}>Add Spot</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* ACTION REQUIRED PILLS */}
+        <View style={{ marginBottom: SP.xl, gap: 8 }}>
+          {dashboardData.balance < 0 && (
             <TouchableOpacity 
-              style={{ backgroundColor: '#ef4444', paddingVertical: 12, borderRadius: 12, alignItems: 'center' }}
+              style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(239,68,68,0.15)', padding: 12, borderRadius: RAD.md, borderWidth: 1, borderColor: 'rgba(239,68,68,0.3)' }}
               onPress={handleClearDues}
               disabled={isClearingDues}
             >
-              {isClearingDues ? <ActivityIndicator color="#fff" /> : <Text style={{ color: '#fff', fontWeight: '800', fontSize: 16 }}>Clear Dues via Razorpay</Text>}
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* PAYOUT SETUP BANNER */}
-        {payoutSetup === false && (
-          <TouchableOpacity
-            style={s.payoutBanner}
-            onPress={() => router.push('/spotter/payout-setup')}
-            activeOpacity={0.85}
-          >
-            <View style={s.payoutBannerIcon}>
-              <Ionicons name="wallet-outline" size={22} color={SC.warning} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={s.payoutBannerTitle}>Set Up Payouts</Text>
-              <Text style={s.payoutBannerSub}>Link your UPI or bank account to receive earnings automatically</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color={SC.textMuted} />
-          </TouchableOpacity>
-        )}
-
-        {/* STAT CARDS */}
-        <View style={s.statsRow}>
-          <StatCard
-            icon={<Ionicons name="wallet" size={20} color="#FFF" />}
-            iconColor="#FFF"
-            iconBg={SC.accent}
-            label="MONTHLY EARNINGS"
-            value={`₹${dashboardData.earnings.toFixed(0)}`}
-            sub={`Surge ${dashboardData.surge_factor}x`}
-          />
-          <StatCard
-            icon={<FontAwesome5 name="car-side" size={16} color="#FFF" />}
-            iconColor="#FFF"
-            iconBg={SC.info}
-            label="ACTIVE BOOKINGS"
-            value={activeBookings.toString()}
-            sub="Vehicles parked"
-          />
-        </View>
-
-        <View style={s.statsRow}>
-          <StatCard
-            icon={<Ionicons name="location" size={20} color="#FFF" />}
-            iconColor="#FFF"
-            iconBg={SC.success}
-            label="ACTIVE SPOTS"
-            value={dashboardData.active_spots.toString()}
-            sub={`${totalSlots} total slots`}
-          />
-          <StatCard
-            icon={<Ionicons name="trending-up" size={20} color="#FFF" />}
-            iconColor="#FFF"
-            iconBg={SC.warning}
-            label="CAPACITY"
-            value={`${capacityPct}%`}
-            sub={capacityPct > 80 ? 'High demand!' : 'Slots available'}
-          />
-        </View>
-
-        {/* EARNINGS ANALYTICS */}
-        <View style={{ marginBottom: SP.xxl }}>
-          <View style={SS.sectionHeader}>
-            <Text style={SS.sectionTitle}>Earnings Analytics</Text>
-            <View style={SS.badge}>
-              <Text style={SS.badgeText}>WEEKLY TREND</Text>
-            </View>
-          </View>
-          <View style={[SS.card, { paddingVertical: 20 }]}>
-            <MiniChart data={dashboardData.revenue_trend || [0, 0, 0, 0, 0, 0, 0]} />
-          </View>
-        </View>
-
-        {/* CAPACITY BAR */}
-        <View style={{ marginBottom: SP.xxl }}>
-          <View style={SS.sectionHeader}>
-            <Text style={SS.sectionTitle}>Capacity Usage</Text>
-            <Text style={{ color: capacityPct > 80 ? SC.error : SC.success, ...TF.bodyBold }}>
-              {capacityPct}% Full
-            </Text>
-          </View>
-          <View style={s.progressBg}>
-            <View
-              style={[
-                s.progressFill,
-                {
-                  width: `${capacityPct}%`,
-                  backgroundColor: capacityPct > 80 ? SC.error : capacityPct > 50 ? SC.warning : SC.success,
-                },
-              ]}
-            />
-          </View>
-          <Text style={{ color: SC.textMuted, ...TF.bodySm, marginTop: 6 }}>
-            {occupiedSlots} of {totalSlots} slots occupied
-          </Text>
-        </View>
-
-        {/* LIVE INVENTORY */}
-        <View style={{ marginBottom: SP.xxl }}>
-          <View style={SS.sectionHeader}>
-            <Text style={SS.sectionTitle}>Live Inventory</Text>
-            <View style={SS.badge}>
-              <Text style={SS.badgeText}>{dashboardData.inventory?.length || 0} SPOTS</Text>
-            </View>
-          </View>
-          {(!dashboardData.inventory || dashboardData.inventory.length === 0) ? (
-            <View style={[SS.card, { alignItems: 'center', paddingVertical: 32 }]}>
-              <Ionicons name="location-outline" size={36} color={SC.textMuted} />
-              <Text style={[SS.emptyText, { marginTop: 12 }]}>No spots listed yet</Text>
-              <TouchableOpacity
-                style={[SS.primaryBtn, { marginTop: 16, paddingHorizontal: 24, paddingVertical: 12 }]}
-                onPress={() => router.push('/spotter/spots')}
-              >
-                <Text style={SS.primaryBtnText}>Create Your First Spot</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            dashboardData.inventory.map((spot: any, i: number) => (
-              <View key={i} style={s.inventoryCard}>
-                <View style={s.inventoryIcon}>
-                  {spot.car_slots > 0 ? (
-                    <FontAwesome5 name="car-side" size={20} color={SC.accent} />
-                  ) : (
-                    <MaterialCommunityIcons name="motorbike" size={24} color={SC.textSecondary} />
-                  )}
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: SC.textPrimary, ...TF.bodyBold }}>{spot.title}</Text>
-                  <Text style={{ color: SC.textMuted, ...TF.bodySm, marginTop: 2 }}>
-                    {spot.car_slots} Car · {spot.bike_slots} Bike slots
-                  </Text>
-                </View>
-                <View
-                  style={[
-                    s.slotBadge,
-                    spot.available_slots === 0 && { borderColor: SC.error, backgroundColor: SC.errorSoft },
-                  ]}
-                >
-                  <Text
-                    style={[
-                      s.slotBadgeText,
-                      spot.available_slots === 0 && { color: SC.error },
-                    ]}
-                  >
-                    {spot.available_slots > 0 ? `${spot.available_slots} OPEN` : 'FULL'}
-                  </Text>
-                </View>
+              <Ionicons name="warning" size={20} color="#ef4444" style={{ marginRight: 8 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: '#ef4444', fontWeight: '800', fontSize: 14 }}>Dues: ₹{Math.abs(dashboardData.balance).toFixed(2)}</Text>
+                <Text style={{ color: '#f87171', fontSize: 12 }}>{dashboardData.balance <= -500 ? "Spots hidden! Clear to reactivate." : "Clear pending fees."}</Text>
               </View>
-            ))
+              {isClearingDues ? <ActivityIndicator color="#ef4444" /> : <Text style={{ color: '#ef4444', fontWeight: 'bold' }}>PAY</Text>}
+            </TouchableOpacity>
+          )}
+
+          {payoutSetup === false && (
+            <TouchableOpacity
+              style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(245,158,11,0.15)', padding: 12, borderRadius: RAD.md, borderWidth: 1, borderColor: 'rgba(245,158,11,0.3)' }}
+              onPress={() => router.push('/spotter/payout-setup')}
+            >
+              <Ionicons name="wallet" size={20} color="#f59e0b" style={{ marginRight: 8 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: '#f59e0b', fontWeight: '800', fontSize: 14 }}>Setup Payouts</Text>
+                <Text style={{ color: '#fbbf24', fontSize: 12 }}>Link bank to receive earnings.</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color="#f59e0b" />
+            </TouchableOpacity>
           )}
         </View>
 
+        {/* TODAY'S SUMMARY */}
+        <View style={{ flexDirection: 'row', backgroundColor: SC.bgCard, borderRadius: RAD.lg, padding: 16, marginBottom: SP.xl, borderWidth: 1, borderColor: SC.border, justifyContent: 'space-around' }}>
+          <View style={{ alignItems: 'center' }}>
+            <Text style={{ color: SC.textMuted, fontSize: 12, fontWeight: '700', marginBottom: 4 }}>EARNINGS</Text>
+            <Text style={{ color: SC.accent, fontSize: 20, fontWeight: '900' }}>₹{dashboardData.earnings.toFixed(0)}</Text>
+          </View>
+          <View style={{ width: 1, backgroundColor: SC.border }} />
+          <View style={{ alignItems: 'center' }}>
+            <Text style={{ color: SC.textMuted, fontSize: 12, fontWeight: '700', marginBottom: 4 }}>ACTIVE CARS</Text>
+            <Text style={{ color: SC.info, fontSize: 20, fontWeight: '900' }}>{activeBookings}</Text>
+          </View>
+          <View style={{ width: 1, backgroundColor: SC.border }} />
+          <View style={{ alignItems: 'center' }}>
+            <Text style={{ color: SC.textMuted, fontSize: 12, fontWeight: '700', marginBottom: 4 }}>OPEN SLOTS</Text>
+            <Text style={{ color: totalAvailable > 0 ? SC.success : SC.error, fontSize: 20, fontWeight: '900' }}>{totalAvailable}</Text>
+          </View>
+        </View>
+
         {/* LIVE TRAFFIC */}
-        <View style={{ marginBottom: SP.xl }}>
+        <View style={{ marginBottom: SP.xxl }}>
           <View style={SS.sectionHeader}>
             <Text style={SS.sectionTitle}>Live Traffic</Text>
           </View>
@@ -478,6 +375,82 @@ export default function SpotterDashboard() {
                 </View>
               );
             })
+          )}
+        </View>
+
+        {/* ANALYTICS SECTION */}
+        <View style={SS.sectionHeader}>
+          <Text style={SS.sectionTitle}>Analytics & Inventory</Text>
+        </View>
+
+        {/* EARNINGS ANALYTICS */}
+        <View style={{ marginBottom: SP.xl }}>
+          <View style={[SS.card, { paddingVertical: 20 }]}>
+            <Text style={{ color: SC.textMuted, fontSize: 12, fontWeight: '700', marginBottom: 12, marginLeft: 8 }}>WEEKLY TREND</Text>
+            <MiniChart data={dashboardData.revenue_trend || [0, 0, 0, 0, 0, 0, 0]} />
+          </View>
+        </View>
+
+        {/* CAPACITY BAR */}
+        <View style={{ marginBottom: SP.xl }}>
+          <Text style={{ color: SC.textMuted, fontSize: 12, fontWeight: '700', marginBottom: 8, marginLeft: 8 }}>CAPACITY USAGE ({capacityPct}% FULL)</Text>
+          <View style={s.progressBg}>
+            <View
+              style={[
+                s.progressFill,
+                {
+                  width: `${capacityPct}%`,
+                  backgroundColor: capacityPct > 80 ? SC.error : capacityPct > 50 ? SC.warning : SC.success,
+                },
+              ]}
+            />
+          </View>
+          <Text style={{ color: SC.textMuted, ...TF.bodySm, marginTop: 6, marginLeft: 8 }}>
+            {occupiedSlots} of {totalSlots} slots occupied
+          </Text>
+        </View>
+
+        {/* LIVE INVENTORY */}
+        <View style={{ marginBottom: SP.xxl }}>
+          <Text style={{ color: SC.textMuted, fontSize: 12, fontWeight: '700', marginBottom: 8, marginLeft: 8 }}>ACTIVE SPOTS ({dashboardData.inventory?.length || 0})</Text>
+          {(!dashboardData.inventory || dashboardData.inventory.length === 0) ? (
+            <View style={[SS.card, { alignItems: 'center', paddingVertical: 32 }]}>
+              <Ionicons name="location-outline" size={36} color={SC.textMuted} />
+              <Text style={[SS.emptyText, { marginTop: 12 }]}>No spots listed yet</Text>
+            </View>
+          ) : (
+            dashboardData.inventory.map((spot: any, i: number) => (
+              <View key={i} style={s.inventoryCard}>
+                <View style={s.inventoryIcon}>
+                  {spot.car_slots > 0 ? (
+                    <FontAwesome5 name="car-side" size={20} color={SC.accent} />
+                  ) : (
+                    <MaterialCommunityIcons name="motorbike" size={24} color={SC.textSecondary} />
+                  )}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: SC.textPrimary, ...TF.bodyBold }}>{spot.title}</Text>
+                  <Text style={{ color: SC.textMuted, ...TF.bodySm, marginTop: 2 }}>
+                    {spot.car_slots} Car · {spot.bike_slots} Bike slots
+                  </Text>
+                </View>
+                <View
+                  style={[
+                    s.slotBadge,
+                    spot.available_slots === 0 && { borderColor: SC.error, backgroundColor: SC.errorSoft },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      s.slotBadgeText,
+                      spot.available_slots === 0 && { color: SC.error },
+                    ]}
+                  >
+                    {spot.available_slots > 0 ? `${spot.available_slots} OPEN` : 'FULL'}
+                  </Text>
+                </View>
+              </View>
+            ))
           )}
         </View>
       </ScrollView>
