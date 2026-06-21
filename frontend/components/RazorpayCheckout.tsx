@@ -191,21 +191,12 @@ export default function RazorpayCheckout({
           <WebView
             source={{ html: htmlContent }}
             originWhitelist={['*']}
-            onLoadStart={() => setLoading(true)}
-            onLoadEnd={() => setLoading(false)}
             onMessage={handleMessage}
             onShouldStartLoadWithRequest={onShouldStartLoadWithRequest}
             javaScriptEnabled={true}
             domStorageEnabled={true}
             style={{ flex: 1, backgroundColor: '#0f172a' }}
           />
-
-          {loading && (
-            <View style={styles.loader}>
-              <ActivityIndicator size="large" color="#6366f1" />
-              <Text style={styles.loaderText}>Loading Gateway...</Text>
-            </View>
-          )}
         </View>
       </SafeAreaView>
     </Modal>

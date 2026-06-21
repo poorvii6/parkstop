@@ -2165,15 +2165,13 @@ export default function FinderDashboard() {
                 {step === 'checkout_verification' && (
                   <View style={{ alignItems: 'center', paddingVertical: 10 }}>
                     <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', marginBottom: 4, letterSpacing: -0.5 }}>Check-Out</Text>
-                    <Text style={{ color: '#94a3b8', fontSize: 13, marginBottom: 20, fontWeight: '500', textAlign: 'center' }}>Provide OTP to the spotter.</Text>
+                    <Text style={{ color: '#94a3b8', fontSize: 13, marginBottom: 20, fontWeight: '500', textAlign: 'center' }}>
+                      Please approach the spotter to generate your Exit QR Code.
+                    </Text>
 
                     <View style={{ backgroundColor: 'rgba(255,255,255,0.03)', padding: 18, borderRadius: 24, width: '100%', marginBottom: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', alignItems: 'center' }}>
-                      <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 8, textTransform: 'uppercase' }}>Check-Out OTP</Text>
-                      {bookingDetails?.checkoutOtp ? (
-                        <Text selectable={true} style={{ color: '#6366f1', fontSize: 36, fontWeight: '900', letterSpacing: 8 }}>{bookingDetails.checkoutOtp}</Text>
-                      ) : (
-                        <Text style={{ color: '#ef4444', fontSize: 16, fontWeight: '700' }}>Error: OTP missing.</Text>
-                      )}
+                      <Ionicons name="qr-code-outline" size={32} color="#6366f1" style={{ marginBottom: 8 }} />
+                      <Text style={{ color: '#64748b', fontSize: 11, fontWeight: '800', textAlign: 'center' }}>WAITING FOR SPOTTER</Text>
                     </View>
 
                     <View style={{ width: '100%', padding: 14, borderRadius: 20, backgroundColor: 'rgba(99,102,241,0.05)', flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: 'rgba(99,102,241,0.15)', marginBottom: 24 }}>
