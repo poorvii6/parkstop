@@ -413,6 +413,61 @@ class PaymentController {
       res.status(500).json({ success: false, message: 'Failed to verify dues payment' });
     }
   }
+
+  /**
+   * 💳 WALLET TOP-UP FOR FINDERS
+   */
+  static async topUpWallet(req, res) {
+    try {
+      if (req.user.role.toLowerCase() !== 'finder') {
+        return res.status(403).json({ success: false, message: 'Only finders can top up wallet' });
+      }
+
+      const { amount } = req.body;
+      if (!amount || amount < 50 || amount > 10000) {
+        return res.status(400).json({ success: false, message: 'Amount must be between ₹50 and ₹10,000' });
+      }
+
+      const order = await PaymentService.createRazorpayOrder(amount, req.user.id, null);
+
+      res.json({
+        success: true,
+        data: {
+          order_id: order.orderId,
+          amount: order.amount,
+          currency: 'INR',
+          purpose: 'wallet_topup'
+        }
+      });
+    } catch (error) {
+      logger.error('Wallet top-up error:', error);
+      res.status(500).json({ success: false, message: 'Failed to initiate top-up' });
+    }
+  }
+
+  static async confirmWalletTopUp(req, res) {
+    try {
+      const { order_id, payment_id, signature, amount } = req.body;
+
+      const isValid = (signature === 'mock_upi_intent' && process.env.NODE_ENV !== 'production')
+        ? true
+        : require('../services/payments/RazorpayAdapter').verifyPaymentSignature(order_id, payment_id, signature);
+
+      if (!isValid) {
+        return res.status(400).json({ success: false, message: 'Payment verification failed' });
+      }
+
+      await require('../config/prisma').users.update({
+        where: { id: req.user.id },
+        data: { balance: { increment: parseFloat(amount) } }
+      });
+
+      res.json({ success: true, message: `₹${amount} added to your wallet successfully` });
+    } catch (error) {
+      logger.error('Wallet confirm error:', error);
+      res.status(500).json({ success: false, message: 'Failed to confirm top-up' });
+    }
+  }
 }
 
 module.exports = PaymentController;

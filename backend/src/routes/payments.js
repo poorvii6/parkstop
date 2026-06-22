@@ -122,5 +122,33 @@ router.post(
   PaymentController.verifyClearDuesPayment
 );
 
+/**
+ * 💳 WALLET TOP-UP (Finder)
+ */
+router.post(
+  '/wallet/topup',
+  authenticate,
+  authorize('FINDER'),
+  [
+    body('amount').isFloat({ min: 50, max: 10000 }),
+    validate
+  ],
+  PaymentController.topUpWallet
+);
+
+router.post(
+  '/wallet/confirm',
+  authenticate,
+  authorize('FINDER'),
+  [
+    body('order_id').notEmpty(),
+    body('payment_id').notEmpty(),
+    body('signature').notEmpty(),
+    body('amount').isFloat({ min: 50, max: 10000 }),
+    validate
+  ],
+  PaymentController.confirmWalletTopUp
+);
+
 module.exports = router;
 

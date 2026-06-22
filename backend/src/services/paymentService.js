@@ -27,10 +27,10 @@ class PaymentService {
    */
   static async createRazorpayOrder(amount, userId, bookingId) {
     try {
-      const receipt = `booking_${bookingId}_${Date.now()}`;
+      const receipt = bookingId ? `booking_${bookingId}_${Date.now()}` : `topup_${userId}_${Date.now()}`;
       const order = await razorpayAdapter.createOrder(amount, receipt, {
         user_id: userId.toString(),
-        booking_id: bookingId.toString()
+        booking_id: bookingId ? bookingId.toString() : 'wallet_topup'
       });
       return order;
     } catch (error) {
