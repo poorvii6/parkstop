@@ -14,7 +14,11 @@ router.post(
   '/register',
   [
     body('email').isEmail(),
-    body('password').isLength({ min: 6 }),
+    body('password')
+      .isLength({ min: 8 })
+      .withMessage('Password must be at least 8 characters')
+      .matches(/\d/)
+      .withMessage('Password must contain at least one number'),
     body('name').notEmpty(),
     body('phone').optional().isString(),
     body('role').isIn(['finder', 'spotter']),

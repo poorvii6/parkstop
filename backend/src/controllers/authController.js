@@ -104,7 +104,7 @@ class AuthController {
         {
           id: user.id
         },
-        config.jwt.secret,
+        config.jwt.refreshSecret,
         { expiresIn: '7d' }
       );
 
@@ -158,7 +158,7 @@ class AuthController {
       });
     }
 
-    const decoded = jwt.verify(refresh_token, config.jwt.secret);
+    const decoded = jwt.verify(refresh_token, config.jwt.refreshSecret);
 
     const user = await prisma.users.findFirst({
       where: {

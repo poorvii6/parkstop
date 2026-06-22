@@ -182,6 +182,35 @@ class BookingController {
         }
       } catch (payoutErr) {
         logger.error(`Payout/Ledger error after checkout OTP for booking ${bookingId}:`, payoutErr);
+
+        // Mark payout as failed so admin can retry
+        await require('../config/prisma').payouts.create({
+          data: {
+            user_id: spot.spotter_id,
+            booking_id: parseInt(bookingId),
+            amount: spotterEarning || 0, // Fallback if undefined
+            status: 'failed_needs_retry',
+            failure_reason: payoutErr.message,
+            mode: 'UPI',
+            narration: `FAILED payout - Booking #${bookingId} - needs manual review`
+          }
+        }).catch(e => logger.error('Could not create failed payout record:', e));
+
+        // Always ensure balance is credited as fallback
+        if (spotterEarning) {
+          await require('../config/prisma').users.update({
+            where: { id: spot.spotter_id },
+            data: { balance: { increment: parseFloat(spotterEarning) } }
+          }).catch(e => logger.error('CRITICAL: balance credit also failed:', e));
+        }
+
+        // Notify Spotter their payment is being processed
+        const { emitToUser } = require('../config/socket');
+        emitToUser(spot.spotter_id, 'payout:pending', {
+          bookingId,
+          amount: spotterEarning,
+          message: 'Your earnings are being processed and will reflect in your wallet shortly.'
+        });
       }
 
       res.json({
@@ -264,6 +293,35 @@ class BookingController {
         }
       } catch (payoutErr) {
         logger.error(`Payout/Ledger error after complete booking for ${bookingId}:`, payoutErr);
+
+        // Mark payout as failed so admin can retry
+        await require('../config/prisma').payouts.create({
+          data: {
+            user_id: spot.spotter_id,
+            booking_id: parseInt(bookingId),
+            amount: spotterEarning || 0, // Fallback if undefined
+            status: 'failed_needs_retry',
+            failure_reason: payoutErr.message,
+            mode: 'UPI',
+            narration: `FAILED payout - Booking #${bookingId} - needs manual review`
+          }
+        }).catch(e => logger.error('Could not create failed payout record:', e));
+
+        // Always ensure balance is credited as fallback
+        if (spotterEarning) {
+          await require('../config/prisma').users.update({
+            where: { id: spot.spotter_id },
+            data: { balance: { increment: parseFloat(spotterEarning) } }
+          }).catch(e => logger.error('CRITICAL: balance credit also failed:', e));
+        }
+
+        // Notify Spotter their payment is being processed
+        const { emitToUser } = require('../config/socket');
+        emitToUser(spot.spotter_id, 'payout:pending', {
+          bookingId,
+          amount: spotterEarning,
+          message: 'Your earnings are being processed and will reflect in your wallet shortly.'
+        });
       }
 
       res.json({

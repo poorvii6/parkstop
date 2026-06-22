@@ -35,11 +35,23 @@ app.use(helmet());
 app.use(compression());
 
 // Rate limiting
+// General API limiter
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 500, // Increased for development to prevent 429 errors
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100,                  // 100 requests per window
+  message: { success: false, message: 'Too many requests, please try again later.' }
 });
+
+// Strict limiter for auth endpoints
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,                   // 10 login attempts per 15 min
+  message: { success: false, message: 'Too many login attempts, please try again later.' }
+});
+
 app.use(limiter);
+app.use('/api/v1/auth/login', authLimiter);
+app.use('/api/v1/auth/register', authLimiter);
 
 // CORS (mobile-safe)
 const allowedOrigins = process.env.ALLOWED_ORIGINS 

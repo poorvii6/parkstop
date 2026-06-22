@@ -34,17 +34,22 @@ router.post(
       .isString(),
 
     body('latitude')
-      .isFloat()
-      .withMessage('Latitude must be a valid number'),
+      .isFloat({ min: -90, max: 90 })
+      .withMessage('Latitude must be between -90 and 90'),
 
     body('longitude')
-      .isFloat()
-      .withMessage('Longitude must be a valid number'),
+      .isFloat({ min: -180, max: 180 })
+      .withMessage('Longitude must be between -180 and 180'),
 
     body('price_per_hour')
       .optional()
-      .isFloat({ min: 0 })
-      .withMessage('Price must be positive'),
+      .isFloat({ min: 1, max: 10000 })
+      .withMessage('Price must be between ₹1 and ₹10,000 per hour'),
+
+    body('total_slots')
+      .optional()
+      .isInt({ min: 1, max: 50 })
+      .withMessage('Total slots must be between 1 and 50'),
 
     validate
   ],
