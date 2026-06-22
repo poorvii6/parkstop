@@ -2168,48 +2168,6 @@ export default function FinderDashboard() {
                     <Text style={{ color: '#94a3b8', fontSize: 14, marginBottom: 20, fontWeight: '500', textAlign: 'center', lineHeight: 22 }}>
                       In the checkout, please approach the spotter to generate your exit QR code. Thank you.
                     </Text>
-
-                    <View style={{ backgroundColor: 'rgba(255,255,255,0.03)', padding: 18, borderRadius: 24, width: '100%', marginBottom: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', alignItems: 'center' }}>
-                      <Ionicons name="qr-code-outline" size={32} color="#6366f1" style={{ marginBottom: 8 }} />
-                      <Text style={{ color: '#64748b', fontSize: 11, fontWeight: '800', textAlign: 'center' }}>WAITING FOR SPOTTER</Text>
-                    </View>
-
-                    <View style={{ width: '100%', padding: 14, borderRadius: 20, backgroundColor: 'rgba(99,102,241,0.05)', flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: 'rgba(99,102,241,0.15)', marginBottom: 24 }}>
-                      <ActivityIndicator color="#6366f1" size="small" />
-                      <View>
-                        <Text style={{ color: '#fff', fontWeight: '800', fontSize: 14 }}>Syncing...</Text>
-                        <Text style={{ color: '#94a3b8', fontSize: 11, fontWeight: '500' }}>Verification takes ~15s</Text>
-                      </View>
-                    </View>
-
-                    <TouchableOpacity 
-                      activeOpacity={0.8}
-                      style={{ 
-                        backgroundColor: 'rgba(16,185,129,0.1)', 
-                        paddingVertical: 16, borderRadius: 16, 
-                        borderWidth: 1, borderColor: 'rgba(16,185,129,0.3)', 
-                        width: '100%', alignItems: 'center' 
-                      }} 
-                      onPress={async () => {
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                        try {
-                          const res = await apiClient.get(`/bookings/${bookingDetails?.id}/checkout-amount`);
-                          if (res.data?.success) {
-                            setBookingDetails({
-                              ...bookingDetails,
-                              basePrice: res.data.data.base_price,
-                              arrears: res.data.data.arrears,
-                              finalAmount: res.data.data.total_amount
-                            });
-                          }
-                        } catch (e) {
-                          console.log('Failed to fetch checkout amount', e);
-                        }
-                        setStep('payment');
-                      }}
-                    >
-                      <Text style={{ color: '#10b981', fontWeight: '800', fontSize: 15 }}>Verify</Text>
-                    </TouchableOpacity>
                   </View>
                 )}
 

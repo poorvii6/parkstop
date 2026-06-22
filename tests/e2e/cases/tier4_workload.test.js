@@ -41,6 +41,10 @@ test.describe('Tier 4: Real-world Workloads', () => {
     finderDriver.reset();
   });
 
+  test.after(async () => {
+    await prisma.$disconnect();
+  });
+
   test('Concurrency: multiple finders checkout and pay concurrently', async () => {
     // 1. Create a spot with 5 slots so multiple finders can check out simultaneously
     const spot = await prisma.parking_spots.update({
@@ -134,7 +138,7 @@ test.describe('Tier 4: Real-world Workloads', () => {
       end_time: endTime
     });
     assert.strictEqual(basePriceRes.ok, true);
-    const firstPrice = basePriceRes.data.data.price;
+    const firstPrice = basePriceRes.data.data.total_price;
 
     // 3. Occupy slot 1 (create active booking)
     const booking1 = await prisma.bookings.create({
@@ -156,7 +160,7 @@ test.describe('Tier 4: Real-world Workloads', () => {
       end_time: endTime
     });
     assert.strictEqual(surgePriceRes.ok, true);
-    const secondPrice = surgePriceRes.data.data.price;
+    const secondPrice = surgePriceRes.data.data.total_price;
 
     assert.ok(secondPrice > firstPrice, `Surge price (${secondPrice}) should be greater than base price (${firstPrice})`);
 

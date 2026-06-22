@@ -9,5 +9,8 @@
     "backend:install": "cd backend && npm install",
     "dev": "npm run frontend & npm run backend",
     "start": "npm run dev"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2"
   }
 }

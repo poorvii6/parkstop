@@ -47,6 +47,10 @@ test.describe('Tier 1: Feature Coverage Tests', () => {
     finderDriver.reset();
   });
 
+  test.after(async () => {
+    await prisma.$disconnect();
+  });
+
   test('UPI app deep link formatting contains required query parameters', async () => {
     // Reserve spot and initiate checkout
     const startTime = new Date(Date.now() + 60 * 1000).toISOString();
@@ -60,7 +64,7 @@ test.describe('Tier 1: Feature Coverage Tests', () => {
     for (const app of apps) {
       const url = finderDriver.formatUpiDeepLink(app);
       assert.ok(url.includes('pa=spotter%40upi'), `Deep link for ${app} missing payee address`);
-      assert.ok(url.includes('pn=John%20Spotter'), `Deep link for ${app} missing payee name`);
+      assert.ok(url.includes('pn=John+Spotter'), `Deep link for ${app} missing payee name`);
       assert.ok(url.includes('am='), `Deep link for ${app} missing amount`);
       assert.ok(url.includes('tr='), `Deep link for ${app} missing transaction reference (order ID)`);
       assert.ok(url.includes('cu=INR'), `Deep link for ${app} missing currency`);
@@ -108,7 +112,7 @@ test.describe('Tier 1: Feature Coverage Tests', () => {
     const paytmResult = await finderDriver.selectUpiPayment('paytm');
     assert.strictEqual(paytmResult.type, 'fallback_modal');
     assert.strictEqual(paytmResult.branding.appName, 'Paytm');
-    assert.strictEqual(phonepeResult.branding.logoAsset, 'phonepe_logo_vector.png');
+    assert.strictEqual(paytmResult.branding.logoAsset, 'paytm_logo_vector.png');
   });
 
   test('Fallback Modal Cancellation returns client state back to checkout selection', async () => {

@@ -103,7 +103,7 @@ async function main() {
   console.log(`Found test files:\n - ${testFiles.join('\n - ')}`);
 
   // Spawn node test runner
-  const testProcess = spawn('node', ['--test', ...testFiles], {
+  const testProcess = spawn('node', ['--test', '--test-concurrency=1', ...testFiles], {
     stdio: 'inherit',
     env: { ...process.env, PORT }
   });

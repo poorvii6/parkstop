@@ -16,6 +16,14 @@ class FinderDriver {
     this.installedApps = apps;
   }
 
+  reset() {
+    this.state = 'idle';
+    this.currentBooking = null;
+    this.checkoutDetails = null;
+    this.selectedUpiApp = null;
+    this.fallbackModalBranding = null;
+  }
+
   // Simulator transitions:
 
   // 1. Select spot and create booking

@@ -22,6 +22,10 @@ test.describe('Tier 3: Pairwise Combination Tests', () => {
     finderDriver = new FinderDriver(finderApi);
   });
 
+  test.after(async () => {
+    await prisma.$disconnect();
+  });
+
   const combinations = [
     // 1. None installed, select gpay, complete fallback
     { installed: [], select: 'gpay', action: 'complete' },

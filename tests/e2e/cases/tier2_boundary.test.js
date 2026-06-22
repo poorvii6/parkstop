@@ -28,6 +28,10 @@ test.describe('Tier 2: Boundary Cases', () => {
     finderDriver.reset();
   });
 
+  test.after(async () => {
+    await prisma.$disconnect();
+  });
+
   test('Missing apps: always triggers fallback modal when installed list is empty', async () => {
     finderDriver.setInstalledApps([]);
 
