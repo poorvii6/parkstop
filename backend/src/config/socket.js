@@ -14,6 +14,12 @@ const initializeSocket = (server) => {
     },
   });
 
+  async function emitPendingNotifications(userId) {
+    // Optional enhancement: store undelivered notifications in DB and re-emit on reconnect
+    // For now, just log
+    logger.debug(`Checking pending notifications for user ${userId}`);
+  }
+
   // Socket.io authentication middleware
   io.use((socket, next) => {
     const token = socket.handshake.auth.token;
@@ -39,6 +45,16 @@ const initializeSocket = (server) => {
 
     // Join user-specific room
     socket.join(`user:${socket.userId}`);
+
+    // ADD: Handle reconnection — client sends its active booking ID on reconnect
+    socket.on('reconnect:rejoin', ({ bookingId }) => {
+      if (bookingId) {
+        socket.join(`booking:${bookingId}`);
+        logger.info(`User ${socket.userId} re-joined booking room ${bookingId} after reconnect`);
+      }
+      // Re-emit any pending notifications from DB
+      emitPendingNotifications(socket.userId);
+    });
 
     // Handle GPS location updates (from Finder)
     socket.on('location:update', (data) => {

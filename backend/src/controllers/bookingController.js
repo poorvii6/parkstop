@@ -174,9 +174,14 @@ class BookingController {
               });
               logger.info(`Cash booking ${bookingId}: Deducted ₹${platformFee} from spotter ${spot.spotter_id} wallet`);
             } else {
-              // Trigger online payout to Spotter
-              await PayoutService.processBookingPayout(bookingId, spotterEarning, spot.spotter_id);
-              logger.info(`Payout processed: ₹${spotterEarning} to spotter ${spot.spotter_id} for booking ${bookingId}`);
+              // Trigger online payout to Spotter via Queue
+              const { payoutQueue } = require('../jobs/queues');
+              await payoutQueue.add('process-payout', {
+                bookingId,
+                spotterEarning,
+                spotterId: spot.spotter_id
+              });
+              logger.info(`Payout queued: ₹${spotterEarning} to spotter ${spot.spotter_id} for booking ${bookingId}`);
             }
           }
         }
@@ -288,7 +293,13 @@ class BookingController {
             });
             logger.info(`Cash booking ${bookingId}: Deducted ₹${platformFee} from spotter ${spot.spotter_id} wallet`);
           } else if (completedData.payment_status === 'paid') {
-            await PayoutService.processBookingPayout(bookingId, spotterEarning, spot.spotter_id);
+            const { payoutQueue } = require('../jobs/queues');
+            await payoutQueue.add('process-payout', {
+              bookingId,
+              spotterEarning,
+              spotterId: spot.spotter_id
+            });
+            logger.info(`Payout queued: ₹${spotterEarning} to spotter ${spot.spotter_id} for booking ${bookingId}`);
           }
         }
       } catch (payoutErr) {

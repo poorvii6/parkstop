@@ -103,6 +103,33 @@ router.get(
   SpotController.getSlotStatus
 );
 
+const upload = require('../middleware/upload');
+
+/**
+ * IMAGE UPLOAD ENDPOINT
+ */
+router.post(
+  '/:id/images',
+  authenticate,
+  authorize('SPOTTER', 'ADMIN'),
+  upload.array('images', 5), // max 5 images
+  async (req, res) => {
+    try {
+      const spotId = req.params.id;
+      const imageUrls = req.files.map(f => f.path); // Cloudinary URL
+
+      const spot = await require('../config/prisma').parking_spots.update({
+        where: { id: parseInt(spotId) },
+        data: { images: imageUrls }
+      });
+
+      res.json({ success: true, data: { images: spot.images } });
+    } catch (err) {
+      res.status(500).json({ success: false, message: 'Image upload failed' });
+    }
+  }
+);
+
 /**
  * UPDATE SPOT
  */

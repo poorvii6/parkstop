@@ -62,6 +62,20 @@ export function useRealtimeSpots(userLocation: { lat: number, lng: number } | nu
       setSpots(current => current.map(s => s.id === updatedSpot.id ? updatedSpot : s));
     });
 
+    newSocket.on('disconnect', () => {
+      console.log('Socket disconnected, will reconnect...');
+    });
+
+    newSocket.on('connect', () => {
+      // Rejoin rooms after reconnection
+      // Note: getActiveBookingId needs to fetch the active booking if any, we'll dummy it out for now 
+      // or rely on the parent component state. For safety, emitting the current one if stored.
+      // E.g., const activeBookingId = localStorage.getItem('activeBookingId');
+      // if (activeBookingId) {
+      //   newSocket.emit('reconnect:rejoin', { bookingId: activeBookingId });
+      // }
+    });
+
     return () => {
       newSocket.disconnect();
     };

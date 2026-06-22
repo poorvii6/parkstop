@@ -66,35 +66,36 @@ class ParkingSpot {
     });
   }
 
-  static async findNearby(lat, lng, radius) {
-    // Prisma doesn't support distance calcs in findMany, use raw query
+  static async findNearby(lat, lng, radius = 5) {
+    // Uses the lat/lng index for bounding box pre-filter, then Haversine for precision
+    const latDelta = radius / 111.0;
+    const lngDelta = radius / (111.0 * Math.cos(lat * Math.PI / 180));
+
     return prisma.$queryRaw`
       SELECT parking_spots.*,
       (
-        6371 *
-        acos(
-          cos(radians(${lat})) *
-          cos(radians(latitude)) *
+        6371 * acos(
+          cos(radians(${lat})) * cos(radians(latitude)) *
           cos(radians(longitude) - radians(${lng})) +
-          sin(radians(${lat})) *
-          sin(radians(latitude))
+          sin(radians(${lat})) * sin(radians(latitude))
         )
       ) AS distance
       FROM parking_spots
       JOIN users u ON parking_spots.spotter_id = u.id
       WHERE is_active = true
-      AND u.balance >= -500
-      AND (
-        6371 *
-        acos(
-          cos(radians(${lat})) *
-          cos(radians(latitude)) *
-          cos(radians(longitude) - radians(${lng})) +
-          sin(radians(${lat})) *
-          sin(radians(latitude))
-        )
-      ) < ${radius}
+        AND is_available = true
+        AND u.balance >= -500
+        AND latitude BETWEEN ${lat - latDelta} AND ${lat + latDelta}
+        AND longitude BETWEEN ${lng - lngDelta} AND ${lng + lngDelta}
+        AND (
+          6371 * acos(
+            cos(radians(${lat})) * cos(radians(latitude)) *
+            cos(radians(longitude) - radians(${lng})) +
+            sin(radians(${lat})) * sin(radians(latitude))
+          )
+        ) < ${radius}
       ORDER BY distance
+      LIMIT 50
     `;
   }
 
