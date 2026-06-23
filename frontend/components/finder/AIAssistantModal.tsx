@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, Modal, ScrollView, TextInput, TouchableOpacity, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, Modal, ScrollView, TextInput, TouchableOpacity, Dimensions, KeyboardAvoidingView, Platform } from 'react-native';
 import { BlueprintTheme, BlueprintColors } from '../../constants/BlueprintTheme';
 
 interface AIAssistantModalProps {
@@ -21,7 +21,10 @@ export const AIAssistantModal: React.FC<AIAssistantModalProps> = ({
 }) => {
   return (
     <Modal visible={visible} transparent animationType="slide">
-      <View style={styles.chatModalBg}>
+      <KeyboardAvoidingView 
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.chatModalBg}
+      >
         <View style={[styles.chatModal, BlueprintTheme.glassCard]}>
           <View style={styles.chatHeader}>
             <Text style={styles.chatTitle}>ParkStop AI</Text>
@@ -50,7 +53,7 @@ export const AIAssistantModal: React.FC<AIAssistantModalProps> = ({
             </TouchableOpacity>
           </View>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 };

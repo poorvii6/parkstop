@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Platform, TouchableOpacity, TextInput, Dimensions, Modal, Alert, ScrollView, Linking, Keyboard, ActivityIndicator, BackHandler, AppState, Image, Animated } from 'react-native';
+import { View, Text, StyleSheet, Platform, TouchableOpacity, TextInput, Dimensions, Modal, Alert, ScrollView, Linking, Keyboard, ActivityIndicator, BackHandler, AppState, Image, Animated, KeyboardAvoidingView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -2504,7 +2504,10 @@ export default function FinderDashboard() {
       </Modal>
 
       <Modal visible={chatOpen} transparent animationType="slide">
-        <View style={styles.chatModalBg}>
+        <KeyboardAvoidingView 
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.chatModalBg}
+        >
           <View style={[styles.chatModal, BlueprintTheme.glassCard]}>
             <View style={styles.chatHeader}>
               <Text style={styles.chatTitle}>ParkStop AI</Text>
@@ -2522,7 +2525,7 @@ export default function FinderDashboard() {
               <TouchableOpacity style={styles.sendBtn} onPress={sendChat}><Text style={{ color: BlueprintColors.primaryAccent, fontWeight: '700' }}>Send</Text></TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal visible={extendModalOpen} transparent animationType="slide">
