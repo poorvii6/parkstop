@@ -2503,11 +2503,16 @@ export default function FinderDashboard() {
         </View>
       </Modal>
 
-      <Modal visible={chatOpen} transparent animationType="slide">
+      <Modal visible={chatOpen} transparent animationType="slide" onRequestClose={() => setChatOpen(false)}>
         <KeyboardAvoidingView 
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.chatModalBg}
         >
+          <TouchableOpacity 
+            style={StyleSheet.absoluteFill} 
+            activeOpacity={1} 
+            onPress={() => setChatOpen(false)} 
+          />
           <View style={[styles.chatModal, BlueprintTheme.glassCard]}>
             <View style={styles.chatHeader}>
               <Text style={styles.chatTitle}>ParkStop AI</Text>

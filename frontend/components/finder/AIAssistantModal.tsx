@@ -20,11 +20,16 @@ export const AIAssistantModal: React.FC<AIAssistantModalProps> = ({
   onSend,
 }) => {
   return (
-    <Modal visible={visible} transparent animationType="slide">
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <KeyboardAvoidingView 
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.chatModalBg}
       >
+        <TouchableOpacity 
+          style={StyleSheet.absoluteFill} 
+          activeOpacity={1} 
+          onPress={onClose} 
+        />
         <View style={[styles.chatModal, BlueprintTheme.glassCard]}>
           <View style={styles.chatHeader}>
             <Text style={styles.chatTitle}>ParkStop AI</Text>
