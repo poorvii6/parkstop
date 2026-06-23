@@ -8,6 +8,8 @@
     "backend": "cd backend && npm start",
     "backend:install": "cd backend && npm install",
     "dev": "npm run frontend & npm run backend",
+    "dev:expo": "npm run backend & cd frontend && npm run dev",
+    "dev:tunnel": "npm run backend & cd frontend && npm run dev -- --tunnel",
     "start": "npm run dev"
   },
   "dependencies": {
