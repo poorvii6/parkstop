@@ -10,7 +10,9 @@
     "start": "npx prisma db push && node src/server.js",
     "dev": "nodemon src/server.js",
     "migrate": "node database/migrations/run.js",
-    "seed": "node database/seeds/run.js"
+    "seed": "node database/seeds/run.js",
+    "test": "jest --testPathPatterns=tests/unit --runInBand --forceExit",
+    "test:e2e": "node tests/e2e/runner.js"
   },
   "keywords": [
     "parking",
@@ -47,6 +49,8 @@
     "winston": "^3.11.0"
   },
   "devDependencies": {
-    "nodemon": "^3.0.2"
+    "jest": "^30.4.2",
+    "nodemon": "^3.0.2",
+    "supertest": "^7.2.2"
   }
 }

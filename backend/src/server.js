@@ -41,14 +41,16 @@ app.use(compression());
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100,                  // 100 requests per window
-  message: { success: false, message: 'Too many requests, please try again later.' }
+  message: { success: false, message: 'Too many requests, please try again later.' },
+  skip: () => process.env.IGNORE_RATE_LIMITS === 'true'
 });
 
 // Strict limiter for auth endpoints
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,                   // 10 login attempts per 15 min
-  message: { success: false, message: 'Too many login attempts, please try again later.' }
+  message: { success: false, message: 'Too many login attempts, please try again later.' },
+  skip: () => process.env.IGNORE_RATE_LIMITS === 'true'
 });
 
 app.use(limiter);

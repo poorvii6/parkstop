@@ -32,7 +32,7 @@ async function main() {
   const serverProcess = spawn('node', ['src/server.js'], {
     cwd: backendDir,
     stdio: 'inherit',
-    env: { ...process.env, PORT }
+    env: { ...process.env, PORT, IGNORE_RATE_LIMITS: 'true' }
   });
 
   serverProcess.on('error', (err) => {
@@ -105,7 +105,7 @@ async function main() {
   // Spawn node test runner
   const testProcess = spawn('node', ['--test', '--test-concurrency=1', ...testFiles], {
     stdio: 'inherit',
-    env: { ...process.env, PORT }
+    env: { ...process.env, PORT, IGNORE_RATE_LIMITS: 'true' }
   });
 
   testProcess.on('close', (code) => {
