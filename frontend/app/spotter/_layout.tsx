@@ -1,9 +1,34 @@
-import React from 'react';
-import { Tabs } from 'expo-router';
+import React, { useEffect, useState } from 'react';
+import { Tabs, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { SC, TF } from '../../constants/SpotterTheme';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { View, ActivityIndicator } from 'react-native';
 
 export default function SpotterTabsLayout() {
+  const router = useRouter();
+  const [checkingAuth, setCheckingAuth] = useState(true);
+
+  useEffect(() => {
+    const checkRole = async () => {
+      const role = await AsyncStorage.getItem('user_role');
+      if (role?.toUpperCase() !== 'SPOTTER') {
+        router.replace('/welcome');
+      } else {
+        setCheckingAuth(false);
+      }
+    };
+    checkRole();
+  }, []);
+
+  if (checkingAuth) {
+    return (
+      <View style={{ flex: 1, backgroundColor: SC.bgApp, justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator color={SC.accent} size="large" />
+      </View>
+    );
+  }
+
   return (
     <Tabs
       screenOptions={{
