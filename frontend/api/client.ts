@@ -9,9 +9,25 @@ let cachedApiUrl: string | null = null;
 const getAPIUrl = async () => {
   if (cachedApiUrl) return cachedApiUrl;
 
-  const apiUrl =
+  let apiUrl =
     process.env.EXPO_PUBLIC_API_URL ||
     'https://parkstop-production.up.railway.app/api/v1';
+
+  // In local development, dynamically rewrite localhost to the Metro host IP 
+  // so physical devices and emulators can reach the backend server
+  if (__DEV__ && Platform.OS !== 'web') {
+    const hostUri = Constants.expoConfig?.hostUri || '';
+    const metroHost = hostUri.split(':')[0];
+    if (metroHost) {
+      if (apiUrl.includes('localhost')) {
+        apiUrl = apiUrl.replace('localhost', metroHost);
+        console.log(`[API] Rewrote localhost to Metro host: ${metroHost}`);
+      } else if (apiUrl.includes('127.0.0.1')) {
+        apiUrl = apiUrl.replace('127.0.0.1', metroHost);
+        console.log(`[API] Rewrote 127.0.0.1 to Metro host: ${metroHost}`);
+      }
+    }
+  }
 
   cachedApiUrl = apiUrl;
 

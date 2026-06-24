@@ -17,7 +17,7 @@ export default function LoginScreen() {
     setLoading(true);
 
     try {
-      console.log(`[AUTH] Attempting login to: ${apiClient.defaults.baseURL}/auth/login`);
+      console.log(`[AUTH] Attempting login for email: ${email}`);
       const response = await apiClient.post('/auth/login', { email, password });
       if (response.data.success) {
         await AsyncStorage.setItem('access_token', response.data.data.access_token);

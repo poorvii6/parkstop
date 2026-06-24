@@ -2141,7 +2141,7 @@ export default function FinderDashboard() {
                           paddingVertical: 18, borderRadius: 20, 
                           alignItems: 'center',
                         }} 
-                        onPress={() => {
+                        onPress={async () => {
                           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
                           const spot = spots.find(s => s.id === selectedSpotId);
                           const currentLoc = simulatedLocation || userLocation;
@@ -2151,6 +2151,23 @@ export default function FinderDashboard() {
                             if (dist > 250) { 
                                Alert.alert("Geofence Warning", "Too far from spot. Return to verify checkout.");
                                return;
+                            }
+                          }
+
+                          // Fetch current checkout amount breakdown
+                          if (bookingDetails?.id) {
+                            try {
+                              const res = await apiClient.get(`/bookings/${bookingDetails.id}/checkout-amount`);
+                              if (res.data?.success) {
+                                setBookingDetails(prev => prev ? {
+                                  ...prev,
+                                  basePrice: res.data.data.base_price,
+                                  arrears: res.data.data.arrears,
+                                  finalAmount: res.data.data.total_amount
+                                } : prev);
+                              }
+                            } catch (e) {
+                              console.log('Error fetching checkout amount', e);
                             }
                           }
                           setStep('checkout_verification');
@@ -2163,11 +2180,36 @@ export default function FinderDashboard() {
                 )}
 
                 {step === 'checkout_verification' && (
-                  <View style={{ alignItems: 'center', paddingVertical: 10 }}>
-                    <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', marginBottom: 4, letterSpacing: -0.5 }}>Check-Out</Text>
-                    <Text style={{ color: '#94a3b8', fontSize: 14, marginBottom: 20, fontWeight: '500', textAlign: 'center', lineHeight: 22 }}>
-                      In the checkout, please approach the spotter to generate your exit QR code. Thank you.
+                  <View style={{ paddingVertical: 10 }}>
+                    <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', marginBottom: 4, letterSpacing: -0.5, textAlign: 'center' }}>Check-Out</Text>
+                    <Text style={{ color: '#94a3b8', fontSize: 13, marginBottom: 16, fontWeight: '500', textAlign: 'center', lineHeight: 18 }}>
+                      Approach the spotter and present this Exit OTP code to verify checkout.
                     </Text>
+                    
+                    <View style={{ backgroundColor: 'rgba(255,255,255,0.03)', padding: 18, borderRadius: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', marginBottom: 20 }}>
+                      <View style={{ gap: 12 }}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Base Price</Text>
+                          <Text style={{ color: '#6366f1', fontSize: 18, fontWeight: '900' }}>₹{Number(bookingDetails?.basePrice || bookingDetails?.totalPrice || 0).toFixed(2)}</Text>
+                        </View>
+                        {bookingDetails?.arrears > 0 && (
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+                            <Text style={{ color: '#f43f5e', fontSize: 14, fontWeight: '800' }}>Previous Arrears</Text>
+                            <Text style={{ color: '#f43f5e', fontSize: 16, fontWeight: '900' }}>₹{Number(bookingDetails?.arrears || 0).toFixed(2)}</Text>
+                          </View>
+                        )}
+                        <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.05)', marginVertical: 8 }} />
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <Text style={{ color: '#fff', fontSize: 20, fontWeight: '900' }}>Total Due</Text>
+                          <Text style={{ color: '#6366f1', fontSize: 28, fontWeight: '900' }}>₹{Number(bookingDetails?.finalAmount || bookingDetails?.totalPrice || 0).toFixed(2)}</Text>
+                        </View>
+                      </View>
+                    </View>
+
+                    <View style={{ alignItems: 'center', backgroundColor: 'rgba(99,102,241,0.08)', padding: 20, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(99,102,241,0.2)' }}>
+                      <Text style={{ color: '#818cf8', fontWeight: '800', fontSize: 12, marginBottom: 6, letterSpacing: 1.5 }}>EXIT OTP CODE</Text>
+                      <Text style={{ color: '#fff', fontWeight: '900', fontSize: 36, letterSpacing: 6 }}>{bookingDetails?.checkoutOtp || bookingDetails?.checkout_otp || '000000'}</Text>
+                    </View>
                   </View>
                 )}
 

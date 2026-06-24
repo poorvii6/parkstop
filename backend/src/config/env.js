@@ -68,13 +68,37 @@ const config = {
 };
 
 // Validate critical configuration
-if (config.env === 'production') {
-  if (config.jwt.secret === 'default-secret-change-this') {
-    throw new Error('JWT_SECRET must be set in production');
+function validateEnv() {
+  const requiredEnvVars = [
+    'DATABASE_URL',
+    'JWT_SECRET',
+    'RAZORPAY_KEY_ID',
+    'RAZORPAY_KEY_SECRET'
+  ];
+
+  const missing = [];
+
+  for (const envVar of requiredEnvVars) {
+    if (!process.env[envVar]) {
+      missing.push(envVar);
+    }
   }
-  if (!config.database.password || config.database.password === 'password') {
-    throw new Error('Database password must be set in production');
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing environment variables: ${missing.join(', ')}\n` +
+      `Copy .env.example to .env and fill in the values`
+    );
   }
+
+  // Validate JWT secret length
+  if (process.env.JWT_SECRET.length < 32) {
+    throw new Error('JWT_SECRET must be at least 32 characters long');
+  }
+
+  console.log('✅ Environment variables validated');
 }
+
+validateEnv();
 
 module.exports = config;

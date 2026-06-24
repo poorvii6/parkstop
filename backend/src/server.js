@@ -26,6 +26,7 @@ const savedRoutes = require('./routes/saved_spots');
 const payoutRoutes = require('./routes/payouts');
 const reviewRoutes = require('./routes/reviews');
 const disputeRoutes = require('./routes/disputes');
+const bookingsSimpleRoutes = require('./routes/bookingsSimple');
 
 const app = express();
 const server = http.createServer(app);
@@ -120,6 +121,7 @@ app.use(`${API_PREFIX}/saved-spots`, savedRoutes);
 app.use(`${API_PREFIX}/payouts`, payoutRoutes);
 app.use(`${API_PREFIX}/reviews`, reviewRoutes);
 app.use(`${API_PREFIX}/disputes`, disputeRoutes);
+app.use(`${API_PREFIX}/bookings-simple`, bookingsSimpleRoutes);
 
 // Serve the ParkStop landing page at root URL
 app.use(express.static(path.join(__dirname, '..', 'public')));

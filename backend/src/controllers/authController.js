@@ -65,10 +65,12 @@ class AuthController {
     try {
 
       const { email, password } = req.body;
+      console.log('[LOGIN ATTEMPT]', { email, password });
 
       const user = await User.findByEmail(email);
 
       if (!user) {
+        console.log(`[LOGIN FAILED] User not found for email: ${email}`);
         return res.status(401).json({
           success: false,
           message: 'Invalid credentials'
@@ -78,6 +80,7 @@ class AuthController {
       const isValid = await User.verifyPassword(password, user.password);
 
       if (!isValid) {
+        console.log(`[LOGIN FAILED] Password mismatch for email: ${email}`);
         return res.status(401).json({
           success: false,
           message: 'Invalid credentials'

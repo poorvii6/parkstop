@@ -27,6 +27,46 @@ export default function VerifyScreen() {
     checkPayoutStatus();
   }, []);
 
+  // Poll for payment status in real-time when checkout QR is open
+  useEffect(() => {
+    let interval: any;
+    if (checkoutData && checkoutData.booking_id) {
+      interval = setInterval(async () => {
+        try {
+          const res = await apiClient.get('/bookings/spotter-bookings');
+          if (res.data?.success) {
+            const bookings = res.data.data;
+            const current = bookings.find((b: any) => b.id === checkoutData.booking_id);
+            if (current) {
+              if (current.payment_status === 'paid') {
+                clearInterval(interval);
+                Alert.alert(
+                  '✅ Payment Received!',
+                  'The Finder has completed the online payment successfully.',
+                  [
+                    {
+                      text: 'OK',
+                      onPress: () => {
+                        setCheckoutData(null);
+                        setBookingId('');
+                        fetchActiveBookings();
+                      }
+                    }
+                  ]
+                );
+              }
+            }
+          }
+        } catch (err) {
+          console.log('Error polling payment status:', err);
+        }
+      }, 3000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [checkoutData]);
+
   const checkPayoutStatus = async () => {
     try {
       const res = await apiClient.get('/payouts/account-status');
@@ -137,13 +177,25 @@ export default function VerifyScreen() {
     }
   };
 
-  const quickVerify = (booking: any) => {
+  const quickVerify = async (booking: any) => {
     setBookingId(booking.id.toString());
     setOtp('');
     if (booking.status === 'reserved') {
       setMode('checkin');
+      setCheckoutData(null);
     } else if (booking.status === 'active') {
       setMode('checkout');
+      setLoading(true);
+      try {
+        const res = await apiClient.get(`/bookings/${booking.id}/checkout-amount`);
+        if (res.data?.success) {
+          setCheckoutData(res.data.data);
+        }
+      } catch (e: any) {
+        Alert.alert('Failed to generate QR', e.response?.data?.message || 'Could not fetch amount');
+      } finally {
+        setLoading(false);
+      }
     }
   };
 

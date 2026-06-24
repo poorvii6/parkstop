@@ -5,7 +5,7 @@ const logger = require('../utils/logger');
 /**
  * 🔒 Authenticate user (JWT)
  */
-const authenticate = (req, res, next) => {
+const authenticate = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
 
@@ -25,6 +25,29 @@ const authenticate = (req, res, next) => {
       role: decoded.role,
       full_name: decoded.name
     };
+
+    // Prevent stale JWT / Role Mismatch (e.g. from database re-seeds or role switching mismatches):
+    // Dynamically retrieve the latest user details from the database.
+    const prisma = require('../config/prisma');
+    try {
+      const user = await prisma.users.findUnique({
+        where: { id: parseInt(decoded.id) },
+        select: { role: true, email: true, full_name: true }
+      });
+      if (user) {
+        req.user.role = user.role;
+        if (user.email) req.user.email = user.email;
+        if (user.full_name) req.user.full_name = user.full_name;
+      } else {
+        // User not found in database (e.g. database was reset / re-seeded)
+        return res.status(401).json({
+          success: false,
+          message: 'User account not found. Please log in again.',
+        });
+      }
+    } catch (dbErr) {
+      logger.error('Error fetching user in authenticate middleware:', dbErr);
+    }
 
     next();
 
@@ -81,7 +104,7 @@ const authorize = (...allowedRoles) => {
 /**
  * Optional auth
  */
-const optionalAuth = (req, res, next) => {
+const optionalAuth = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
 
@@ -95,6 +118,21 @@ const optionalAuth = (req, res, next) => {
         role: decoded.role,
         full_name: decoded.name
       };
+
+      const prisma = require('../config/prisma');
+      try {
+        const user = await prisma.users.findUnique({
+          where: { id: parseInt(decoded.id) },
+          select: { role: true, email: true, full_name: true }
+        });
+        if (user) {
+          req.user.role = user.role;
+          if (user.email) req.user.email = user.email;
+          if (user.full_name) req.user.full_name = user.full_name;
+        }
+      } catch (dbErr) {
+        logger.debug('Optional auth DB fetch failed:', dbErr.message);
+      }
     }
   } catch (error) {
     logger.debug('Optional auth failed:', error.message);

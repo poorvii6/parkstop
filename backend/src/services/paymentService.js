@@ -45,13 +45,57 @@ class PaymentService {
    */
   static async verifyRazorpayPayment(orderId, paymentId, signature, bookingId) {
     try {
-      const isValid = (signature === 'mock_upi_intent' && process.env.NODE_ENV !== 'production') ? true : razorpayAdapter.verifyPaymentSignature(orderId, paymentId, signature);
+      // 1. Fetch booking to check status and calculate expected price
+      const booking = await prisma.bookings.findUnique({
+        where: { id: parseInt(bookingId) },
+        include: { users: true }
+      });
+
+      if (!booking) {
+        throw new Error('Booking not found');
+      }
+
+      if (booking.payment_status === 'paid') {
+        logger.info(`Payment verification for booking ${bookingId} was already processed (already paid)`);
+        return { success: true, paymentId: booking.payment_id };
+      }
+
+      // 2. Verify signature
+      const isValid = (signature === 'mock_upi_intent' && process.env.NODE_ENV !== 'production') 
+        ? true 
+        : razorpayAdapter.verifyPaymentSignature(orderId, paymentId, signature);
       
       if (!isValid) {
         throw new Error('Payment signature verification failed.');
       }
 
-      // Mark the booking as paid
+      // 3. Fetch payment details from Razorpay (bypass with mock details during local non-prod testing)
+      let paymentDetails;
+      const user = booking.users;
+      const arrears = (user && user.balance < 0) ? Math.abs(Number(user.balance)) : 0;
+      const expectedAmountPaise = Math.round((Number(booking.total_price) + arrears) * 100);
+
+      if (signature === 'mock_upi_intent' && process.env.NODE_ENV !== 'production') {
+        paymentDetails = {
+          status: 'captured',
+          amount: expectedAmountPaise
+        };
+      } else {
+        paymentDetails = await razorpayAdapter.fetchPayment(paymentId);
+      }
+
+      // 4. Verify payment status is captured
+      if (paymentDetails.status !== 'captured') {
+        throw new Error(`Payment not captured. Status: ${paymentDetails.status}`);
+      }
+
+      // 5. Verify actual amount matches the expected amount
+      const actualAmountPaise = Number(paymentDetails.amount);
+      if (actualAmountPaise !== expectedAmountPaise) {
+        throw new Error(`Amount mismatch: expected ${expectedAmountPaise} paise, got ${actualAmountPaise} paise`);
+      }
+
+      // 6. Mark the booking as paid
       const updatedBooking = await prisma.bookings.update({
         where: { id: parseInt(bookingId) },
         data: {

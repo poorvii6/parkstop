@@ -1,5 +1,28 @@
 node_modules
 # Keep environment variables out of version control
 .env
+.env.local
+.env.*.local
+.env.production
 
+# Secrets
+secrets/
+*.key
+*.pem
+*.p12
+config/secrets.json
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Tests
+coverage/
+.nyc_output/
+
+# Build artifacts
+dist/
+build/
 /src/generated/prisma
+

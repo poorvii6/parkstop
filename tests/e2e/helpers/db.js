@@ -18,7 +18,7 @@ async function resetDB() {
   // Clean up any dynamically created users by tests
   await prisma.users.deleteMany({
     where: {
-      email: { notIn: ['spotter@example.com', 'finder@example.com'] }
+      email: { notIn: ['spotter@example.com', 'finder@example.com', 'spotter@parkstop.com', 'finder@parkstop.com', 'finder@test.com', 'spotter@test.com'] }
     }
   });
 }
@@ -29,7 +29,7 @@ async function seedDB() {
   // 1. Upsert Spotter User
   const spotter = await prisma.users.upsert({
     where: { email: 'spotter@example.com' },
-    update: { balance: 1000.00 },
+    update: { balance: 1000.00, role: 'spotter' },
     create: {
       email: 'spotter@example.com',
       password: hashedPassword,
@@ -45,7 +45,7 @@ async function seedDB() {
   // 2. Upsert Finder User
   const finder = await prisma.users.upsert({
     where: { email: 'finder@example.com' },
-    update: { balance: 0.00 },
+    update: { balance: 0.00, role: 'finder' },
     create: {
       email: 'finder@example.com',
       password: hashedPassword,
@@ -53,6 +53,61 @@ async function seedDB() {
       full_name: 'Jane Finder',
       role: 'finder',
       balance: 0.00
+    }
+  });
+
+  // 2b. Upsert extra debug users
+  await prisma.users.upsert({
+    where: { email: 'spotter@parkstop.com' },
+    update: { balance: 1000.00, role: 'spotter' },
+    create: {
+      email: 'spotter@parkstop.com',
+      password: hashedPassword,
+      name: 'Master Spotter',
+      full_name: 'Master Spotter',
+      role: 'spotter',
+      balance: 1000.00,
+      upi_id: 'spotter@upi',
+      payout_mode: 'upi'
+    }
+  });
+
+  await prisma.users.upsert({
+    where: { email: 'finder@parkstop.com' },
+    update: { balance: 100.00, role: 'finder' },
+    create: {
+      email: 'finder@parkstop.com',
+      password: hashedPassword,
+      name: 'Master Finder',
+      full_name: 'Master Finder',
+      role: 'finder',
+      balance: 100.00
+    }
+  });
+
+  await prisma.users.upsert({
+    where: { email: 'finder@test.com' },
+    update: { role: 'finder' },
+    create: {
+      email: 'finder@test.com',
+      password: hashedPassword,
+      name: 'Test Finder',
+      full_name: 'Test Finder',
+      role: 'finder',
+      balance: 0.00
+    }
+  });
+
+  await prisma.users.upsert({
+    where: { email: 'spotter@test.com' },
+    update: { role: 'spotter' },
+    create: {
+      email: 'spotter@test.com',
+      password: hashedPassword,
+      name: 'Test Spotter',
+      full_name: 'Test Spotter',
+      role: 'spotter',
+      balance: 1000.00
     }
   });
 

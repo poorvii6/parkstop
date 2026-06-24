@@ -10,6 +10,12 @@ class Booking {
   static async create({ user_id, spot_id, start_time, end_time, vehicle_type = 'car', vehicle_subtype = null, slot_name = null, payment_mode = 'online' }) {
     return prisma.$transaction(async (tx) => {
       // 1. Get spot with lock
+      await tx.$executeRaw`
+        SELECT id FROM "parking_spots"
+        WHERE id = ${parseInt(spot_id)}
+        FOR UPDATE
+      `;
+
       const spot = await tx.parking_spots.findUnique({
         where: { id: parseInt(spot_id) }
       });
@@ -112,13 +118,32 @@ class Booking {
 
       if (!booking) throw new Error('Booking not found');
       if (booking.status !== 'reserved') throw new Error('Booking is not reserved');
-      if (booking.otp_code !== otp) throw new Error('Invalid OTP');
+
+      const attempts = booking.otp_attempts || 0;
+      if (attempts >= 3) {
+        throw new Error('Too many failed OTP attempts. Booking locked.');
+      }
+
       if (new Date() > new Date(booking.otp_expires_at)) throw new Error('OTP expired');
+
+      const crypto = require('crypto');
+      const hashA = crypto.createHash('sha256').update(booking.otp_code || '').digest();
+      const hashB = crypto.createHash('sha256').update(otp || '').digest();
+      const isValid = crypto.timingSafeEqual(hashA, hashB);
+
+      if (!isValid) {
+        await tx.bookings.update({
+          where: { id: parseInt(bookingId) },
+          data: { otp_attempts: attempts + 1 }
+        });
+        throw new Error('Invalid OTP');
+      }
 
       return tx.bookings.update({
         where: { id: parseInt(bookingId) },
         data: {
           status: 'active',
+          otp_attempts: 0,
           updated_at: new Date()
         }
       });
@@ -126,13 +151,37 @@ class Booking {
   }
 
   static async verifyCheckoutOTP(bookingId, otp) {
-    const booking = await prisma.bookings.findUnique({
-      where: { id: parseInt(bookingId) }
-    });
+    await prisma.$transaction(async (tx) => {
+      const booking = await tx.bookings.findUnique({
+        where: { id: parseInt(bookingId) }
+      });
 
-    if (!booking) throw new Error('Booking not found');
-    if (booking.status !== 'active') throw new Error('Booking is not active');
-    if (booking.checkout_otp !== otp) throw new Error('Invalid Checkout OTP');
+      if (!booking) throw new Error('Booking not found');
+      if (booking.status !== 'active') throw new Error('Booking is not active');
+
+      const attempts = booking.otp_attempts || 0;
+      if (attempts >= 3) {
+        throw new Error('Too many failed OTP attempts. Booking locked.');
+      }
+
+      const crypto = require('crypto');
+      const hashA = crypto.createHash('sha256').update(booking.checkout_otp || '').digest();
+      const hashB = crypto.createHash('sha256').update(otp || '').digest();
+      const isValid = crypto.timingSafeEqual(hashA, hashB);
+
+      if (!isValid) {
+        await tx.bookings.update({
+          where: { id: parseInt(bookingId) },
+          data: { otp_attempts: attempts + 1 }
+        });
+        throw new Error('Invalid Checkout OTP');
+      }
+
+      await tx.bookings.update({
+        where: { id: parseInt(bookingId) },
+        data: { otp_attempts: 0 }
+      });
+    });
 
     return this.complete(bookingId);
   }
@@ -150,7 +199,15 @@ class Booking {
 
       if (!booking) throw new Error('Booking not found');
       if (booking.status !== 'active') throw new Error('Booking not active');
-      if (checkoutOtp && booking.checkout_otp !== checkoutOtp) throw new Error('Invalid Check-Out OTP');
+
+      if (checkoutOtp) {
+        const crypto = require('crypto');
+        const hashA = crypto.createHash('sha256').update(booking.checkout_otp || '').digest();
+        const hashB = crypto.createHash('sha256').update(checkoutOtp || '').digest();
+        if (!crypto.timingSafeEqual(hashA, hashB)) {
+          throw new Error('Invalid Check-Out OTP');
+        }
+      }
 
       const endTime = new Date();
       const startTime = new Date(booking.start_time);

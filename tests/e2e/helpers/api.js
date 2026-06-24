@@ -1,5 +1,5 @@
 class ApiClient {
-  constructor(baseUrl = 'http://localhost:3000/api/v1') {
+  constructor(baseUrl = `http://localhost:${process.env.PORT || '3000'}/api/v1`) {
     this.baseUrl = baseUrl;
     this.token = null;
   }

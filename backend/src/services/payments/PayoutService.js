@@ -283,14 +283,53 @@ class PayoutService {
       const user = await prisma.users.findUnique({ where: { id: userId } });
       if (!user) throw new Error('User not found');
 
-      // Step 1: Create or reuse contact
       let contactId = user.razorpay_contact_id;
-      if (!contactId) {
-        contactId = await this.createContact(user);
-      }
+      let fundAccountId = null;
 
-      // Step 2: Create fund account
-      const fundAccountId = await this.createFundAccount(contactId, accountDetails, userId);
+      try {
+        if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_ACCOUNT_NUMBER) {
+          // Step 1: Create or reuse contact
+          if (!contactId) {
+            contactId = await this.createContact(user);
+          }
+          // Step 2: Create fund account
+          fundAccountId = await this.createFundAccount(contactId, accountDetails, userId);
+        } else {
+          logger.info(`RazorpayX not fully configured (RAZORPAY_ACCOUNT_NUMBER empty) — saving payout details locally for user ${userId}`);
+          const updateData = {
+            payout_mode: accountDetails.type
+          };
+          if (accountDetails.type === 'upi') {
+            updateData.upi_id = accountDetails.upi_id;
+          } else {
+            updateData.bank_account_number = accountDetails.account_number;
+            updateData.bank_ifsc = accountDetails.ifsc;
+            updateData.bank_account_name = accountDetails.name;
+          }
+          await prisma.users.update({
+            where: { id: userId },
+            data: updateData
+          });
+        }
+      } catch (razorpayError) {
+        logger.warn(`RazorpayX payout setup failed: ${razorpayError.message}. Falling back to local database storage.`);
+        
+        // Fallback: save details in local database so user can still see them and receive local balance payouts
+        const updateData = {
+          payout_mode: accountDetails.type
+        };
+        if (accountDetails.type === 'upi') {
+          updateData.upi_id = accountDetails.upi_id;
+        } else {
+          updateData.bank_account_number = accountDetails.account_number;
+          updateData.bank_ifsc = accountDetails.ifsc;
+          updateData.bank_account_name = accountDetails.name;
+        }
+        await prisma.users.update({
+          where: { id: userId },
+          data: updateData
+        });
+      }
 
       return { contactId, fundAccountId };
     } catch (error) {

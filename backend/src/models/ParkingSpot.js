@@ -21,6 +21,9 @@ class ParkingSpot {
         images = []
       } = data;
 
+      const { normalizeLocationType } = require('../constants/spotTypes');
+      const normalizedLocation = normalizeLocationType(location_type);
+
       const spot = await prisma.parking_spots.create({
         data: {
           spotter_id: parseInt(spotter_id),
@@ -30,7 +33,7 @@ class ParkingSpot {
           latitude: parseFloat(latitude),
           longitude: parseFloat(longitude),
           address,
-          location_type,
+          location_type: normalizedLocation,
           amenities: Array.isArray(amenities) ? amenities : [],
           total_slots: parseInt(total_slots),
           available_slots: parseInt(total_slots),
@@ -160,6 +163,9 @@ class ParkingSpot {
       images
     } = updates;
 
+    const { normalizeLocationType } = require('../constants/spotTypes');
+    const normalizedLocation = location_type ? normalizeLocationType(location_type) : undefined;
+
     return prisma.parking_spots.update({
       where: { id: parseInt(spotId) },
       data: {
@@ -167,7 +173,7 @@ class ParkingSpot {
         description,
         price_per_hour: price_per_hour ? parseFloat(price_per_hour) : undefined,
         address,
-        location_type,
+        location_type: normalizedLocation,
         amenities: Array.isArray(amenities) ? amenities : undefined,
         car_slots: car_slots !== undefined ? parseInt(car_slots) : undefined,
         bike_slots: bike_slots !== undefined ? parseInt(bike_slots) : undefined,
