@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Dimensions, ActivityIndicator, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons, FontAwesome5, MaterialCommunityIcons } from '@expo/vector-icons';
 import apiClient from '../../api/client';
 import { SC, TF, SP, RAD, SS } from '../../constants/SpotterTheme';
@@ -195,14 +195,16 @@ export default function SpotterDashboard() {
     }
   }, []);
 
-  useEffect(() => {
-    fetchDashboardData();
-    registerForPushNotificationsAsync();
-    // Check payout account status
-    apiClient.get('/payouts/account-status')
-      .then(res => { if (res.data?.success) setPayoutSetup(res.data.data.is_setup); })
-      .catch(() => setPayoutSetup(false));
-  }, [fetchDashboardData]);
+  useFocusEffect(
+    useCallback(() => {
+      fetchDashboardData();
+      registerForPushNotificationsAsync();
+      // Check payout account status
+      apiClient.get('/payouts/account-status')
+        .then(res => { if (res.data?.success) setPayoutSetup(res.data.data.is_setup); })
+        .catch(() => setPayoutSetup(false));
+    }, [fetchDashboardData])
+  );
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -284,7 +286,7 @@ export default function SpotterDashboard() {
 
         {/* ACTION REQUIRED PILLS */}
         <View style={{ marginBottom: SP.xl, gap: 8 }}>
-          {dashboardData.balance < 0 && (
+          {dashboardData.balance < 0 ? (
             <TouchableOpacity 
               style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(239,68,68,0.15)', padding: 12, borderRadius: RAD.md, borderWidth: 1, borderColor: 'rgba(239,68,68,0.3)' }}
               onPress={handleClearDues}
@@ -297,6 +299,15 @@ export default function SpotterDashboard() {
               </View>
               {isClearingDues ? <ActivityIndicator color="#ef4444" /> : <Text style={{ color: '#ef4444', fontWeight: 'bold' }}>PAY</Text>}
             </TouchableOpacity>
+          ) : (
+            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(16,185,129,0.15)', padding: 12, borderRadius: RAD.md, borderWidth: 1, borderColor: 'rgba(16,185,129,0.3)' }}>
+              <Ionicons name="checkmark-circle" size={20} color="#10b981" style={{ marginRight: 8 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: '#10b981', fontWeight: '800', fontSize: 14 }}>No Pending Dues</Text>
+                <Text style={{ color: '#34d399', fontSize: 12 }}>All platform fees settled.</Text>
+              </View>
+              <Text style={{ color: '#10b981', fontWeight: 'bold' }}>₹0.00</Text>
+            </View>
           )}
 
           {payoutSetup === false && (
