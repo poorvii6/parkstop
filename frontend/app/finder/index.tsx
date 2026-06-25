@@ -1439,6 +1439,74 @@ export default function FinderDashboard() {
             )}
           </View>
 
+          {/* Floating Buttons: Vehicle Type and Log Out */}
+          <TouchableOpacity 
+            onPress={() => { 
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              setStep('vehicle_select'); 
+            }}
+            style={{ 
+              position: 'absolute',
+              top: Platform.OS === 'ios' ? 84 : 76,
+              left: 16,
+              zIndex: 100,
+              flexDirection: 'row', 
+              alignItems: 'center', 
+              backgroundColor: 'rgba(30,41,59,0.9)', 
+              paddingHorizontal: 12, 
+              paddingVertical: 8, 
+              borderRadius: 14, 
+              borderWidth: 1, 
+              borderColor: 'rgba(255,255,255,0.1)',
+              shadowColor: '#000',
+              shadowOpacity: 0.3,
+              shadowRadius: 5,
+              elevation: 5
+            }}
+          >
+            <Text style={{ fontSize: 13, marginRight: 6 }}>{vehicleType === 'bike' ? '🏍️' : '🚗'}</Text>
+            <Text style={{ color: '#fff', fontSize: 11, fontWeight: '800' }}>{vehicleSubType || vehicleType}</Text>
+            <Text style={{ color: '#6366f1', fontSize: 10, fontWeight: '800', marginLeft: 6 }}>Change</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            onPress={async () => {
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+              Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
+                { text: 'Cancel', style: 'cancel' },
+                { 
+                  text: 'Sign Out', 
+                  style: 'destructive',
+                  onPress: async () => {
+                    try { await apiClient.post('/auth/logout'); } catch(e) {}
+                    await AsyncStorage.removeItem('access_token');
+                    await AsyncStorage.setItem('user_role', '');
+                    router.replace('/login');
+                  }
+                }
+              ]);
+            }}
+            style={{ 
+              position: 'absolute',
+              top: Platform.OS === 'ios' ? 84 : 76,
+              right: 16,
+              zIndex: 100,
+              backgroundColor: 'rgba(30,41,59,0.9)', 
+              padding: 10,
+              borderRadius: 14, 
+              borderWidth: 1, 
+              borderColor: 'rgba(255,255,255,0.1)',
+              alignItems: 'center',
+              justifyContent: 'center',
+              shadowColor: '#000',
+              shadowOpacity: 0.3,
+              shadowRadius: 5,
+              elevation: 5
+            }}
+          >
+            <Ionicons name="log-out-outline" size={16} color="#f43f5e" />
+          </TouchableOpacity>
+
 
 
 
