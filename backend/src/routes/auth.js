@@ -53,6 +53,9 @@ router.post(
   AuthController.socialLogin
 );
 
+router.get('/social/mock-login', AuthController.renderMockOAuth);
+router.post('/social/mock-login', AuthController.handleMockOAuthSubmit);
+
 /**
  * REFRESH TOKEN
  */
