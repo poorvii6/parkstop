@@ -1440,13 +1440,7 @@ export default function FinderDashboard() {
 
 
 
-          {/* Saved Spots Shortcut */}
-          <TouchableOpacity 
-            style={{ position: 'absolute', top: Platform.OS === 'ios' ? 78 : 70, right: 16, zIndex: 100, backgroundColor: 'rgba(30,41,59,0.9)', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' }}
-            onPress={() => router.push('/modal')}
-          >
-            <Ionicons name="bookmark" size={16} color="#6366f1" />
-          </TouchableOpacity>
+
 
           {/* Nearby Spots Bottom Sheet */}
           <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, maxHeight: '45%', backgroundColor: '#0f172a', borderTopLeftRadius: 28, borderTopRightRadius: 28, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 20, elevation: 20, zIndex: 50 }}>
@@ -1704,20 +1698,6 @@ export default function FinderDashboard() {
                 <Text style={{ color: '#94a3b8', fontSize: 13, marginTop: 4, fontWeight: '500' }}>Safe & monitored area</Text>
               </View>
               <View style={{ flexDirection: 'row', gap: 8 }}>
-                <TouchableOpacity 
-                  onPress={async () => {
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    try {
-                      const res = await apiClient.post(`/saved-spots/${selectedSpotId}/toggle`);
-                      Alert.alert('Saved Spots', res.data.message);
-                    } catch(e) {
-                      Alert.alert('Error', 'Failed to save spot');
-                    }
-                  }} 
-                  style={{ backgroundColor: 'rgba(255,255,255,0.06)', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }}
-                >
-                  <Ionicons name="bookmark" size={16} color="#6366f1" />
-                </TouchableOpacity>
                 <TouchableOpacity 
                   onPress={() => { setStep('home'); setSelectedSpotId(null); setSlotData([]); setSelectedSlot(''); }} 
                   style={{ backgroundColor: 'rgba(255,255,255,0.06)', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }}
