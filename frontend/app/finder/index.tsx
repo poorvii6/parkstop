@@ -1408,11 +1408,34 @@ export default function FinderDashboard() {
                 returnKeyType="search"
               />
               {searchQuery.length > 0 && (
-                <TouchableOpacity onPress={() => { setSearchQuery(''); setSuggestions([]); }} style={{ padding: 6 }}>
+                <TouchableOpacity onPress={() => { setSearchQuery(''); setSuggestions([]); }} style={{ padding: 6, marginRight: 6 }}>
                   <Text style={{ color: '#94a3b8', fontSize: 16 }}>✕</Text>
                 </TouchableOpacity>
               )}
-              {isSearching && <ActivityIndicator size="small" color="#6366f1" style={{ marginLeft: 8 }} />}
+              {isSearching && <ActivityIndicator size="small" color="#6366f1" style={{ marginRight: 10 }} />}
+              
+              {/* Subtle Sign Out Button in Search Bar */}
+              <TouchableOpacity 
+                onPress={async () => {
+                  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                  Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
+                    { text: 'Cancel', style: 'cancel' },
+                    { 
+                      text: 'Sign Out', 
+                      style: 'destructive',
+                      onPress: async () => {
+                        try { await apiClient.post('/auth/logout'); } catch(e) {}
+                        await AsyncStorage.removeItem('access_token');
+                        await AsyncStorage.setItem('user_role', '');
+                        router.replace('/login');
+                      }
+                    }
+                  ]);
+                }}
+                style={{ padding: 6, borderLeftWidth: 1, borderLeftColor: 'rgba(255,255,255,0.1)', paddingLeft: 12, marginLeft: 6 }}
+              >
+                <Ionicons name="log-out-outline" size={20} color="#94a3b8" />
+              </TouchableOpacity>
             </View>
 
             {/* Search Suggestions */}
@@ -1439,83 +1462,23 @@ export default function FinderDashboard() {
             )}
           </View>
 
-          {/* Floating Buttons: Vehicle Type and Log Out */}
-          <TouchableOpacity 
-            onPress={() => { 
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              setStep('vehicle_select'); 
-            }}
-            style={{ 
-              position: 'absolute',
-              top: Platform.OS === 'ios' ? 84 : 76,
-              left: 16,
-              zIndex: 100,
-              flexDirection: 'row', 
-              alignItems: 'center', 
-              backgroundColor: 'rgba(30,41,59,0.9)', 
-              paddingHorizontal: 12, 
-              paddingVertical: 8, 
-              borderRadius: 14, 
-              borderWidth: 1, 
-              borderColor: 'rgba(255,255,255,0.1)',
-              shadowColor: '#000',
-              shadowOpacity: 0.3,
-              shadowRadius: 5,
-              elevation: 5
-            }}
-          >
-            <Text style={{ fontSize: 13, marginRight: 6 }}>{vehicleType === 'bike' ? '🏍️' : '🚗'}</Text>
-            <Text style={{ color: '#fff', fontSize: 11, fontWeight: '800' }}>{vehicleSubType || vehicleType}</Text>
-            <Text style={{ color: '#6366f1', fontSize: 10, fontWeight: '800', marginLeft: 6 }}>Change</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity 
-            onPress={async () => {
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-              Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
-                { text: 'Cancel', style: 'cancel' },
-                { 
-                  text: 'Sign Out', 
-                  style: 'destructive',
-                  onPress: async () => {
-                    try { await apiClient.post('/auth/logout'); } catch(e) {}
-                    await AsyncStorage.removeItem('access_token');
-                    await AsyncStorage.setItem('user_role', '');
-                    router.replace('/login');
-                  }
-                }
-              ]);
-            }}
-            style={{ 
-              position: 'absolute',
-              top: Platform.OS === 'ios' ? 84 : 76,
-              right: 16,
-              zIndex: 100,
-              backgroundColor: 'rgba(30,41,59,0.9)', 
-              padding: 10,
-              borderRadius: 14, 
-              borderWidth: 1, 
-              borderColor: 'rgba(255,255,255,0.1)',
-              alignItems: 'center',
-              justifyContent: 'center',
-              shadowColor: '#000',
-              shadowOpacity: 0.3,
-              shadowRadius: 5,
-              elevation: 5
-            }}
-          >
-            <Ionicons name="log-out-outline" size={16} color="#f43f5e" />
-          </TouchableOpacity>
-
-
-
-
-
           {/* Nearby Spots Bottom Sheet */}
           <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, maxHeight: '45%', backgroundColor: '#0f172a', borderTopLeftRadius: 28, borderTopRightRadius: 28, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 20, elevation: 20, zIndex: 50 }}>
             <View style={{ width: 40, height: 4, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 2, alignSelf: 'center', marginTop: 12, marginBottom: 8 }} />
-            <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, marginBottom: 12 }}>
-              <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900', flex: 1 }}>Nearby Spots</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, marginBottom: 12, justifyContent: 'space-between' }}>
+              <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900' }}>Nearby Spots</Text>
+                <TouchableOpacity 
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setStep('vehicle_select');
+                  }}
+                  style={{ backgroundColor: 'rgba(255,255,255,0.06)', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 10, flexDirection: 'row', alignItems: 'center', gap: 4 }}
+                >
+                  <Text style={{ fontSize: 11 }}>{vehicleType === 'bike' ? '🏍️' : '🚗'}</Text>
+                  <Text style={{ color: '#94a3b8', fontSize: 10, fontWeight: '800' }}>Change</Text>
+                </TouchableOpacity>
+              </View>
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#10b981', marginRight: 6 }} />
                 <Text style={{ color: '#94a3b8', fontSize: 11, fontWeight: '700' }}>{spots.filter(s => s.available).length} available</Text>
