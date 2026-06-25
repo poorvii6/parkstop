@@ -1346,38 +1346,7 @@ export default function FinderDashboard() {
             ))}
           </View>
 
-          {vehicleType === 'car' && (
-            <View style={{ marginBottom: 20 }}>
-              <Text style={{ color: '#94a3b8', fontSize: 10, fontWeight: '700', marginBottom: 12, textAlign: 'center', letterSpacing: 1.2 }}>SELECT CAR CATEGORY</Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
-                {[
-                  { label: 'Sedan', image: require('../../assets/images/vehicles/sedan.png') },
-                  { label: 'SUV', image: require('../../assets/images/vehicles/suv.png') },
-                  { label: 'Hatchback', image: require('../../assets/images/vehicles/hatchback.png') },
-                  { label: 'Minivan', image: require('../../assets/images/vehicles/minivan.png') },
-                ].map(t => (
-                  <TouchableOpacity
-                    key={t.label}
-                    activeOpacity={0.7}
-                    style={{
-                      width: '47%', backgroundColor: vehicleSubType === t.label ? 'rgba(99,102,241,0.12)' : 'rgba(255,255,255,0.02)',
-                      padding: 12, borderRadius: 16, alignItems: 'center',
-                      borderWidth: 1.5, borderColor: vehicleSubType === t.label ? '#6366f1' : 'rgba(255,255,255,0.05)'
-                    }}
-                    onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      setVehicleSubType(t.label);
-                    }}
-                  >
-                    <Image source={t.image} style={{ width: 60, height: 32, marginBottom: 6, opacity: vehicleSubType === t.label ? 1 : 0.6 }} resizeMode="contain" />
-                    <Text style={{ color: vehicleSubType === t.label ? '#fff' : '#94a3b8', fontWeight: '800', fontSize: 12 }}>{t.label}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-          )}
-
-          {(vehicleType === 'bike' || (vehicleType === 'car' && vehicleSubType !== '')) && (
+          {vehicleType !== '' && (
             <TouchableOpacity
               activeOpacity={0.9}
               style={{ 
@@ -1387,8 +1356,10 @@ export default function FinderDashboard() {
               }}
               onPress={() => {
                 Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                const finalSubType = vehicleType === 'car' && !vehicleSubType ? 'Sedan' : vehicleSubType;
                 AsyncStorage.setItem('parkstop_vehicle_type', vehicleType);
-                AsyncStorage.setItem('parkstop_vehicle_subtype', vehicleSubType);
+                AsyncStorage.setItem('parkstop_vehicle_subtype', finalSubType);
+                setVehicleSubType(finalSubType);
                 setStep('home');
               }}
             >
@@ -1817,7 +1788,7 @@ export default function FinderDashboard() {
                 </View>
 
                 {!isLongParking ? (
-                  <View>
+                  <View style={{ marginBottom: 16 }}>
                     <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 8, textTransform: 'uppercase' }}>Hours</Text>
                     <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
                       {[0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 24].map(h => (
@@ -1854,7 +1825,7 @@ export default function FinderDashboard() {
                     </ScrollView>
                   </View>
                 ) : (
-                  <View>
+                  <View style={{ marginBottom: 16 }}>
                     <Text style={{ color: '#64748b', marginBottom: 8, fontSize: 10, fontWeight: '800', textTransform: 'uppercase' }}>End Date</Text>
                     <TextInput
                       style={{ backgroundColor: 'rgba(255,255,255,0.03)', color: '#fff', padding: 14, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', fontSize: 15, fontWeight: '600' }}
@@ -1863,6 +1834,38 @@ export default function FinderDashboard() {
                       value={parkingEndDate}
                       onChangeText={setParkingEndDate}
                     />
+                  </View>
+                )}
+
+                {/* Car Category Option while confirming */}
+                {vehicleType === 'car' && (
+                  <View style={{ marginTop: 8 }}>
+                    <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 1 }}>Car Category</Text>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                      {[
+                        { label: 'Sedan', image: require('../../assets/images/vehicles/sedan.png') },
+                        { label: 'SUV', image: require('../../assets/images/vehicles/suv.png') },
+                        { label: 'Hatchback', image: require('../../assets/images/vehicles/hatchback.png') },
+                        { label: 'Minivan', image: require('../../assets/images/vehicles/minivan.png') },
+                      ].map(t => (
+                        <TouchableOpacity
+                          key={t.label}
+                          activeOpacity={0.7}
+                          style={{
+                            flex: 1, backgroundColor: vehicleSubType === t.label ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)',
+                            paddingVertical: 10, borderRadius: 14, alignItems: 'center', justifyContent: 'center',
+                            borderWidth: 2, borderColor: vehicleSubType === t.label ? '#6366f1' : 'rgba(255,255,255,0.08)'
+                          }}
+                          onPress={() => {
+                            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                            setVehicleSubType(t.label);
+                          }}
+                        >
+                          <Image source={t.image} style={{ width: 44, height: 22, marginBottom: 4, opacity: vehicleSubType === t.label ? 1 : 0.6 }} resizeMode="contain" />
+                          <Text style={{ color: vehicleSubType === t.label ? '#fff' : '#94a3b8', fontWeight: '800', fontSize: 10 }}>{t.label}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
                   </View>
                 )}
               </View>
