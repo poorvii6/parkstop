@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { View, Text, StyleSheet, Platform, TouchableOpacity, TextInput, Dimensions, Modal, Alert, ScrollView, Linking, Keyboard, ActivityIndicator, BackHandler, AppState, Image, Animated, KeyboardAvoidingView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -52,7 +53,7 @@ type PricingBreakdown = {
   multiplier: number;
 };
 
-type AppStep = 'vehicle_select' | 'choice' | 'nearby_list' | 'search' | 'spot_detail' | 'slot_select' | 'time_select' | 'booking_confirm' | 'navigating' | 'en_route' | 'arriving' | 'active_parking' | 'checkout_verification' | 'payment' | 'receipt';
+type AppStep = 'vehicle_select' | 'home' | 'spot_booking' | 'booking_confirm' | 'navigating' | 'en_route' | 'arriving' | 'active_parking' | 'checkout_verification' | 'payment' | 'receipt';
 
 function SkeletonCard({ width, height, style }: { width?: any, height?: any, style?: any }) {
   const fadeAnim = useRef(new Animated.Value(0.4)).current;
@@ -95,6 +96,8 @@ export default function FinderDashboard() {
   const mapRef = useRef<any>(null);
   const [userLocation, setUserLocation] = useState<{ lat: number, lng: number } | null>(null);
   const [step, setStep] = useState<AppStep>('vehicle_select');
+  const [navCountdown, setNavCountdown] = useState<number | null>(null);
+  const [showUPIInline, setShowUPIInline] = useState(false);
   const [vehicleType, setVehicleType] = useState<string>('');
   const [vehicleSubType, setVehicleSubType] = useState<string>('');
   const [selectedSlot, setSelectedSlot] = useState<string>('');
@@ -150,7 +153,23 @@ export default function FinderDashboard() {
 
 
   const [selectedSpotId, setSelectedSpotId] = useState<string | null>(null);
-  const [bookingDetails, setBookingDetails] = useState<{ id: string, otp: string, total_price?: number, totalPrice?: number, pricing?: PricingBreakdown, checkout_otp?: string, checkoutOtp?: string, started_at?: string, created_at?: string, updated_at?: string, start_time?: string, payment_mode?: string } | null>(null);
+  const [bookingDetails, setBookingDetails] = useState<{ 
+    id: string; 
+    otp: string; 
+    total_price?: number; 
+    totalPrice?: number; 
+    pricing?: PricingBreakdown; 
+    checkout_otp?: string; 
+    checkoutOtp?: string; 
+    started_at?: string; 
+    created_at?: string; 
+    updated_at?: string; 
+    start_time?: string; 
+    payment_mode?: string;
+    basePrice?: number;
+    arrears?: number;
+    finalAmount?: number;
+  } | null>(null);
   const [elapsedMinutes, setElapsedMinutes] = useState(0);
   const [hasLocationPermission, setHasLocationPermission] = useState(true);
   const [extendModalOpen, setExtendModalOpen] = useState(false);
@@ -181,7 +200,7 @@ export default function FinderDashboard() {
   }, [step, bookingDetails]);
 
   useEffect(() => {
-    if (step !== 'time_select' || !selectedSpotId) return;
+    if (step !== 'spot_booking' || !selectedSpotId) return;
     
     let hours = parkingHours + (parkingMinutes / 60);
     let end = new Date(Date.now() + hours * 3600000);
@@ -217,6 +236,38 @@ export default function FinderDashboard() {
 
     return () => clearTimeout(delayDebounceFn);
   }, [step, selectedSpotId, parkingHours, parkingMinutes, isLongParking, parkingEndDate]);
+
+  // Auto-start navigation countdown
+  useEffect(() => {
+    if (step === 'booking_confirm') {
+      setNavCountdown(3);
+    } else {
+      setNavCountdown(null);
+    }
+  }, [step]);
+
+  useEffect(() => {
+    if (navCountdown === null || navCountdown <= 0) {
+      if (navCountdown === 0 && step === 'booking_confirm') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        if (userLocation && mapRef.current) {
+          mapRef.current.animateCamera({
+            center: { latitude: userLocation.lat, longitude: userLocation.lng },
+            zoom: 17, pitch: 60, heading: 0
+          }, { duration: 1200 });
+        }
+        centerRoute();
+        if (routeCoords.length > 0) {
+          setSimulatedLocation({ lat: routeCoords[0].latitude, lng: routeCoords[0].longitude });
+        }
+        setIsFollowing(true);
+        setStep('en_route');
+      }
+      return;
+    }
+    const timer = setTimeout(() => setNavCountdown(prev => prev !== null ? prev - 1 : null), 1000);
+    return () => clearTimeout(timer);
+  }, [navCountdown]);
 
   const [isRazorpayVisible, setIsRazorpayVisible] = useState(false);
   const [razorpayOrder, setRazorpayOrder] = useState<{
@@ -262,7 +313,7 @@ export default function FinderDashboard() {
 
   useEffect(() => {
     const backAction = () => {
-      // 1. Navigation Steps: Prompt for exit, return to list on confirm
+      // 1. Navigation Steps: Prompt for exit, return to home on confirm
       if (['en_route', 'navigating', 'arriving'].includes(step)) {
         Alert.alert(
           'Exit Navigation',
@@ -272,7 +323,7 @@ export default function FinderDashboard() {
             {
               text: 'Yes',
               onPress: () => {
-                setStep('nearby_list');
+                setStep('home');
                 setSelectedSpotId(null);
                 setRouteCoords([]);
                 setSimulatedLocation(null);
@@ -286,33 +337,39 @@ export default function FinderDashboard() {
         return true;
       }
 
-      // 2. Booking Steps: Return to previous logical page
-      if (step === 'time_select') {
-        setStep('slot_select');
-        return true;
-      }
-      if (step === 'slot_select') {
-        setStep('spot_detail');
-        return true;
-      }
-      if (step === 'spot_detail') {
-        setStep('nearby_list');
+      // 2. Spot Booking: Return to home
+      if (step === 'spot_booking') {
+        setStep('home');
         setSelectedSpotId(null);
         setSlotData([]);
+        setSelectedSlot('');
         return true;
       }
+
+      // 3. Booking Confirm: Return to home
       if (step === 'booking_confirm') {
-        setStep('choice');
+        setStep('home');
+        setNavCountdown(null);
         return true;
       }
 
-      // 3. Choice Step: Return to vehicle select
-      if (step === 'choice') {
-        setStep('vehicle_select');
+      // 4. Home Step: Go back to vehicle select or exit
+      if (step === 'home') {
+        Alert.alert('Exit App', 'Are you sure you want to exit ParkStop?', [
+          { text: 'Cancel', onPress: () => null, style: 'cancel' },
+          { text: 'YES', onPress: () => {
+              if (Platform.OS === 'android') {
+                BackHandler.exitApp();
+              } else {
+                router.replace('/role-selection');
+              }
+            } 
+          },
+        ]);
         return true;
       }
 
-      // 4. Vehicle Select: Do nothing (or let system handle exit)
+      // 5. Vehicle Select: Exit app
       if (step === 'vehicle_select') {
         Alert.alert('Exit App', 'Are you sure you want to exit ParkStop?', [
           { text: 'Cancel', onPress: () => null, style: 'cancel' },
@@ -328,32 +385,7 @@ export default function FinderDashboard() {
         return true;
       }
 
-      // 5. Search Step: Confirm before exiting map
-      if (step === 'search') {
-        Alert.alert('Exit Map', 'Do you want to go back to the main menu?', [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Yes', onPress: () => {
-              setStep('choice');
-              setSearchQuery('');
-              setSearchedPlace(null);
-              setSpots([]);
-            }
-          }
-        ]);
-        return true;
-      }
-
-      // 6. Nearby List: Return to choice
-      if (step === 'nearby_list') {
-        setStep('choice');
-        setSearchQuery('');
-        setSearchedPlace(null);
-        return true;
-      }
-
-      // 6. Root Steps: Already handled in 4 (vehicle_select)
-      return false; // Let default behavior happen for any unhandled states
+      return false;
     };
 
     const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
@@ -654,6 +686,23 @@ export default function FinderDashboard() {
     };
   }, []);
 
+  // Load saved vehicle type from AsyncStorage
+  useEffect(() => {
+    (async () => {
+      try {
+        const savedType = await AsyncStorage.getItem('parkstop_vehicle_type');
+        const savedSubType = await AsyncStorage.getItem('parkstop_vehicle_subtype');
+        if (savedType) {
+          setVehicleType(savedType);
+          setVehicleSubType(savedSubType || (savedType === 'bike' ? 'Standard' : ''));
+          setStep('home');
+        }
+      } catch (e) {
+        console.log('Failed to load saved vehicle', e);
+      }
+    })();
+  }, []);
+
   // Instant Nearby Discovery: Populate suggestions with local places on load
   useEffect(() => {
     const now = Date.now();
@@ -686,9 +735,10 @@ export default function FinderDashboard() {
         if (res.data.data.action === 'ROUTE_TO_SPOT') {
           setTimeout(() => {
             setChatOpen(false);
-            setStep('spot_detail');
+            setStep('spot_booking');
             if (spots.length > 0) {
               setSelectedSpotId(spots[0].id);
+              fetchSlots(spots[0].id);
               if (Platform.OS !== 'web') {
                 mapRef.current?.animateCamera({
                   center: { latitude: spots[0].lat, longitude: spots[0].lng },
@@ -770,7 +820,7 @@ export default function FinderDashboard() {
       if (data && data.length > 0) {
         const { lat, lon } = data[0];
         setSearchedPlace({ lat: parseFloat(lat), lng: parseFloat(lon), title: searchQuery });
-        setStep('search');
+        setStep('home');
         if (mapRef.current) {
           mapRef.current.animateCamera({
             center: { latitude: parseFloat(lat), longitude: parseFloat(lon) },
@@ -791,7 +841,7 @@ export default function FinderDashboard() {
         if (nomData && nomData.length > 0) {
           const { lat, lon, display_name } = nomData[0];
           setSearchedPlace({ lat: parseFloat(lat), lng: parseFloat(lon), title: searchQuery });
-          setStep('search');
+          setStep('home');
           if (mapRef.current) {
             mapRef.current.animateCamera({
               center: { latitude: parseFloat(lat), longitude: parseFloat(lon) },
@@ -861,7 +911,7 @@ export default function FinderDashboard() {
 
     // First: show the destination pin on the map
     setSearchedPlace({ lat, lng: lon, title: name });
-    setStep('search');
+    setStep('home');
     setIsFollowing(false);
     if (mapRef.current) {
       mapRef.current.animateCamera({
@@ -1168,7 +1218,7 @@ export default function FinderDashboard() {
   };
 
   const isBottomPanelFull = ['arriving', 'active_parking', 'payment', 'receipt'].includes(step);
-  const showRoute = ['navigating', 'en_route', 'booking_confirm', 'search'].includes(step);
+  const showRoute = ['navigating', 'en_route', 'booking_confirm', 'home'].includes(step);
 
   // Removed welcome auto-transition
 
@@ -1253,7 +1303,7 @@ export default function FinderDashboard() {
     <SafeAreaView style={[BlueprintTheme.container, { backgroundColor: '#000' }]} edges={['top']}>
       
       {/* FLOATING PROFILE ACCESS */}
-      {['choice', 'nearby_list', 'vehicle_select', 'search'].includes(step) && (
+      {['home', 'vehicle_select'].includes(step) && (
         <TouchableOpacity 
           style={styles.floatingProfileBtn} 
           onPress={() => router.push('/modal')}
@@ -1337,7 +1387,9 @@ export default function FinderDashboard() {
               }}
               onPress={() => {
                 Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                setStep('choice');
+                AsyncStorage.setItem('parkstop_vehicle_type', vehicleType);
+                AsyncStorage.setItem('parkstop_vehicle_subtype', vehicleSubType);
+                setStep('home');
               }}
             >
               <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Confirm Selection</Text>
@@ -1346,215 +1398,165 @@ export default function FinderDashboard() {
         </LinearGradient>
       )}
 
-      {/* STEP 3: CHOICE — NEARBY OR SEARCH */}
-      {step === 'choice' && (
-        <LinearGradient colors={['#0f172a', '#1e1b4b']} style={{ flex: 1, padding: 24, justifyContent: 'center' }}>
-          <Text style={{ color: '#fff', fontSize: 26, fontWeight: '900', textAlign: 'center', marginBottom: 8, letterSpacing: -0.5 }}>ParkStop Finder</Text>
-          <Text style={{ color: '#94a3b8', fontSize: 13, textAlign: 'center', marginBottom: 32, fontWeight: '500' }}>Choose your parking journey</Text>
-
-          <TouchableOpacity 
-            activeOpacity={0.8}
-            style={{ 
-              backgroundColor: 'rgba(99,102,241,0.12)', 
-              padding: 16, borderRadius: 20, marginBottom: 12, 
-              borderWidth: 1, borderColor: 'rgba(99,102,241,0.4)', 
-              flexDirection: 'row', alignItems: 'center'
-            }} 
-            onPress={() => { 
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-              setStep('nearby_list'); 
-              if (userLocation) fetchNearbySpots(userLocation.lat, userLocation.lng); 
-            }}>
-            <LinearGradient colors={['#6366f1', '#4f46e5']} style={{ width: 44, height: 44, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginRight: 14 }}>
-              <Text style={{ fontSize: 20 }}>📍</Text>
-            </LinearGradient>
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: '#fff', fontSize: 16, fontWeight: '800' }}>Nearby Spots</Text>
-              <Text style={{ color: 'rgba(148, 163, 184, 0.8)', fontSize: 12, marginTop: 2 }}>Live availability</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color="#6366f1" />
-          </TouchableOpacity>
-
-          <TouchableOpacity 
-            activeOpacity={0.8}
-            style={{ 
-              backgroundColor: 'rgba(255,255,255,0.03)', 
-              padding: 16, borderRadius: 20, 
-              borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', 
-              flexDirection: 'row', alignItems: 'center' 
-            }} 
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              setStep('search');
-            }}>
-            <View style={{ width: 44, height: 44, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.05)', alignItems: 'center', justifyContent: 'center', marginRight: 14 }}>
-              <Text style={{ fontSize: 20 }}>🔍</Text>
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: '#fff', fontSize: 16, fontWeight: '800' }}>Search Area</Text>
-              <Text style={{ color: 'rgba(148, 163, 184, 0.8)', fontSize: 12, marginTop: 2 }}>Explore cities</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.2)" />
-          </TouchableOpacity>
-
-          <TouchableOpacity 
-            activeOpacity={0.8}
-            style={{ 
-              backgroundColor: 'rgba(255,255,255,0.03)', 
-              padding: 16, borderRadius: 20, marginTop: 12,
-              borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', 
-              flexDirection: 'row', alignItems: 'center' 
-            }} 
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              router.push('/modal');
-            }}>
-            <View style={{ width: 44, height: 44, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.05)', alignItems: 'center', justifyContent: 'center', marginRight: 14 }}>
-              <Text style={{ fontSize: 20 }}>🔖</Text>
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: '#fff', fontSize: 16, fontWeight: '800' }}>Saved Spots</Text>
-              <Text style={{ color: 'rgba(148, 163, 184, 0.8)', fontSize: 12, marginTop: 2 }}>Quickly book favorites</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.2)" />
-          </TouchableOpacity>
-
-          {!userLocation && hasLocationPermission && (
-            <View style={{ marginTop: 24, alignItems: 'center' }}>
-              <ActivityIndicator size="small" color="#6366f1" />
-              <Text style={{ color: '#64748b', fontSize: 12, marginTop: 10, fontWeight: '600' }}>Calibrating GPS...</Text>
-            </View>
-          )}
-
-          {!hasLocationPermission && (
-            <View style={{ marginTop: 24, padding: 18, backgroundColor: 'rgba(239, 68, 68, 0.08)', borderRadius: 20, borderWidth: 1, borderColor: 'rgba(239, 68, 68, 0.2)', alignItems: 'center', width: '100%' }}>
-              <Ionicons name="warning" size={32} color="#ef4444" style={{ marginBottom: 10 }} />
-              <Text style={{ color: '#fff', fontSize: 14, fontWeight: '800', textAlign: 'center', marginBottom: 6 }}>GPS Access Denied</Text>
-              <Text style={{ color: '#94a3b8', fontSize: 12, fontWeight: '500', textAlign: 'center', marginBottom: 14, lineHeight: 18 }}>Enable location permissions to automatically discover spots and navigate.</Text>
-              <TouchableOpacity 
-                activeOpacity={0.8}
-                onPress={() => Linking.openSettings()}
-                style={{ backgroundColor: '#ef4444', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12 }}
-              >
-                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 12 }}>Open Settings</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-        </LinearGradient>
-      )}
-
-      {/* STEP 4a: NEARBY SPOTS — Opaque Full-Screen List */}
-      {step === 'nearby_list' && (
+      {/* STEP 3: HOME — MAP WITH NEARBY BOTTOM SHEET */}
+      {step === 'home' && (
         <View style={{ flex: 1, backgroundColor: '#0f172a' }}>
-          <LinearGradient colors={['#1e1b4b', '#0f172a']} style={{ padding: 20, paddingTop: Platform.OS === 'ios' ? 20 : 12, borderBottomLeftRadius: 32, borderBottomRightRadius: 32, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 15, elevation: 10 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-              <TouchableOpacity 
-                onPress={() => setStep('choice')} 
-                style={{ 
-                  backgroundColor: 'rgba(255,255,255,0.08)', 
-                  width: 44, height: 44, borderRadius: 22, 
-                  alignItems: 'center', justifyContent: 'center',
-                  marginRight: 16
-                }}>
-                <Ionicons name="arrow-back" size={24} color="#fff" />
-              </TouchableOpacity>
-              <View>
-                <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900', letterSpacing: -0.5 }}>
-                  Nearby Parking
-                </Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
-                  <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#10b981', marginRight: 6 }} />
-                  <Text style={{ color: '#94a3b8', fontSize: 12, fontWeight: '700' }}>{spots.filter(s => s.available).length} spots found</Text>
-                </View>
-              </View>
-            </View>
-          </LinearGradient>
-
-          <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1, padding: 16 }}>
-            {isNearbyLoading ? (
-              [1, 2, 3, 4].map(idx => (
-                <View
-                  key={idx}
-                  style={{
-                    backgroundColor: 'rgba(255,255,255,0.02)',
-                    borderRadius: 24, padding: 16, marginBottom: 12,
-                    borderWidth: 1, borderColor: 'rgba(255,255,255,0.04)',
-                    flexDirection: 'row', alignItems: 'center'
-                  }}
-                >
-                  <SkeletonCard width={48} height={48} style={{ borderRadius: 16, marginRight: 16 }} />
-                  <View style={{ flex: 1, gap: 6 }}>
-                    <SkeletonCard width="80%" height={16} style={{ borderRadius: 8 }} />
-                    <SkeletonCard width="50%" height={12} style={{ borderRadius: 6 }} />
-                  </View>
-                  <SkeletonCard width={60} height={20} style={{ borderRadius: 10 }} />
-                </View>
-              ))
-            ) : spots.length > 0 ? (
-              spots.map(spot => (
-                <TouchableOpacity
-                  key={spot.id}
-                  activeOpacity={0.8}
-                  style={{
-                    backgroundColor: 'rgba(255,255,255,0.02)',
-                    borderRadius: 24, padding: 16, marginBottom: 12,
-                    borderWidth: 1, borderColor: 'rgba(255,255,255,0.04)',
-                    flexDirection: 'row', alignItems: 'center',
-                    shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10
-                  }}
-                  onPress={() => {
-                    if (!spot.available) {
-                      Alert.alert('Spot Full', 'This parking spot is currently full and cannot be booked right now.');
-                      return;
-                    }
-                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                    setSelectedSpotId(spot.id);
-                    setStep('spot_detail');
-                    fetchSlots(spot.id);
-                  }}
-                >
-                  <View style={{ width: 48, height: 48, borderRadius: 16, backgroundColor: 'rgba(99,102,241,0.08)', alignItems: 'center', justifyContent: 'center', marginRight: 16, borderWidth: 1, borderColor: 'rgba(99,102,241,0.1)' }}>
-                    <Ionicons name="navigate-circle" size={26} color="#6366f1" />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900', marginBottom: 2 }}>{spot.title}</Text>
-                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                      <Text style={{ color: '#10b981', fontWeight: '800', fontSize: 13 }}>₹{spot.price}<Text style={{ fontSize: 10, color: '#64748b' }}>/hr</Text></Text>
-                      <View style={{ width: 3, height: 3, borderRadius: 1.5, backgroundColor: 'rgba(255,255,255,0.15)', marginHorizontal: 8 }} />
-                      <Ionicons name="location-outline" size={12} color="#94a3b8" style={{ marginRight: 2 }} />
-                      <Text style={{ color: '#94a3b8', fontSize: 12, fontWeight: '600' }}>{spot.distance} km</Text>
-                    </View>
-                  </View>
-                  <View style={{ alignItems: 'flex-end', gap: 6 }}>
-                    <View style={{ backgroundColor: (spot.available_slots ?? 0) > 0 ? 'rgba(16,185,129,0.1)' : 'rgba(244,63,94,0.1)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10, borderWidth: 1, borderColor: (spot.available_slots ?? 0) > 0 ? 'rgba(16,185,129,0.2)' : 'rgba(244,63,94,0.2)' }}>
-                      <Text style={{ color: (spot.available_slots ?? 0) > 0 ? '#10b981' : '#f43f5e', fontWeight: '900', fontSize: 9, textTransform: 'uppercase' }}>
-                        {(spot.available_slots ?? 0) > 0 ? 'Available' : 'Full'}
-                      </Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.15)" />
-                  </View>
+          {/* Search Bar */}
+          <View style={{ position: 'absolute', top: Platform.OS === 'ios' ? 20 : 12, left: 16, right: 60, zIndex: 100 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#1E293B', borderRadius: 20, paddingHorizontal: 16, height: 52, borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.15)', shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 15, elevation: 12 }}>
+              <Ionicons name="search" size={18} color="#94a3b8" style={{ marginRight: 10 }} />
+              <TextInput
+                style={{ flex: 1, color: '#fff', fontSize: 15, fontWeight: '600' }}
+                placeholder="Search for a destination..."
+                placeholderTextColor="#94a3b8"
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                onSubmitEditing={handleSearch}
+                returnKeyType="search"
+              />
+              {searchQuery.length > 0 && (
+                <TouchableOpacity onPress={() => { setSearchQuery(''); setSuggestions([]); }} style={{ padding: 6 }}>
+                  <Text style={{ color: '#94a3b8', fontSize: 16 }}>✕</Text>
                 </TouchableOpacity>
-              ))
-            ) : (
-              <View style={{ alignItems: 'center', marginTop: 100 }}>
-                <Text style={{ fontSize: 40, marginBottom: 12 }}>😕</Text>
-                <Text style={{ color: '#fff', fontSize: 18, fontWeight: '800' }}>Sorry, no spots found</Text>
-                <Text style={{ color: '#64748b', marginTop: 8, fontSize: 14, fontWeight: '500' }}>There are no parking spots available in this area.</Text>
+              )}
+              {isSearching && <ActivityIndicator size="small" color="#6366f1" style={{ marginLeft: 8 }} />}
+            </View>
+
+            {/* Search Suggestions */}
+            {suggestions.length > 0 && (
+              <View style={{ backgroundColor: '#0f172a', borderRadius: 20, paddingVertical: 8, marginTop: 8, maxHeight: 300, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 20, elevation: 20 }}>
+                <ScrollView style={{ maxHeight: 280 }} keyboardShouldPersistTaps="handled">
+                  {suggestions.map((item, idx) => (
+                    <TouchableOpacity 
+                      key={idx}
+                      style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.04)' }}
+                      onPress={() => selectSuggestion(item)}
+                    >
+                      <View style={{ width: 36, height: 36, backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+                        <Text style={{ fontSize: 16 }}>📍</Text>
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }} numberOfLines={1}>{item.display_name?.split(',')[0] || item.display_name}</Text>
+                        <Text style={{ color: '#64748b', fontSize: 12, marginTop: 2 }} numberOfLines={1}>{item.display_name}</Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
               </View>
             )}
-            <View style={{ height: 32 }} />
-          </ScrollView>
+          </View>
+
+          {/* Vehicle Badge */}
+          <View style={{ position: 'absolute', top: Platform.OS === 'ios' ? 78 : 70, left: 16, zIndex: 100 }}>
+            <TouchableOpacity 
+              onPress={() => { setStep('vehicle_select'); }}
+              style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(30,41,59,0.9)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' }}
+            >
+              <Text style={{ fontSize: 14, marginRight: 6 }}>{vehicleType === 'bike' ? '🏍️' : '🚗'}</Text>
+              <Text style={{ color: '#fff', fontSize: 11, fontWeight: '800' }}>{vehicleSubType || vehicleType}</Text>
+              <Text style={{ color: '#6366f1', fontSize: 10, fontWeight: '700', marginLeft: 6 }}>Change</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Saved Spots Shortcut */}
+          <TouchableOpacity 
+            style={{ position: 'absolute', top: Platform.OS === 'ios' ? 78 : 70, right: 16, zIndex: 100, backgroundColor: 'rgba(30,41,59,0.9)', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' }}
+            onPress={() => router.push('/modal')}
+          >
+            <Ionicons name="bookmark" size={16} color="#6366f1" />
+          </TouchableOpacity>
+
+          {/* Nearby Spots Bottom Sheet */}
+          <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, maxHeight: '45%', backgroundColor: '#0f172a', borderTopLeftRadius: 28, borderTopRightRadius: 28, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 20, elevation: 20, zIndex: 50 }}>
+            <View style={{ width: 40, height: 4, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 2, alignSelf: 'center', marginTop: 12, marginBottom: 8 }} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, marginBottom: 12 }}>
+              <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900', flex: 1 }}>Nearby Spots</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#10b981', marginRight: 6 }} />
+                <Text style={{ color: '#94a3b8', fontSize: 11, fontWeight: '700' }}>{spots.filter(s => s.available).length} available</Text>
+              </View>
+            </View>
+            <ScrollView showsVerticalScrollIndicator={false} style={{ paddingHorizontal: 16 }}>
+              {isNearbyLoading ? (
+                [1, 2, 3].map(idx => (
+                  <View key={idx} style={{ backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: 20, padding: 14, marginBottom: 10, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.04)' }}>
+                    <SkeletonCard width={42} height={42} style={{ borderRadius: 14, marginRight: 12 }} />
+                    <View style={{ flex: 1, gap: 6 }}>
+                      <SkeletonCard width="75%" height={14} style={{ borderRadius: 7 }} />
+                      <SkeletonCard width="45%" height={10} style={{ borderRadius: 5 }} />
+                    </View>
+                  </View>
+                ))
+              ) : spots.length > 0 ? (
+                spots.map(spot => (
+                  <TouchableOpacity
+                    key={spot.id}
+                    activeOpacity={0.8}
+                    style={{ backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: 20, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.04)', flexDirection: 'row', alignItems: 'center' }}
+                    onPress={() => {
+                      if (!spot.available) {
+                        Alert.alert('Spot Full', 'This parking spot is currently full.');
+                        return;
+                      }
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                      setSelectedSpotId(spot.id);
+                      setStep('spot_booking');
+                      fetchSlots(spot.id);
+                      if (mapRef.current) {
+                        mapRef.current.animateCamera({ center: { latitude: spot.lat, longitude: spot.lng }, zoom: 17 }, { duration: 1000 });
+                      }
+                    }}
+                  >
+                    <View style={{ width: 42, height: 42, borderRadius: 14, backgroundColor: 'rgba(99,102,241,0.08)', alignItems: 'center', justifyContent: 'center', marginRight: 12, borderWidth: 1, borderColor: 'rgba(99,102,241,0.1)' }}>
+                      <Ionicons name="navigate-circle" size={22} color="#6366f1" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: '#fff', fontSize: 15, fontWeight: '900', marginBottom: 2 }}>{spot.title}</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                        <Text style={{ color: '#10b981', fontWeight: '800', fontSize: 12 }}>₹{spot.price}<Text style={{ fontSize: 10, color: '#64748b' }}>/hr</Text></Text>
+                        <View style={{ width: 3, height: 3, borderRadius: 1.5, backgroundColor: 'rgba(255,255,255,0.15)', marginHorizontal: 6 }} />
+                        <Ionicons name="location-outline" size={11} color="#94a3b8" style={{ marginRight: 2 }} />
+                        <Text style={{ color: '#94a3b8', fontSize: 11, fontWeight: '600' }}>{spot.distance} km</Text>
+                      </View>
+                    </View>
+                    <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                      <View style={{ backgroundColor: (spot.available_slots ?? 0) > 0 ? 'rgba(16,185,129,0.1)' : 'rgba(244,63,94,0.1)', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, borderWidth: 1, borderColor: (spot.available_slots ?? 0) > 0 ? 'rgba(16,185,129,0.2)' : 'rgba(244,63,94,0.2)' }}>
+                        <Text style={{ color: (spot.available_slots ?? 0) > 0 ? '#10b981' : '#f43f5e', fontWeight: '900', fontSize: 8, textTransform: 'uppercase' }}>
+                          {(spot.available_slots ?? 0) > 0 ? 'Open' : 'Full'}
+                        </Text>
+                      </View>
+                      <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.15)" />
+                    </View>
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <View style={{ alignItems: 'center', paddingVertical: 30 }}>
+                  <Text style={{ fontSize: 32, marginBottom: 8 }}>😕</Text>
+                  <Text style={{ color: '#fff', fontSize: 16, fontWeight: '800' }}>No spots found</Text>
+                  <Text style={{ color: '#64748b', marginTop: 4, fontSize: 13 }}>Try searching a different area</Text>
+                </View>
+              )}
+              <View style={{ height: 20 }} />
+            </ScrollView>
+          </View>
+
+          {!hasLocationPermission && (
+            <View style={{ position: 'absolute', bottom: 120, left: 20, right: 20, zIndex: 100, padding: 16, backgroundColor: 'rgba(239, 68, 68, 0.08)', borderRadius: 20, borderWidth: 1, borderColor: 'rgba(239, 68, 68, 0.2)', alignItems: 'center' }}>
+              <Ionicons name="warning" size={24} color="#ef4444" style={{ marginBottom: 8 }} />
+              <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800', marginBottom: 4 }}>GPS Access Denied</Text>
+              <TouchableOpacity onPress={() => Linking.openSettings()} style={{ backgroundColor: '#ef4444', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 }}>
+                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 11 }}>Open Settings</Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
       )}
 
       {/* Map Rendering Container */}
       {!['welcome', 'vehicle_select'].includes(step) && (
         <View
-          style={[
-            styles.fullMapContainer,
-            ['choice', 'nearby_list'].includes(step) ? { opacity: 0, zIndex: -10 } : {}
-          ]}
-          pointerEvents={['choice', 'nearby_list'].includes(step) ? 'none' : 'auto'}
+          style={styles.fullMapContainer}
+          pointerEvents="auto"
         >
           <MapLibreView
             ref={mapRef}
@@ -1589,13 +1591,13 @@ export default function FinderDashboard() {
             onMarkerPress={(id: string) => {
               const spot = spots.find(s => s.id === id);
               if (spot && !spot.available) {
-                Alert.alert('Spot Full', 'This parking spot is currently full and cannot be booked right now.');
+                Alert.alert('Spot Full', 'This parking spot is currently full.');
                 return;
               }
               setIsFollowing(false);
               setSelectedSpotId(id);
               fetchSlots(id);
-              setStep('spot_detail');
+              setStep('spot_booking');
               if (spot && mapRef.current) {
                 mapRef.current.animateCamera({
                   center: { latitude: spot.lat, longitude: spot.lng },
@@ -1604,7 +1606,7 @@ export default function FinderDashboard() {
               }
             }}
             onExit={() => {
-              setStep('nearby_list');
+              setStep('home');
               setSelectedSpotId(null);
               setSearchedPlace(null);
               setRouteCoords([]);
@@ -1616,7 +1618,7 @@ export default function FinderDashboard() {
                 });
               }
             }}
-            hideControls={['spot_detail', 'choice'].includes(step)}
+            hideControls={['spot_booking'].includes(step)}
           />
 
           {/* Floating OTP Badge During Navigation/Parking */}
@@ -1632,7 +1634,7 @@ export default function FinderDashboard() {
       {/* Google Maps Style Instruction Banner */}
 
       {/* FLOATING BACK/HOME BUTTON — rendered AFTER map so it sits on top of WebView */}
-      {['search', 'spot_detail', 'en_route', 'navigating', 'arriving', 'booking_confirm', 'active_parking'].includes(step) && (
+      {['spot_booking', 'en_route', 'navigating', 'arriving', 'booking_confirm', 'active_parking'].includes(step) && (
         <TouchableOpacity
           style={{
             position: 'absolute',
@@ -1659,7 +1661,7 @@ export default function FinderDashboard() {
                 { text: 'Cancel', style: 'cancel' },
                 {
                   text: 'Yes, Exit', onPress: () => {
-                    setStep('nearby_list');
+                    setStep('home');
                     setSelectedSpotId(null);
                     setRouteCoords([]);
                     setSimulatedLocation(null);
@@ -1677,26 +1679,14 @@ export default function FinderDashboard() {
                   }
                 }
               ]);
-            } else if (['spot_detail', 'slot_select', 'time_select', 'booking_confirm'].includes(step)) {
-              setStep('nearby_list');
+            } else if (['spot_booking', 'booking_confirm'].includes(step)) {
+              setStep('home');
               setSelectedSpotId(null);
               setSlotData([]);
-            } else if (step === 'search') {
-              Alert.alert('Exit Map', 'Do you want to go back to the main menu?', [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                  text: 'Yes', onPress: () => {
-                    setStep('choice');
-                    setSearchQuery('');
-                    setSearchedPlace(null);
-                    setSpots([]);
-                  }
-                }
-              ]);
             } else if (step === 'active_parking') {
               // Stay on active parking
             } else {
-              setStep('choice');
+              setStep('home');
             }
           }}
         >
@@ -1719,155 +1709,206 @@ export default function FinderDashboard() {
         </View>
       )}
 
-      {/* STEP 5: SPOT DETAIL BOTTOM SHEET */}
-      {step === 'spot_detail' && (
-        <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#0f172a', borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 20, paddingBottom: 32, shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 30, elevation: 20, zIndex: 1000, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' }}>
-          <View style={{ width: 40, height: 4, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 2, alignSelf: 'center', marginBottom: 20 }} />
+      {/* STEP 5: SPOT BOOKING BOTTOM SHEET */}
+      {step === 'spot_booking' && (
+        <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, maxHeight: '85%', backgroundColor: '#0f172a', borderTopLeftRadius: 28, borderTopRightRadius: 28, shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 30, elevation: 20, zIndex: 1000, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' }}>
+          <ScrollView showsVerticalScrollIndicator={false} style={{ padding: 20, paddingBottom: 32 }} bounces={false}>
+            <View style={{ width: 40, height: 4, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 2, alignSelf: 'center', marginBottom: 20 }} />
 
-          {/* Spot Image Carousel */}
-          {(() => {
-            const currentSpot = spots.find(s => s.id === selectedSpotId);
-            const imgs = currentSpot?.images || [];
-            return imgs.length > 0 ? (
-              <ScrollView 
-                horizontal 
-                pagingEnabled 
-                showsHorizontalScrollIndicator={false}
-                style={{ height: 160, borderRadius: 16, marginBottom: 20 }}
-              >
-                {imgs.map((imgUrl, idx) => (
-                  <Image 
-                    key={idx} 
-                    source={{ uri: imgUrl }} 
-                    style={{ width: width - 40, height: 160, borderRadius: 16 }} 
-                    resizeMode="cover"
-                  />
+            {/* Spot Header */}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', letterSpacing: -0.5 }}>{spots.find(s => s.id === selectedSpotId)?.title}</Text>
+                <Text style={{ color: '#94a3b8', fontSize: 13, marginTop: 4, fontWeight: '500' }}>Safe & monitored area</Text>
+              </View>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <TouchableOpacity 
+                  onPress={async () => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    try {
+                      const res = await apiClient.post(`/saved-spots/${selectedSpotId}/toggle`);
+                      Alert.alert('Saved Spots', res.data.message);
+                    } catch(e) {
+                      Alert.alert('Error', 'Failed to save spot');
+                    }
+                  }} 
+                  style={{ backgroundColor: 'rgba(255,255,255,0.06)', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Ionicons name="bookmark" size={16} color="#6366f1" />
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  onPress={() => { setStep('home'); setSelectedSpotId(null); setSlotData([]); setSelectedSlot(''); }} 
+                  style={{ backgroundColor: 'rgba(255,255,255,0.06)', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }}
+                >
+                  <Text style={{ color: '#fff', fontWeight: '800', fontSize: 12 }}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Spot Info Card */}
+            <View style={{ backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: 20, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.04)' }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <View>
+                  <Text style={{ color: '#64748b', fontWeight: '700', fontSize: 10, textTransform: 'uppercase' }}>Hourly Rate</Text>
+                  <Text style={{ color: '#fff', fontWeight: '900', fontSize: 18, marginTop: 2 }}>₹{spots.find(s => s.id === selectedSpotId)?.price}<Text style={{ fontSize: 11, color: '#94a3b8', fontWeight: '500' }}> / hr</Text></Text>
+                </View>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={{ color: '#64748b', fontWeight: '700', fontSize: 10, textTransform: 'uppercase' }}>Availability</Text>
+                  <Text style={{ color: '#10b981', fontWeight: '900', fontSize: 18, marginTop: 2 }}>{spots.find(s => s.id === selectedSpotId)?.available_slots} Bay(s)</Text>
+                </View>
+              </View>
+            </View>
+
+            {/* Slot Selection */}
+            <Text style={{ color: '#94a3b8', fontSize: 11, fontWeight: '800', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 1 }}>Pick a Slot</Text>
+            {isSlotLoading ? (
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16, justifyContent: 'center' }}>
+                {[1, 2, 3, 4, 5, 6].map(idx => (
+                  <SkeletonCard key={idx} width="30%" height={60} style={{ borderRadius: 14 }} />
                 ))}
-              </ScrollView>
+              </View>
+            ) : slotData.length > 0 ? (
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+                {slotData.map(slot => {
+                  const isAvailable = slot.status === 'available';
+                  const isSelected = selectedSlot === slot.name;
+                  return (
+                    <TouchableOpacity
+                      key={slot.name}
+                      disabled={!isAvailable}
+                      activeOpacity={0.8}
+                      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setSelectedSlot(slot.name); }}
+                      style={{
+                        width: '30%', height: 60,
+                        backgroundColor: isSelected ? 'rgba(99,102,241,0.15)' : (isAvailable ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.01)'),
+                        borderRadius: 14, alignItems: 'center', justifyContent: 'center',
+                        borderWidth: 2, borderColor: isSelected ? '#6366f1' : (isAvailable ? 'rgba(255,255,255,0.08)' : 'transparent'),
+                        opacity: isAvailable ? 1 : 0.4
+                      }}
+                    >
+                      <Text style={{ color: isAvailable ? '#64748b' : '#475569', fontSize: 9, fontWeight: '800', marginBottom: 2 }}>SLOT</Text>
+                      <Text style={{ color: isAvailable ? '#fff' : '#475569', fontSize: 16, fontWeight: '900' }}>{slot.name.split('_').pop()}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
             ) : (
-              <View style={{ height: 160, backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 16, justifyContent: 'center', alignItems: 'center', marginBottom: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' }}>
-                <Ionicons name="image-outline" size={40} color="rgba(255,255,255,0.2)" />
-                <Text style={{ color: 'rgba(255,255,255,0.3)', fontSize: 12, marginTop: 8, fontWeight: '600' }}>No spot photos uploaded</Text>
+              <View style={{ alignItems: 'center', padding: 20, marginBottom: 16 }}>
+                <Text style={{ color: '#f43f5e', fontSize: 13, fontWeight: '700' }}>No slots available</Text>
               </View>
-            );
-          })()}
+            )}
 
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', letterSpacing: -0.5 }}>{spots.find(s => s.id === selectedSpotId)?.title}</Text>
-              <Text style={{ color: '#94a3b8', fontSize: 13, marginTop: 4, fontWeight: '500' }}>Safe & monitored area</Text>
-            </View>
-            <View style={{ flexDirection: 'row', gap: 8 }}>
-              <TouchableOpacity 
-                onPress={async () => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  try {
-                    const res = await apiClient.post(`/saved-spots/${selectedSpotId}/toggle`);
-                    Alert.alert('Saved Spots', res.data.message);
-                  } catch(e) {
-                    Alert.alert('Error', 'Failed to save spot');
-                  }
-                }} 
-                style={{ backgroundColor: 'rgba(255,255,255,0.06)', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }}
-              >
-                <Ionicons name="bookmark" size={16} color="#6366f1" />
-              </TouchableOpacity>
-              <TouchableOpacity 
-                onPress={() => setStep('nearby_list')} 
-                style={{ backgroundColor: 'rgba(255,255,255,0.06)', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }}
-              >
-                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 12 }}>Cancel</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
+            {/* Duration Selection */}
+            {selectedSlot ? (
+              <View style={{ marginBottom: 16 }}>
+                <View style={{ flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 12, padding: 3, marginBottom: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' }}>
+                  <TouchableOpacity 
+                    style={{ flex: 1, padding: 7, borderRadius: 9, backgroundColor: !isLongParking ? 'rgba(99,102,241,0.15)' : 'transparent', alignItems: 'center' }} 
+                    onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setIsLongParking(false); }}
+                  >
+                    <Text style={{ color: !isLongParking ? '#fff' : '#64748b', fontWeight: '800', fontSize: 11 }}>Custom</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={{ flex: 1, padding: 7, borderRadius: 9, backgroundColor: isLongParking ? 'rgba(99,102,241,0.15)' : 'transparent', alignItems: 'center' }} 
+                    onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setIsLongParking(true); }}
+                  >
+                    <Text style={{ color: isLongParking ? '#fff' : '#64748b', fontWeight: '800', fontSize: 11 }}>Long Stay</Text>
+                  </TouchableOpacity>
+                </View>
 
-          <View style={{ backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: 20, padding: 16, marginBottom: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.04)' }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 }}>
-              <View>
-                <Text style={{ color: '#64748b', fontWeight: '700', fontSize: 10, textTransform: 'uppercase' }}>Hourly Rate</Text>
-                <Text style={{ color: '#fff', fontWeight: '900', fontSize: 18, marginTop: 2 }}>₹{spots.find(s => s.id === selectedSpotId)?.price}<Text style={{ fontSize: 11, color: '#94a3b8', fontWeight: '500' }}> / hr</Text></Text>
+                {!isLongParking ? (
+                  <View>
+                    <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 8, textTransform: 'uppercase' }}>Hours</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
+                      {[0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 24].map(h => (
+                        <TouchableOpacity
+                          key={h}
+                          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setParkingHours(h); }}
+                          style={{ 
+                            width: 44, height: 44, 
+                            backgroundColor: parkingHours === h ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)', 
+                            borderWidth: 2, borderColor: parkingHours === h ? '#6366f1' : 'rgba(255,255,255,0.08)', 
+                            borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 6 
+                          }}
+                        >
+                          <Text style={{ color: '#fff', fontWeight: '900', fontSize: 13 }}>{h}h</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                    <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 8, textTransform: 'uppercase' }}>Minutes</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                      {[0, 15, 30, 45].map(m => (
+                        <TouchableOpacity
+                          key={m}
+                          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setParkingMinutes(m); }}
+                          style={{ 
+                            width: 48, height: 48, 
+                            backgroundColor: parkingMinutes === m ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)', 
+                            borderWidth: 2, borderColor: parkingMinutes === m ? '#6366f1' : 'rgba(255,255,255,0.08)', 
+                            borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 8 
+                          }}
+                        >
+                          <Text style={{ color: '#fff', fontWeight: '900', fontSize: 14 }}>{m}m</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  </View>
+                ) : (
+                  <View>
+                    <Text style={{ color: '#64748b', marginBottom: 8, fontSize: 10, fontWeight: '800', textTransform: 'uppercase' }}>End Date</Text>
+                    <TextInput
+                      style={{ backgroundColor: 'rgba(255,255,255,0.03)', color: '#fff', padding: 14, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', fontSize: 15, fontWeight: '600' }}
+                      placeholder="DD-MM-YYYY"
+                      placeholderTextColor="#475569"
+                      value={parkingEndDate}
+                      onChangeText={setParkingEndDate}
+                    />
+                  </View>
+                )}
               </View>
-              <View style={{ alignItems: 'flex-end' }}>
-                <Text style={{ color: '#64748b', fontWeight: '700', fontSize: 10, textTransform: 'uppercase' }}>Availability</Text>
-                <Text style={{ color: '#10b981', fontWeight: '900', fontSize: 18, marginTop: 2 }}>{spots.find(s => s.id === selectedSpotId)?.available_slots} Bay(s)</Text>
-              </View>
-            </View>
-            <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.05)', marginVertical: 8 }} />
-            <Text style={{ color: '#94a3b8', fontSize: 12, fontWeight: '500' }}>Instant check-in via OTP and 24/7 security.</Text>
-          </View>
+            ) : null}
 
-          <TouchableOpacity
-            activeOpacity={0.9}
-            style={{ 
-              backgroundColor: '#6366f1', 
-              paddingVertical: 18, borderRadius: 20, 
-              alignItems: 'center',
-            }}
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-              setStep('slot_select');
-            }}
-          >
-            <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Select Slot</Text>
-          </TouchableOpacity>
+            {/* Price + Confirm */}
+            {selectedSlot ? (
+              <View style={{ marginTop: 16 }}>
+                <View style={{ backgroundColor: 'rgba(16,185,129,0.05)', padding: 14, borderRadius: 20, marginBottom: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(16,185,129,0.1)' }}>
+                  <View>
+                    <Text style={{ color: '#10b981', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' }}>Total Price</Text>
+                    {isCalculatingPrice ? (
+                      <ActivityIndicator size="small" color="#10b981" style={{ marginTop: 4, alignSelf: 'flex-start' }} />
+                    ) : (
+                      <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', marginTop: 2 }}>
+                        ₹{calculatedPrice !== null ? calculatedPrice.toFixed(2) : (isLongParking ? '---' : ((parkingHours + (parkingMinutes / 60)) * (spots.find(s => s.id === selectedSpotId)?.price || 0)).toFixed(2))}
+                      </Text>
+                    )}
+                  </View>
+                  <View style={{ padding: 8, backgroundColor: 'rgba(16,185,129,0.1)', borderRadius: 10 }}>
+                    <Text style={{ fontSize: 18 }}>💸</Text>
+                  </View>
+                </View>
+
+                <TouchableOpacity 
+                  activeOpacity={0.9}
+                  style={{ backgroundColor: '#6366f1', paddingVertical: 16, borderRadius: 18, alignItems: 'center', marginBottom: 20 }} 
+                  onPress={() => {
+                    if (!selectedSpotId) return;
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                    handleCreateBooking('online');
+                  }}
+                >
+                  <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>
+                    {isLoading ? 'Reserving...' : 'Confirm Reservation'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+          </ScrollView>
         </View>
       )}
 
       {/* STEPS 4b onward: Map-based overlays */}
-      {!['welcome', 'vehicle_select', 'choice', 'nearby_list', 'spot_detail'].includes(step) && (
+      {!['welcome', 'vehicle_select', 'home', 'spot_booking'].includes(step) && (
         <>
-          {/* Top Search Bar */}
-          {['search'].includes(step) && !isInPip && (
-            <View style={styles.floatingSearchContainer}>
-              <View style={styles.searchBarWrapper}>
-                <Ionicons name="search" size={20} color={BlueprintColors.textSecondary} style={{ marginRight: 10 }} />
-                <TextInput
-                  style={styles.searchBar}
-                  placeholder="Search for a destination..."
-                  placeholderTextColor={BlueprintColors.textSecondary}
-                  value={searchQuery}
-                  onChangeText={setSearchQuery}
-                  onSubmitEditing={handleSearch}
-                  returnKeyType="search"
-                />
-                {searchQuery.length > 0 && (
-                  <TouchableOpacity style={styles.clearSearchBtn} onPress={() => { setSearchQuery(''); setSuggestions([]); }}>
-                    <Text style={{ color: BlueprintColors.textSecondary, fontSize: 18 }}>✕</Text>
-                  </TouchableOpacity>
-                )}
-                <TouchableOpacity onPress={handleSearch} style={{ padding: 8, marginLeft: 4, backgroundColor: '#4f46e5', borderRadius: 12, paddingHorizontal: 14 }}>
-                  <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>Search</Text>
-                </TouchableOpacity>
-                {isSearching && <ActivityIndicator size="small" color="#4f46e5" style={{ marginLeft: 10 }} />}
-              </View>
-
-              {suggestions.length > 0 && (
-                <View style={styles.suggestionsContainer}>
-                  <ScrollView style={{ maxHeight: 200 }} keyboardShouldPersistTaps="handled">
-                    {suggestions.map((item, idx) => (
-                      <TouchableOpacity 
-                        key={idx}
-                        style={styles.suggestionItem}
-                        onPress={() => selectSuggestion(item)}
-                      >
-                        <View style={styles.suggestionIconCircle}>
-                          <Text style={styles.suggestionIcon}>📍</Text>
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.suggestionTitle} numberOfLines={1}>{item.display_name?.split(',')[0] || item.display_name}</Text>
-                          <Text style={styles.suggestionSub} numberOfLines={1}>{item.display_name}</Text>
-                        </View>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                </View>
-              )}
-
-              <TouchableOpacity style={{ marginTop: 12 }} onPress={() => { setStep('choice'); setSearchQuery(''); setSearchedPlace(null); setSuggestions([]); }}>
-                <Text style={{ color: '#6366f1', fontWeight: '800', fontSize: 13 }}>Back to options</Text>
-              </TouchableOpacity>
-            </View>
-          )}
 
           {step === 'en_route' && !isInPip && (
             <>
@@ -1914,7 +1955,7 @@ export default function FinderDashboard() {
                         { text: 'Cancel', style: 'cancel' },
                         {
                           text: 'Yes, Exit', onPress: () => {
-                            setStep('nearby_list');
+                            setStep('home');
                             setSelectedSpotId(null);
                             setRouteCoords([]);
                             setSimulatedLocation(null);
@@ -1937,52 +1978,6 @@ export default function FinderDashboard() {
           {step !== 'en_route' && !isInPip && (
             <View style={[styles.bottomPanelContainer, isBottomPanelFull && { bottom: 0, left: 0, right: 0 }]}>
               <View style={[BlueprintTheme.glassCard, isBottomPanelFull && { borderRadius: 0, borderTopLeftRadius: 32, borderTopRightRadius: 32, paddingBottom: 40 }]}>
-
-                {step === 'search' && (
-                  <>
-                    <Text style={styles.panelTitle}>Available Parking Spots Near My Location</Text>
-                    <ScrollView
-                      horizontal
-                      showsHorizontalScrollIndicator={false}
-                      style={{ marginBottom: 16 }}
-                      decelerationRate="fast"
-                      snapToInterval={220} // Approximate width + margin of spotCard
-                    >
-                      {spots.length > 0 ? spots.map(spot => (
-                        <TouchableOpacity
-                          key={spot.id}
-                          activeOpacity={0.7}
-                          style={[styles.spotCard, selectedSpotId === spot.id && styles.activeSpotCard, { width: 200, marginRight: 16 }]}
-                          onPress={() => {
-                            if (!spot.available) {
-                              Alert.alert('Spot Full', 'This parking spot is currently full and cannot be booked right now.');
-                              return;
-                            }
-                            setSelectedSpotId(spot.id);
-                            fetchSlots(spot.id);
-                            setStep('spot_detail');
-                            setIsFollowing(false);
-                            if (mapRef.current) {
-                              mapRef.current.animateCamera({
-                                center: { latitude: spot.lat, longitude: spot.lng },
-                                zoom: 17
-                              }, { duration: 1000 });
-                            }
-                          }}
-                        >
-                          <Text style={styles.spotOwner} numberOfLines={1}>{spot.title}</Text>
-                          <Text style={styles.spotDetails}>₹{spot.price.toFixed(2)}/hr</Text>
-                          <Text style={[styles.statusText, { color: spot.available ? BlueprintColors.success : BlueprintColors.error }]}>
-                            {spot.available ? '● Available' : '● Full'}
-                          </Text>
-                        </TouchableOpacity>
-                      )) : (
-                        <Text style={styles.descText}>Searching for nearby spots...</Text>
-                      )}
-                    </ScrollView>
-                  </>
-                )}
-
                 {step === 'booking_confirm' && (
                   <View style={{ alignItems: 'center', paddingVertical: 10 }}>
                     <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: '#10b981', justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
@@ -2008,6 +2003,15 @@ export default function FinderDashboard() {
                         <Text selectable={true} style={{ color: '#10b981', fontSize: 32, fontWeight: '900', letterSpacing: 6 }}>{bookingDetails?.otp}</Text>
                       </View>
                     </View>
+                    {navCountdown !== null && (
+                      <View style={{ alignItems: 'center', marginBottom: 16 }}>
+                        <Text style={{ color: '#94a3b8', fontSize: 13, fontWeight: '600' }}>Starting navigation in</Text>
+                        <Text style={{ color: '#6366f1', fontSize: 36, fontWeight: '900', marginTop: 4 }}>{navCountdown}</Text>
+                        <TouchableOpacity onPress={() => setNavCountdown(null)} style={{ marginTop: 8 }}>
+                          <Text style={{ color: '#f43f5e', fontSize: 13, fontWeight: '700' }}>Cancel auto-start</Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
 
                     <TouchableOpacity 
                       activeOpacity={0.9}
@@ -2192,7 +2196,7 @@ export default function FinderDashboard() {
                           <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Base Price</Text>
                           <Text style={{ color: '#6366f1', fontSize: 18, fontWeight: '900' }}>₹{Number(bookingDetails?.basePrice || bookingDetails?.totalPrice || 0).toFixed(2)}</Text>
                         </View>
-                        {bookingDetails?.arrears > 0 && (
+                        {(bookingDetails?.arrears || 0) > 0 && (
                           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
                             <Text style={{ color: '#f43f5e', fontSize: 14, fontWeight: '800' }}>Previous Arrears</Text>
                             <Text style={{ color: '#f43f5e', fontSize: 16, fontWeight: '900' }}>₹{Number(bookingDetails?.arrears || 0).toFixed(2)}</Text>
@@ -2232,7 +2236,7 @@ export default function FinderDashboard() {
                           <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Base Price</Text>
                           <Text style={{ color: '#6366f1', fontSize: 18, fontWeight: '900' }}>₹{Number(bookingDetails?.basePrice || bookingDetails?.totalPrice || 0).toFixed(2)}</Text>
                         </View>
-                        {bookingDetails?.arrears > 0 && (
+                        {(bookingDetails?.arrears || 0) > 0 && (
                           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
                             <Text style={{ color: '#f43f5e', fontSize: 14, fontWeight: '800' }}>Previous Arrears</Text>
                             <Text style={{ color: '#f43f5e', fontSize: 16, fontWeight: '900' }}>₹{Number(bookingDetails?.arrears || 0).toFixed(2)}</Text>
@@ -2307,7 +2311,7 @@ export default function FinderDashboard() {
                       onPress={() => {
                         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
                         if (selectedPaymentMethod === 'online') {
-                          setIsUPIModalVisible(true);
+                          setShowUPIInline(!showUPIInline);
                         } else {
                           processPayment();
                         }
@@ -2317,6 +2321,46 @@ export default function FinderDashboard() {
                         {isLoading ? 'Processing...' : (selectedPaymentMethod === 'cash' ? 'Complete Checkout' : 'Proceed to Payment')}
                       </Text>
                     </TouchableOpacity>
+
+                    {showUPIInline && selectedPaymentMethod === 'online' && (
+                      <View style={{ marginTop: 16 }}>
+                        <Text style={{ color: '#94a3b8', fontSize: 11, fontWeight: '800', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 }}>Choose Payment Method</Text>
+                        {[
+                          { key: 'gpay', name: 'Google Pay', sub: 'Pay directly via GPay', color: '#1A73E8', icon: 'G' },
+                          { key: 'phonepe', name: 'PhonePe', sub: 'Instant UPI via PhonePe', color: '#5f259f', icon: 'पे' },
+                          { key: 'paytm', name: 'Paytm', sub: 'Pay using Paytm wallet/UPI', color: '#00baf2', icon: 'P' },
+                          { key: 'upi', name: 'Other UPI App', sub: 'Pay via any UPI app', color: '#16a34a', icon: 'U' },
+                        ].map(app => (
+                          <TouchableOpacity
+                            key={app.key}
+                            style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 16, padding: 14, marginBottom: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' }}
+                            onPress={() => handleUPIPayment(app.key as any)}
+                          >
+                            <View style={{ width: 40, height: 40, borderRadius: 12, backgroundColor: app.color, justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+                              <Text style={{ color: '#fff', fontWeight: '900', fontSize: 14 }}>{app.icon}</Text>
+                            </View>
+                            <View style={{ flex: 1 }}>
+                              <Text style={{ color: '#fff', fontSize: 14, fontWeight: '800' }}>{app.name}</Text>
+                              <Text style={{ color: 'rgba(255,255,255,0.3)', fontSize: 11, marginTop: 1 }}>{app.sub}</Text>
+                            </View>
+                            <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.3)" />
+                          </TouchableOpacity>
+                        ))}
+                        <TouchableOpacity
+                          style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 16, padding: 14, marginBottom: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' }}
+                          onPress={() => { setShowUPIInline(false); processPayment(); }}
+                        >
+                          <View style={{ width: 40, height: 40, borderRadius: 12, backgroundColor: '#6366f1', justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+                            <Ionicons name="card" size={20} color="#fff" />
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ color: '#fff', fontSize: 14, fontWeight: '800' }}>Debit / Credit Card</Text>
+                            <Text style={{ color: 'rgba(255,255,255,0.3)', fontSize: 11, marginTop: 1 }}>Cards, Netbanking & Wallets</Text>
+                          </View>
+                          <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.3)" />
+                        </TouchableOpacity>
+                      </View>
+                    )}
                   </View>
                 )}
 
@@ -2339,13 +2383,12 @@ export default function FinderDashboard() {
                       }} 
                       onPress={() => {
                         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                        setStep('choice');
+                        setStep('home');
                         setSelectedSpotId(null);
                         setBookingDetails(null);
-                        setVehicleType('');
-                        setVehicleSubType('');
                         setSelectedSlot('');
                         setParkingHours(1);
+                        setShowUPIInline(false);
                       }}
                     >
                       <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Back to Dashboard</Text>
@@ -2365,97 +2408,7 @@ export default function FinderDashboard() {
 
       {/* Upfront Payment Modal removed - Payment selection is now done at checkout */}
 
-      {/* 📱 UPI / ONLINE METHOD SELECTOR MODAL */}
-      <Modal visible={isUPIModalVisible} transparent animationType="slide">
-        <View style={styles.chatModalBg}>
-          <View style={[styles.chatModal, BlueprintTheme.glassCard, { height: 480, padding: 24, borderRadius: 32 }]}>
-            <View style={styles.chatHeader}>
-              <Text style={styles.chatTitle}>Choose Payment Method</Text>
-              <TouchableOpacity onPress={() => setIsUPIModalVisible(false)}>
-                <Text style={styles.chatClose}>Cancel</Text>
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={{ flex: 1, marginTop: 15 }} showsVerticalScrollIndicator={false}>
-              
-              <TouchableOpacity
-                style={styles.upiAppItem}
-                onPress={() => handleUPIPayment('gpay')}
-              >
-                <View style={[styles.upiAppIconBg, { backgroundColor: '#fff' }]}>
-                  <Image source={{ uri: 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/c1/Google_%22G%22_logo.svg/120px-Google_%22G%22_logo.svg.png' }} style={{ width: 22, height: 22 }} resizeMode="contain" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.upiAppTitle}>Google Pay</Text>
-                  <Text style={styles.upiAppSubtitle}>Pay directly via GPay app</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.3)" />
-              </TouchableOpacity>
 
-              <TouchableOpacity
-                style={styles.upiAppItem}
-                onPress={() => handleUPIPayment('phonepe')}
-              >
-                <View style={[styles.upiAppIconBg, { backgroundColor: '#5f259f' }]}>
-                  <Text style={{ color: '#fff', fontSize: 22, fontWeight: '800', includeFontPadding: false, marginTop: Platform.OS === 'android' ? -2 : 0 }}>पे</Text>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.upiAppTitle}>PhonePe</Text>
-                  <Text style={styles.upiAppSubtitle}>Instant UPI via PhonePe</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.3)" />
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.upiAppItem}
-                onPress={() => handleUPIPayment('paytm')}
-              >
-                <View style={[styles.upiAppIconBg, { backgroundColor: '#fff' }]}>
-                  <Text style={{ color: '#0f172a', fontWeight: '900', fontSize: 13, fontStyle: 'italic' }}>Pay<Text style={{ color: '#00baf2' }}>tm</Text></Text>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.upiAppTitle}>Paytm</Text>
-                  <Text style={styles.upiAppSubtitle}>Pay using Paytm wallet/UPI</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.3)" />
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.upiAppItem}
-                onPress={() => handleUPIPayment('upi')}
-              >
-                <View style={[styles.upiAppIconBg, { backgroundColor: '#fff' }]}>
-                  <Text style={{ color: '#16a34a', fontWeight: '900', fontSize: 13, fontStyle: 'italic', letterSpacing: 1 }}>UPI</Text>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.upiAppTitle}>Other UPI App</Text>
-                  <Text style={styles.upiAppSubtitle}>Pay via any installed UPI app</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.3)" />
-              </TouchableOpacity>
-
-              <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.05)', marginVertical: 15 }} />
-
-              <TouchableOpacity
-                style={styles.upiAppItem}
-                onPress={() => {
-                  setIsUPIModalVisible(false);
-                  processPayment();
-                }}
-              >
-                <View style={[styles.upiAppIconBg, { backgroundColor: '#6366f1' }]}>
-                  <Ionicons name="card" size={22} color="#fff" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.upiAppTitle}>Debit / Credit Card</Text>
-                  <Text style={styles.upiAppSubtitle}>Cards, Netbanking & Wallets</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.3)" />
-              </TouchableOpacity>
-
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
 
       {/* 📱 MOCK SIMULATOR MODAL */}
       <Modal visible={!!mockSimulatorApp} transparent animationType="slide">
@@ -2624,243 +2577,7 @@ export default function FinderDashboard() {
         </View>
       </Modal>
 
-      {step === 'slot_select' && (
-        <SafeAreaView style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#0f172a', zIndex: 9999 }} edges={['top']}>
-          <LinearGradient colors={['#1e1b4b', '#0f172a']} style={{ padding: 20, paddingTop: Platform.OS === 'ios' ? 20 : 12, borderBottomLeftRadius: 32, borderBottomRightRadius: 32, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 15, elevation: 10, marginBottom: 20 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-              <TouchableOpacity 
-                onPress={() => setStep('spot_detail')} 
-                style={{ 
-                  backgroundColor: 'rgba(255,255,255,0.08)', 
-                  width: 44, height: 44, borderRadius: 22, 
-                  alignItems: 'center', justifyContent: 'center',
-                  marginRight: 16
-                }}>
-                <Ionicons name="arrow-back" size={24} color="#fff" />
-              </TouchableOpacity>
-              <View>
-                <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900', letterSpacing: -0.5 }}>
-                  Select a Slot
-                </Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
-                  <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#10b981', marginRight: 6 }} />
-                  <Text style={{ color: '#94a3b8', fontSize: 12, fontWeight: '700' }}>Pick your preferred location</Text>
-                </View>
-              </View>
-            </View>
-          </LinearGradient>
 
-          <View style={{ flex: 1, paddingHorizontal: 20 }}>
-
-          {isSlotLoading ? (
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 20, justifyContent: 'center' }}>
-              {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(idx => (
-                <SkeletonCard key={idx} width="31%" height={74} style={{ borderRadius: 16 }} />
-              ))}
-            </View>
-          ) : slotData.length > 0 ? (
-            <ScrollView showsVerticalScrollIndicator={false}>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 20, justifyContent: 'center' }}>
-                {slotData.map(slot => {
-                  const isAvailable = slot.status === 'available';
-                  const isSelected = selectedSlot === slot.name;
-                  
-                  return (
-                    <TouchableOpacity
-                      key={slot.name}
-                      disabled={!isAvailable}
-                      activeOpacity={0.8}
-                      onPress={() => {
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                        setSelectedSlot(slot.name);
-                      }}
-                      style={{
-                        width: '31%', height: 74,
-                        backgroundColor: isSelected ? 'rgba(99,102,241,0.15)' : (isAvailable ? 'rgba(255,255,255,0.03)' : 'rgba(255,255,255,0.01)'),
-                        borderRadius: 16, alignItems: 'center', justifyContent: 'center',
-                        borderWidth: 2, borderColor: isSelected ? '#6366f1' : (isAvailable ? 'rgba(255,255,255,0.08)' : 'transparent'),
-                        opacity: isAvailable ? 1 : 0.4
-                      }}
-                    >
-                      <Text style={{ color: isAvailable ? '#64748b' : '#475569', fontSize: 9, fontWeight: '800', marginBottom: 2 }}>SLOT</Text>
-                      <Text style={{ color: isAvailable ? '#fff' : '#475569', fontSize: 18, fontWeight: '900' }}>{slot.name.split('_').pop()}</Text>
-                      {isSelected && <View style={{ position: 'absolute', top: 5, right: 5, width: 5, height: 5, borderRadius: 2.5, backgroundColor: '#6366f1' }} />}
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </ScrollView>
-          ) : (
-            <View style={{ alignItems: 'center', padding: 30 }}>
-              <Text style={{ color: '#f43f5e', fontSize: 14, fontWeight: '700' }}>No slots found.</Text>
-            </View>
-          )}
-
-          {slotData.length > 0 && !slotData.some(slot => slot.status === 'available') && (
-            <View style={{ alignItems: 'center', padding: 10, marginBottom: 10 }}>
-              <Text style={{ color: '#f43f5e', fontSize: 14, fontWeight: '700' }}>All slots are currently full.</Text>
-            </View>
-          )}
-
-          {selectedSlot && (
-            <TouchableOpacity 
-              activeOpacity={0.9}
-              style={{ 
-                backgroundColor: '#6366f1', 
-                paddingVertical: 16, borderRadius: 16, 
-                alignItems: 'center', marginBottom: 24,
-              }}
-              onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                setStep('time_select');
-              }}
-            >
-              <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Continue</Text>
-            </TouchableOpacity>
-          )}
-          </View>
-        </SafeAreaView>
-      )}
-
-      {step === 'time_select' && (
-        <SafeAreaView style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#0f172a', zIndex: 9999 }} edges={['top']}>
-          <LinearGradient colors={['#1e1b4b', '#0f172a']} style={{ padding: 20, paddingTop: Platform.OS === 'ios' ? 20 : 12, borderBottomLeftRadius: 32, borderBottomRightRadius: 32, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 15, elevation: 10, marginBottom: 20 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
-              <TouchableOpacity 
-                onPress={() => setStep('slot_select')} 
-                style={{ 
-                  backgroundColor: 'rgba(255,255,255,0.08)', 
-                  width: 44, height: 44, borderRadius: 22, 
-                  alignItems: 'center', justifyContent: 'center',
-                  marginRight: 16
-                }}>
-                <Ionicons name="arrow-back" size={24} color="#fff" />
-              </TouchableOpacity>
-              <View>
-                <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900', letterSpacing: -0.5 }}>
-                  Select Duration
-                </Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
-                  <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#10b981', marginRight: 6 }} />
-                  <Text style={{ color: '#94a3b8', fontSize: 12, fontWeight: '700' }}>
-                    Slot {selectedSlot?.split('_').pop()} • ₹{spots.find(s => s.id === selectedSpotId)?.price || 0}/hr
-                  </Text>
-                </View>
-              </View>
-            </View>
-          </LinearGradient>
-
-          <View style={{ flex: 1, paddingHorizontal: 20 }}>
-
-          <View style={{ flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 14, padding: 4, marginBottom: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' }}>
-            <TouchableOpacity 
-              style={{ flex: 1, padding: 8, borderRadius: 10, backgroundColor: !isLongParking ? 'rgba(99,102,241,0.15)' : 'transparent', alignItems: 'center' }} 
-              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setIsLongParking(false); }}
-            >
-              <Text style={{ color: !isLongParking ? '#fff' : '#64748b', fontWeight: '800', fontSize: 12 }}>Custom</Text>
-            </TouchableOpacity>
-            <TouchableOpacity 
-              style={{ flex: 1, padding: 8, borderRadius: 10, backgroundColor: isLongParking ? 'rgba(99,102,241,0.15)' : 'transparent', alignItems: 'center' }} 
-              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setIsLongParking(true); }}
-            >
-              <Text style={{ color: isLongParking ? '#fff' : '#64748b', fontWeight: '800', fontSize: 12 }}>Long Stay</Text>
-            </TouchableOpacity>
-          </View>
-
-          {!isLongParking ? (
-            <View style={{ marginBottom: 20 }}>
-              <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 10, textTransform: 'uppercase' }}>Hours</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 20 }}>
-                {[0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 24].map(h => (
-                  <TouchableOpacity
-                    key={h}
-                    onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setParkingHours(h); }}
-                    style={{ 
-                      width: 52, height: 52, 
-                      backgroundColor: parkingHours === h ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)', 
-                      borderWidth: 2, borderColor: parkingHours === h ? '#6366f1' : 'rgba(255,255,255,0.08)', 
-                      borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginRight: 8 
-                    }}
-                  >
-                    <Text style={{ color: '#fff', fontWeight: '900', fontSize: 15 }}>{h}h</Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-
-              <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 10, textTransform: 'uppercase' }}>Minutes</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                {[0, 15, 30, 45].map(m => (
-                  <TouchableOpacity
-                    key={m}
-                    onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setParkingMinutes(m); }}
-                    style={{ 
-                      width: 58, height: 58, 
-                      backgroundColor: parkingMinutes === m ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)', 
-                      borderWidth: 2, borderColor: parkingMinutes === m ? '#6366f1' : 'rgba(255,255,255,0.08)', 
-                      borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginRight: 10 
-                    }}
-                  >
-                    <Text style={{ color: '#fff', fontWeight: '900', fontSize: 16 }}>{m}m</Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
-          ) : (
-            <View style={{ marginBottom: 24 }}>
-              <Text style={{ color: '#64748b', marginBottom: 10, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>End Date</Text>
-              <TextInput
-                style={{ backgroundColor: 'rgba(255,255,255,0.03)', color: '#fff', padding: 18, borderRadius: 20, borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.08)', fontSize: 16, fontWeight: '600' }}
-                placeholder="DD-MM-YYYY"
-                placeholderTextColor="#475569"
-                value={parkingEndDate}
-                onChangeText={setParkingEndDate}
-              />
-            </View>
-          )}
-
-          <View style={{ backgroundColor: 'rgba(16,185,129,0.05)', padding: 18, borderRadius: 24, marginBottom: 24, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(16,185,129,0.1)' }}>
-            <View>
-              <Text style={{ color: '#10b981', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' }}>Total Price (Dynamic)</Text>
-              {isCalculatingPrice ? (
-                <ActivityIndicator size="small" color="#10b981" style={{ marginTop: 6, alignSelf: 'flex-start' }} />
-              ) : (
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  <Text style={{ color: '#fff', fontSize: 24, fontWeight: '900', marginTop: 2 }}>
-                    ₹{calculatedPrice !== null ? calculatedPrice.toFixed(2) : (isLongParking ? '---' : ((parkingHours + (parkingMinutes / 60)) * (spots.find(s => s.id === selectedSpotId)?.price || 0)).toFixed(2))}
-                  </Text>
-                  {calculatedPrice !== null && calculatedPrice > ((parkingHours + (parkingMinutes / 60)) * (spots.find(s => s.id === selectedSpotId)?.price || 0)) && (
-                    <View style={{ marginLeft: 10, backgroundColor: 'rgba(239,68,68,0.2)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
-                      <Text style={{ color: '#ef4444', fontSize: 10, fontWeight: '800' }}>⚡ SURGE</Text>
-                    </View>
-                  )}
-                </View>
-              )}
-            </View>
-            <View style={{ padding: 10, backgroundColor: 'rgba(16,185,129,0.1)', borderRadius: 12 }}>
-              <Text style={{ fontSize: 20 }}>💸</Text>
-            </View>
-          </View>
-
-          <TouchableOpacity 
-            activeOpacity={0.9}
-            style={{ 
-              backgroundColor: '#6366f1', 
-              paddingVertical: 18, borderRadius: 20, 
-              alignItems: 'center', marginTop: 'auto', marginBottom: 30,
-            }} 
-            onPress={() => {
-              if (!selectedSpotId) return;
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-              handleCreateBooking('online');
-            }}
-          >
-            <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900' }}>
-              {isLoading ? 'Reserving...' : 'Confirm Reservation'}
-            </Text>
-          </TouchableOpacity>
-          </View>
-        </SafeAreaView>
-      )}
 
     </SafeAreaView>
   );

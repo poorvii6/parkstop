@@ -23,7 +23,7 @@ export default function SpotterTabsLayout() {
 
   if (checkingAuth) {
     return (
-      <View style={{ flex: 1, backgroundColor: SC.bgApp, justifyContent: 'center', alignItems: 'center' }}>
+      <View style={{ flex: 1, backgroundColor: SC.bg, justifyContent: 'center', alignItems: 'center' }}>
         <ActivityIndicator color={SC.accent} size="large" />
       </View>
     );

@@ -264,7 +264,7 @@ export default function VerifyScreen() {
                 Booking #{checkoutData.booking_id}
               </Text>
               
-              <View style={{ width: '100%', backgroundColor: SC.bgApp, padding: SP.md, borderRadius: RAD.sm, marginBottom: SP.lg }}>
+              <View style={{ width: '100%', backgroundColor: SC.bg, padding: SP.md, borderRadius: RAD.sm, marginBottom: SP.lg }}>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                   <Text style={{ color: SC.textSecondary }}>Base Fare</Text>
                   <Text style={{ color: SC.textPrimary }}>₹{checkoutData.base_price}</Text>
