@@ -1402,7 +1402,7 @@ export default function FinderDashboard() {
       {step === 'home' && (
         <View style={{ flex: 1, backgroundColor: '#0f172a' }}>
           {/* Search Bar */}
-          <View style={{ position: 'absolute', top: Platform.OS === 'ios' ? 20 : 12, left: 16, right: 60, zIndex: 100 }}>
+          <View style={{ position: 'absolute', top: Platform.OS === 'ios' ? 20 : 12, left: 16, right: 16, zIndex: 100 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#1E293B', borderRadius: 20, paddingHorizontal: 16, height: 52, borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.15)', shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 15, elevation: 12 }}>
               <Ionicons name="search" size={18} color="#94a3b8" style={{ marginRight: 10 }} />
               <TextInput
