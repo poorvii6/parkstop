@@ -103,6 +103,7 @@ export default function FinderDashboard() {
   const [selectedSlot, setSelectedSlot] = useState<string>('');
   const [parkingHours, setParkingHours] = useState<number>(1);
   const [parkingMinutes, setParkingMinutes] = useState<number>(0);
+  const [isManualDuration, setIsManualDuration] = useState(false);
   const [isLongParking, setIsLongParking] = useState(false);
   const [parkingEndDate, setParkingEndDate] = useState<string>('');
   const [calculatedPrice, setCalculatedPrice] = useState<number | null>(null);
@@ -1780,34 +1781,93 @@ export default function FinderDashboard() {
 
                 {!isLongParking ? (
                   <View style={{ marginBottom: 16 }}>
-                    <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 8, textTransform: 'uppercase' }}>Hours</Text>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
-                      {[0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 24].map(h => (
-                        <TouchableOpacity
-                          key={h}
-                          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setParkingHours(h); }}
-                          style={{ 
-                            width: 44, height: 44, 
-                            backgroundColor: parkingHours === h ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)', 
-                            borderWidth: 2, borderColor: parkingHours === h ? '#6366f1' : 'rgba(255,255,255,0.08)', 
-                            borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 6 
-                          }}
-                        >
-                          <Text style={{ color: '#fff', fontWeight: '900', fontSize: 13 }}>{h}h</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
-                    <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 8, textTransform: 'uppercase' }}>Minutes</Text>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                      {[0, 15, 30, 45].map(m => (
-                        <TouchableOpacity
-                          key={m}
-                          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setParkingMinutes(m); }}
-                          style={{ 
-                            width: 48, height: 48, 
-                            backgroundColor: parkingMinutes === m ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)', 
-                            borderWidth: 2, borderColor: parkingMinutes === m ? '#6366f1' : 'rgba(255,255,255,0.08)', 
-                            borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 8 
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                      <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', textTransform: 'uppercase' }}>
+                        {isManualDuration ? 'Type duration' : 'Select duration'}
+                      </Text>
+                      <TouchableOpacity 
+                        onPress={() => {
+                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                          setIsManualDuration(!isManualDuration);
+                        }}
+                      >
+                        <Text style={{ color: '#6366f1', fontSize: 10, fontWeight: '800' }}>
+                          {isManualDuration ? 'Use List 📋' : 'Type manually ✏️'}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    {isManualDuration ? (
+                      <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center', marginTop: 4 }}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ color: 'rgba(255,255,255,0.4)', fontSize: 9, fontWeight: '800', marginBottom: 4, textTransform: 'uppercase' }}>Hours</Text>
+                          <TextInput
+                            style={{ 
+                              backgroundColor: 'rgba(255,255,255,0.03)', color: '#fff', 
+                              paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, 
+                              borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.08)',
+                              fontSize: 14, fontWeight: '800', textAlign: 'center' 
+                            }}
+                            keyboardType="numeric"
+                            value={parkingHours.toString()}
+                            onChangeText={(val) => {
+                              const hrs = parseInt(val, 10);
+                              setParkingHours(isNaN(hrs) ? 0 : hrs);
+                            }}
+                            placeholder="0"
+                            placeholderTextColor="rgba(255,255,255,0.15)"
+                          />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ color: 'rgba(255,255,255,0.4)', fontSize: 9, fontWeight: '800', marginBottom: 4, textTransform: 'uppercase' }}>Minutes</Text>
+                          <TextInput
+                            style={{ 
+                              backgroundColor: 'rgba(255,255,255,0.03)', color: '#fff', 
+                              paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, 
+                              borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.08)',
+                              fontSize: 14, fontWeight: '800', textAlign: 'center' 
+                            }}
+                            keyboardType="numeric"
+                            value={parkingMinutes.toString()}
+                            onChangeText={(val) => {
+                              const mins = parseInt(val, 10);
+                              setParkingMinutes(isNaN(mins) ? 0 : mins);
+                            }}
+                            placeholder="0"
+                            placeholderTextColor="rgba(255,255,255,0.15)"
+                          />
+                        </View>
+                      </View>
+                    ) : (
+                      <View>
+                        <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 8, textTransform: 'uppercase' }}>Hours</Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
+                          {[0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 24].map(h => (
+                            <TouchableOpacity
+                              key={h}
+                              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setParkingHours(h); }}
+                              style={{ 
+                                width: 44, height: 44, 
+                                backgroundColor: parkingHours === h ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)', 
+                                borderWidth: 2, borderColor: parkingHours === h ? '#6366f1' : 'rgba(255,255,255,0.08)', 
+                                borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 6 
+                              }}
+                            >
+                              <Text style={{ color: '#fff', fontWeight: '900', fontSize: 13 }}>{h}h</Text>
+                            </TouchableOpacity>
+                          ))}
+                        </ScrollView>
+                        <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 8, textTransform: 'uppercase' }}>Minutes</Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                          {[0, 15, 30, 45].map(m => (
+                            <TouchableOpacity
+                              key={m}
+                              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setParkingMinutes(m); }}
+                              style={{ 
+                                width: 48, height: 48, 
+                                backgroundColor: parkingMinutes === m ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)', 
+                                borderWidth: 2, borderColor: parkingMinutes === m ? '#6366f1' : 'rgba(255,255,255,0.08)', 
+                                borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 8 
                           }}
                         >
                           <Text style={{ color: '#fff', fontWeight: '900', fontSize: 14 }}>{m}m</Text>
@@ -1815,18 +1875,20 @@ export default function FinderDashboard() {
                       ))}
                     </ScrollView>
                   </View>
-                ) : (
-                  <View style={{ marginBottom: 16 }}>
-                    <Text style={{ color: '#64748b', marginBottom: 8, fontSize: 10, fontWeight: '800', textTransform: 'uppercase' }}>End Date</Text>
-                    <TextInput
-                      style={{ backgroundColor: 'rgba(255,255,255,0.03)', color: '#fff', padding: 14, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', fontSize: 15, fontWeight: '600' }}
-                      placeholder="DD-MM-YYYY"
-                      placeholderTextColor="#475569"
-                      value={parkingEndDate}
-                      onChangeText={setParkingEndDate}
-                    />
-                  </View>
                 )}
+              </View>
+            ) : (
+              <View style={{ marginBottom: 16 }}>
+                <Text style={{ color: '#64748b', marginBottom: 8, fontSize: 10, fontWeight: '800', textTransform: 'uppercase' }}>End Date</Text>
+                <TextInput
+                  style={{ backgroundColor: 'rgba(255,255,255,0.03)', color: '#fff', padding: 14, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', fontSize: 15, fontWeight: '600' }}
+                  placeholder="DD-MM-YYYY"
+                  placeholderTextColor="#475569"
+                  value={parkingEndDate}
+                  onChangeText={setParkingEndDate}
+                />
+              </View>
+            )}
 
                 {/* Car Category Option while confirming */}
                 {vehicleType === 'car' && (
