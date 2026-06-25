@@ -79,7 +79,8 @@ export default function ProfileModal() {
   };
 
   const handleBack = () => {
-    if (screen === 'profile') {
+    const isFinder = (profile?.role || '').toUpperCase() === 'FINDER';
+    if (screen === 'profile' || isFinder) {
       if (router.canDismiss()) {
         router.dismiss();
       } else {

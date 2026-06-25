@@ -1302,15 +1302,7 @@ export default function FinderDashboard() {
   return (
     <SafeAreaView style={[BlueprintTheme.container, { backgroundColor: '#000' }]} edges={['top']}>
       
-      {/* FLOATING PROFILE ACCESS */}
-      {['home', 'vehicle_select'].includes(step) && (
-        <TouchableOpacity 
-          style={styles.floatingProfileBtn} 
-          onPress={() => router.push('/modal')}
-        >
-          <Ionicons name="person-circle" size={40} color="rgba(255,255,255,0.3)" />
-        </TouchableOpacity>
-      )}
+
 
       {/* STARTING DIRECTLY AT VEHICLE SELECTION */}
 
