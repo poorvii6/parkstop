@@ -333,14 +333,51 @@ class AuthController {
    */
   static async switchRole(req, res) {
     try {
-      const { newRole } = req.body;
+      const { newRole, registrationDetails } = req.body;
       if (!['finder', 'spotter'].includes(newRole)) {
         return res.status(400).json({ success: false, message: 'Invalid role' });
       }
 
+      const user = await prisma.users.findUnique({
+        where: { id: req.user.id }
+      });
+
+      if (!user) {
+        return res.status(404).json({ success: false, message: 'User not found' });
+      }
+
+      const isRegistered = newRole === 'finder' ? user.is_finder_registered : user.is_spotter_registered;
+
+      if (!isRegistered && !registrationDetails) {
+        return res.json({
+          success: false,
+          registrationRequired: true,
+          message: `${newRole.charAt(0).toUpperCase() + newRole.slice(1)} registration is required.`
+        });
+      }
+
+      const updateData = { role: newRole };
+      if (newRole === 'finder') {
+        updateData.is_finder_registered = true;
+      } else {
+        updateData.is_spotter_registered = true;
+      }
+
+      if (registrationDetails) {
+        const { address, dob, phone, upi_id, bank_account_number, bank_ifsc, bank_account_name, payout_mode } = registrationDetails;
+        if (address) updateData.address = address;
+        if (dob) updateData.dob = dob;
+        if (phone) updateData.phone = phone;
+        if (upi_id) updateData.upi_id = upi_id;
+        if (bank_account_number) updateData.bank_account_number = bank_account_number;
+        if (bank_ifsc) updateData.bank_ifsc = bank_ifsc;
+        if (bank_account_name) updateData.bank_account_name = bank_account_name;
+        if (payout_mode) updateData.payout_mode = payout_mode;
+      }
+
       const updatedUser = await prisma.users.update({
         where: { id: req.user.id },
-        data: { role: newRole }
+        data: updateData
       });
 
       // Generate a new token with the updated role

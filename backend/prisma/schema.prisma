@@ -131,6 +131,8 @@ model users {
   razorpay_contact_id       String?           @db.VarChar(50)
   razorpay_fund_account_id  String?           @db.VarChar(50)
   payout_mode               String?           @default("upi") @db.VarChar(20)
+  is_finder_registered      Boolean           @default(true)
+  is_spotter_registered     Boolean           @default(false)
 
   bookings              bookings[]
   locations             locations[]

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, TextInput, Switch, Alert, Platform, Modal } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, TextInput, Switch, Alert, Platform, Modal, KeyboardAvoidingView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons, FontAwesome5 } from '@expo/vector-icons';
@@ -38,6 +38,18 @@ export default function ProfileModal() {
   const [savedSpots, setSavedSpots] = useState<any[]>([]);
   const [recentBookings, setRecentBookings] = useState<any[]>([]);
   const [selectedBookingForReceipt, setSelectedBookingForReceipt] = useState<any>(null);
+
+  // Role switching registration states
+  const [showRoleRegModal, setShowRoleRegModal] = useState(false);
+  const [regAddress, setRegAddress] = useState('');
+  const [regDob, setRegDob] = useState('');
+  const [regPhone, setRegPhone] = useState('');
+  const [regPayoutMode, setRegPayoutMode] = useState<'upi' | 'bank'>('upi');
+  const [regUpiId, setRegUpiId] = useState('');
+  const [regBankAccountNo, setRegBankAccountNo] = useState('');
+  const [regBankIfsc, setRegBankIfsc] = useState('');
+  const [regBankAccountName, setRegBankAccountName] = useState('');
+  const [regSubmitting, setRegSubmitting] = useState(false);
 
   useEffect(() => { fetchProfile(); }, []);
 
@@ -110,6 +122,31 @@ export default function ProfileModal() {
   const handleSwitchRole = async () => {
     const currentRole = (profile?.role || '').toLowerCase();
     const newRole = currentRole === 'spotter' ? 'finder' : 'spotter';
+
+    // Handle offline guest mode
+    const token = await AsyncStorage.getItem('access_token');
+    if (token === 'offline_token') {
+      const nextRole = newRole.toUpperCase();
+      await AsyncStorage.setItem('user_role', nextRole);
+      router.replace(nextRole === 'FINDER' ? '/finder' : '/spotter');
+      return;
+    }
+
+    const isRegistered = newRole === 'finder' ? profile?.is_finder_registered : profile?.is_spotter_registered;
+
+    if (!isRegistered) {
+      setRegPhone(profile?.phone || '');
+      setRegAddress(profile?.address || '');
+      setRegDob(profile?.dob || '');
+      setRegUpiId(profile?.upi_id || '');
+      setRegBankAccountNo(profile?.bank_account_number || '');
+      setRegBankIfsc(profile?.bank_ifsc || '');
+      setRegBankAccountName(profile?.bank_account_name || profile?.full_name || '');
+      setRegPayoutMode(profile?.payout_mode || 'upi');
+      setShowRoleRegModal(true);
+      return;
+    }
+
     Alert.alert('Switch Role', `Switch to ${newRole.charAt(0).toUpperCase() + newRole.slice(1)} mode?`, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Switch', onPress: async () => {
@@ -123,6 +160,54 @@ export default function ProfileModal() {
         } catch (e: any) { Alert.alert('Error', e.response?.data?.message || 'Failed to switch role.'); }
       }},
     ]);
+  };
+
+  const handleRoleRegistrationSubmit = async () => {
+    const currentRole = (profile?.role || '').toLowerCase();
+    const newRole = currentRole === 'spotter' ? 'finder' : 'spotter';
+
+    if (newRole === 'spotter') {
+      if (!regAddress || !regDob || !regPhone) {
+        return Alert.alert('Oops', 'Please fill in address, DOB, and phone number.');
+      }
+      if (regPayoutMode === 'upi' && !regUpiId) {
+        return Alert.alert('Oops', 'Please enter your UPI ID.');
+      }
+      if (regPayoutMode === 'bank' && (!regBankAccountNo || !regBankIfsc || !regBankAccountName)) {
+        return Alert.alert('Oops', 'Please fill in all bank details.');
+      }
+    }
+
+    setRegSubmitting(true);
+    try {
+      const regDetails = {
+        address: regAddress,
+        dob: regDob,
+        phone: regPhone,
+        payout_mode: regPayoutMode,
+        upi_id: regPayoutMode === 'upi' ? regUpiId : null,
+        bank_account_number: regPayoutMode === 'bank' ? regBankAccountNo : null,
+        bank_ifsc: regPayoutMode === 'bank' ? regBankIfsc : null,
+        bank_account_name: regPayoutMode === 'bank' ? regBankAccountName : null,
+      };
+
+      const res = await apiClient.post('/auth/switch-role', {
+        newRole,
+        registrationDetails: regDetails
+      });
+
+      if (res.data.success) {
+        await AsyncStorage.setItem('access_token', res.data.data.access_token);
+        await AsyncStorage.setItem('user_role', res.data.data.role.toUpperCase());
+        setShowRoleRegModal(false);
+        Alert.alert('🎉 Registered', `You have registered as a ${newRole} and switched modes!`);
+        router.replace(newRole === 'finder' ? '/finder' : '/spotter');
+      }
+    } catch (e: any) {
+      Alert.alert('Error', e.response?.data?.message || 'Failed to complete registration and switch.');
+    } finally {
+      setRegSubmitting(false);
+    }
   };
 
   if (loading) {
@@ -557,6 +642,179 @@ export default function ProfileModal() {
               <Text style={{ color: C.error, fontWeight: '800' }}>Close Receipt</Text>
             </TouchableOpacity>
           </View>
+        </View>
+      </Modal>
+
+      {/* 🛡️ ROLE REGISTRATION MODAL */}
+      <Modal
+        visible={showRoleRegModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowRoleRegModal(false)}
+      >
+        <View style={st.modalOverlay}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={{ width: '100%' }}
+          >
+            <View style={[st.modalContent, { maxHeight: '90%' }]}>
+              <View style={st.receiptHeader}>
+                <View style={st.receiptAvatar}>
+                  <Ionicons name="card" size={32} color={C.accent} />
+                </View>
+                <Text style={st.receiptTitle}>Spotter Registration</Text>
+                <Text style={st.receiptSub}>Complete your payout profile to list spots</Text>
+              </View>
+
+              <ScrollView showsVerticalScrollIndicator={false} style={{ marginVertical: 15 }}>
+                {/* Basic Details */}
+                <Text style={st.formSection}>Basic Details</Text>
+                <View style={{ marginBottom: 12 }}>
+                  <Text style={st.inputLabel}>Phone Number</Text>
+                  <View style={st.inputBox}>
+                    <Ionicons name="call" size={16} color={C.textMut} style={{ marginRight: 10 }} />
+                    <TextInput
+                      style={{ flex: 1, color: '#FFF', fontSize: 14, fontWeight: '600' }}
+                      value={regPhone}
+                      onChangeText={setRegPhone}
+                      placeholder="+1 234 567 890"
+                      placeholderTextColor={C.textDis}
+                      keyboardType="phone-pad"
+                    />
+                  </View>
+                </View>
+
+                <View style={{ marginBottom: 12 }}>
+                  <Text style={st.inputLabel}>Residential Address</Text>
+                  <View style={st.inputBox}>
+                    <Ionicons name="home" size={16} color={C.textMut} style={{ marginRight: 10 }} />
+                    <TextInput
+                      style={{ flex: 1, color: '#FFF', fontSize: 14, fontWeight: '600' }}
+                      value={regAddress}
+                      onChangeText={setRegAddress}
+                      placeholder="123 Main St, City"
+                      placeholderTextColor={C.textDis}
+                    />
+                  </View>
+                </View>
+
+                <View style={{ marginBottom: 16 }}>
+                  <Text style={st.inputLabel}>Date of Birth</Text>
+                  <View style={st.inputBox}>
+                    <Ionicons name="calendar" size={16} color={C.textMut} style={{ marginRight: 10 }} />
+                    <TextInput
+                      style={{ flex: 1, color: '#FFF', fontSize: 14, fontWeight: '600' }}
+                      value={regDob}
+                      onChangeText={setRegDob}
+                      placeholder="DD/MM/YYYY"
+                      placeholderTextColor={C.textDis}
+                    />
+                  </View>
+                </View>
+
+                {/* Payout Details */}
+                <Text style={st.formSection}>Payout Preference</Text>
+                <View style={{ flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 12, padding: 4, marginBottom: 16, borderWidth: 1, borderColor: C.border }}>
+                  <TouchableOpacity
+                    style={{ flex: 1, paddingVertical: 10, borderRadius: 9, backgroundColor: regPayoutMode === 'upi' ? C.accent : 'transparent', alignItems: 'center' }}
+                    onPress={() => setRegPayoutMode('upi')}
+                  >
+                    <Text style={{ color: '#FFF', fontWeight: '800', fontSize: 13 }}>UPI Transfer</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={{ flex: 1, paddingVertical: 10, borderRadius: 9, backgroundColor: regPayoutMode === 'bank' ? C.accent : 'transparent', alignItems: 'center' }}
+                    onPress={() => setRegPayoutMode('bank')}
+                  >
+                    <Text style={{ color: '#FFF', fontWeight: '800', fontSize: 13 }}>Bank Account</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {regPayoutMode === 'upi' ? (
+                  <View style={{ marginBottom: 12 }}>
+                    <Text style={st.inputLabel}>UPI ID (VPA)</Text>
+                    <View style={st.inputBox}>
+                      <Ionicons name="phone-portrait-outline" size={16} color={C.textMut} style={{ marginRight: 10 }} />
+                      <TextInput
+                        style={{ flex: 1, color: '#FFF', fontSize: 14, fontWeight: '600' }}
+                        value={regUpiId}
+                        onChangeText={setRegUpiId}
+                        placeholder="username@upi"
+                        placeholderTextColor={C.textDis}
+                        autoCapitalize="none"
+                      />
+                    </View>
+                  </View>
+                ) : (
+                  <View style={{ gap: 12 }}>
+                    <View>
+                      <Text style={st.inputLabel}>Bank Account Name</Text>
+                      <View style={st.inputBox}>
+                        <Ionicons name="person" size={16} color={C.textMut} style={{ marginRight: 10 }} />
+                        <TextInput
+                          style={{ flex: 1, color: '#FFF', fontSize: 14, fontWeight: '600' }}
+                          value={regBankAccountName}
+                          onChangeText={setRegBankAccountName}
+                          placeholder="John Doe"
+                          placeholderTextColor={C.textDis}
+                        />
+                      </View>
+                    </View>
+
+                    <View>
+                      <Text style={st.inputLabel}>Bank Account Number</Text>
+                      <View style={st.inputBox}>
+                        <Ionicons name="list" size={16} color={C.textMut} style={{ marginRight: 10 }} />
+                        <TextInput
+                          style={{ flex: 1, color: '#FFF', fontSize: 14, fontWeight: '600' }}
+                          value={regBankAccountNo}
+                          onChangeText={setRegBankAccountNo}
+                          placeholder="1234567890"
+                          placeholderTextColor={C.textDis}
+                          keyboardType="numeric"
+                        />
+                      </View>
+                    </View>
+
+                    <View>
+                      <Text style={st.inputLabel}>Bank IFSC Code</Text>
+                      <View style={st.inputBox}>
+                        <Ionicons name="barcode" size={16} color={C.textMut} style={{ marginRight: 10 }} />
+                        <TextInput
+                          style={{ flex: 1, color: '#FFF', fontSize: 14, fontWeight: '600' }}
+                          value={regBankIfsc}
+                          onChangeText={setRegBankIfsc}
+                          placeholder="HDFC0001234"
+                          placeholderTextColor={C.textDis}
+                          autoCapitalize="characters"
+                        />
+                      </View>
+                    </View>
+                  </View>
+                )}
+              </ScrollView>
+
+              <View style={{ flexDirection: 'row', gap: 12, marginTop: 10 }}>
+                <TouchableOpacity
+                  style={[st.signOutBtn, { flex: 1, marginTop: 0, backgroundColor: 'rgba(255,255,255,0.05)', borderColor: C.border }]}
+                  onPress={() => setShowRoleRegModal(false)}
+                >
+                  <Text style={{ color: '#FFF', fontWeight: '800' }}>Cancel</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[st.submitBtn, { flex: 1, marginTop: 0, height: 54, justifyContent: 'center' }]}
+                  onPress={handleRoleRegistrationSubmit}
+                  disabled={regSubmitting}
+                >
+                  {regSubmitting ? (
+                    <ActivityIndicator color="#FFF" size="small" />
+                  ) : (
+                    <Text style={st.submitBtnText}>Register & Switch</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </KeyboardAvoidingView>
         </View>
       </Modal>
     </View>

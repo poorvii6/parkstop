@@ -15,7 +15,9 @@ class User {
           full_name: name,
           name: name, // Maintain both for compatibility
           phone,
-          role
+          role,
+          is_finder_registered: role === 'finder',
+          is_spotter_registered: role === 'spotter'
         },
         select: {
           id: true,
@@ -60,6 +62,8 @@ class User {
         bank_ifsc: true,
         bank_account_name: true,
         payout_mode: true,
+        is_finder_registered: true,
+        is_spotter_registered: true,
         balance: true
       }
     });
@@ -72,7 +76,7 @@ class User {
   }
 
   static async update(id, updates) {
-    const { name, phone, address, dob, upi_id, bank_account_number, bank_ifsc, bank_account_name, payout_mode } = updates;
+    const { name, phone, address, dob, upi_id, bank_account_number, bank_ifsc, bank_account_name, payout_mode, is_finder_registered, is_spotter_registered } = updates;
     const updateData = {};
     if (name) { updateData.full_name = name; updateData.name = name; }
     if (phone) updateData.phone = phone;
@@ -83,6 +87,8 @@ class User {
     if (bank_ifsc !== undefined) updateData.bank_ifsc = bank_ifsc;
     if (bank_account_name !== undefined) updateData.bank_account_name = bank_account_name;
     if (payout_mode !== undefined) updateData.payout_mode = payout_mode;
+    if (is_finder_registered !== undefined) updateData.is_finder_registered = is_finder_registered;
+    if (is_spotter_registered !== undefined) updateData.is_spotter_registered = is_spotter_registered;
 
     const user = await prisma.users.update({
       where: { id: parseInt(id) },
@@ -97,7 +103,9 @@ class User {
         role: true,
         upi_id: true,
         payout_mode: true,
-        balance: true
+        balance: true,
+        is_finder_registered: true,
+        is_spotter_registered: true
       }
     });
 
