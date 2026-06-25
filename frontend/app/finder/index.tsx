@@ -1762,202 +1762,194 @@ export default function FinderDashboard() {
             )}
 
             {/* Duration Selection */}
-            {selectedSlot ? (
-              <View style={{ marginBottom: 16 }}>
-                <View style={{ flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 12, padding: 3, marginBottom: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' }}>
-                  <TouchableOpacity 
-                    style={{ flex: 1, padding: 7, borderRadius: 9, backgroundColor: !isLongParking ? 'rgba(99,102,241,0.15)' : 'transparent', alignItems: 'center' }} 
-                    onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setIsLongParking(false); }}
-                  >
-                    <Text style={{ color: !isLongParking ? '#fff' : '#64748b', fontWeight: '800', fontSize: 11 }}>Custom</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity 
-                    style={{ flex: 1, padding: 7, borderRadius: 9, backgroundColor: isLongParking ? 'rgba(99,102,241,0.15)' : 'transparent', alignItems: 'center' }} 
-                    onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setIsLongParking(true); }}
-                  >
-                    <Text style={{ color: isLongParking ? '#fff' : '#64748b', fontWeight: '800', fontSize: 11 }}>Long Stay</Text>
-                  </TouchableOpacity>
-                </View>
-
-                {!isLongParking ? (
-                  <View style={{ marginBottom: 16 }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                      <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', textTransform: 'uppercase' }}>
-                        {isManualDuration ? 'Type duration' : 'Select duration'}
-                      </Text>
-                      <TouchableOpacity 
-                        onPress={() => {
-                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                          setIsManualDuration(!isManualDuration);
-                        }}
-                      >
-                        <Text style={{ color: '#6366f1', fontSize: 10, fontWeight: '800' }}>
-                          {isManualDuration ? 'Use List 📋' : 'Type manually ✏️'}
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-
-                    {isManualDuration ? (
-                      <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center', marginTop: 4 }}>
-                        <View style={{ flex: 1 }}>
-                          <Text style={{ color: 'rgba(255,255,255,0.4)', fontSize: 9, fontWeight: '800', marginBottom: 4, textTransform: 'uppercase' }}>Hours</Text>
-                          <TextInput
-                            style={{ 
-                              backgroundColor: 'rgba(255,255,255,0.03)', color: '#fff', 
-                              paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, 
-                              borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.08)',
-                              fontSize: 14, fontWeight: '800', textAlign: 'center' 
-                            }}
-                            keyboardType="numeric"
-                            value={parkingHours.toString()}
-                            onChangeText={(val) => {
-                              const hrs = parseInt(val, 10);
-                              setParkingHours(isNaN(hrs) ? 0 : hrs);
-                            }}
-                            placeholder="0"
-                            placeholderTextColor="rgba(255,255,255,0.15)"
-                          />
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={{ color: 'rgba(255,255,255,0.4)', fontSize: 9, fontWeight: '800', marginBottom: 4, textTransform: 'uppercase' }}>Minutes</Text>
-                          <TextInput
-                            style={{ 
-                              backgroundColor: 'rgba(255,255,255,0.03)', color: '#fff', 
-                              paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, 
-                              borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.08)',
-                              fontSize: 14, fontWeight: '800', textAlign: 'center' 
-                            }}
-                            keyboardType="numeric"
-                            value={parkingMinutes.toString()}
-                            onChangeText={(val) => {
-                              const mins = parseInt(val, 10);
-                              setParkingMinutes(isNaN(mins) ? 0 : mins);
-                            }}
-                            placeholder="0"
-                            placeholderTextColor="rgba(255,255,255,0.15)"
-                          />
-                        </View>
-                      </View>
-                    ) : (
-                      <View>
-                        <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 8, textTransform: 'uppercase' }}>Hours</Text>
-                        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
-                          {[0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 24].map(h => (
-                            <TouchableOpacity
-                              key={h}
-                              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setParkingHours(h); }}
-                              style={{ 
-                                width: 44, height: 44, 
-                                backgroundColor: parkingHours === h ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)', 
-                                borderWidth: 2, borderColor: parkingHours === h ? '#6366f1' : 'rgba(255,255,255,0.08)', 
-                                borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 6 
-                              }}
-                            >
-                              <Text style={{ color: '#fff', fontWeight: '900', fontSize: 13 }}>{h}h</Text>
-                            </TouchableOpacity>
-                          ))}
-                        </ScrollView>
-                        <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 8, textTransform: 'uppercase' }}>Minutes</Text>
-                        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                          {[0, 15, 30, 45].map(m => (
-                            <TouchableOpacity
-                              key={m}
-                              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setParkingMinutes(m); }}
-                              style={{ 
-                                width: 48, height: 48, 
-                                backgroundColor: parkingMinutes === m ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)', 
-                                borderWidth: 2, borderColor: parkingMinutes === m ? '#6366f1' : 'rgba(255,255,255,0.08)', 
-                                borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 8 
-                          }}
-                        >
-                          <Text style={{ color: '#fff', fontWeight: '900', fontSize: 14 }}>{m}m</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
-                  </View>
-                )}
-              </View>
-            ) : (
-              <View style={{ marginBottom: 16 }}>
-                <Text style={{ color: '#64748b', marginBottom: 8, fontSize: 10, fontWeight: '800', textTransform: 'uppercase' }}>End Date</Text>
-                <TextInput
-                  style={{ backgroundColor: 'rgba(255,255,255,0.03)', color: '#fff', padding: 14, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', fontSize: 15, fontWeight: '600' }}
-                  placeholder="DD-MM-YYYY"
-                  placeholderTextColor="#475569"
-                  value={parkingEndDate}
-                  onChangeText={setParkingEndDate}
-                />
-              </View>
-            )}
-
-                {/* Car Category Option while confirming */}
-                {vehicleType === 'car' && (
-                  <View style={{ marginTop: 8 }}>
-                    <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 1 }}>Car Category</Text>
-                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                      {[
-                        { label: 'Sedan', image: require('../../assets/images/vehicles/sedan.png') },
-                        { label: 'SUV', image: require('../../assets/images/vehicles/suv.png') },
-                        { label: 'Hatchback', image: require('../../assets/images/vehicles/hatchback.png') },
-                        { label: 'Minivan', image: require('../../assets/images/vehicles/minivan.png') },
-                      ].map(t => (
-                        <TouchableOpacity
-                          key={t.label}
-                          activeOpacity={0.7}
-                          style={{
-                            flex: 1, backgroundColor: vehicleSubType === t.label ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)',
-                            paddingVertical: 10, borderRadius: 14, alignItems: 'center', justifyContent: 'center',
-                            borderWidth: 2, borderColor: vehicleSubType === t.label ? '#6366f1' : 'rgba(255,255,255,0.08)'
-                          }}
-                          onPress={() => {
-                            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                            setVehicleSubType(t.label);
-                          }}
-                        >
-                          <Image source={t.image} style={{ width: 44, height: 22, marginBottom: 4, opacity: vehicleSubType === t.label ? 1 : 0.6 }} resizeMode="contain" />
-                          <Text style={{ color: vehicleSubType === t.label ? '#fff' : '#94a3b8', fontWeight: '800', fontSize: 10 }}>{t.label}</Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  </View>
-                )}
-              </View>
-            ) : null}
-
-            {/* Price + Confirm */}
-            {selectedSlot ? (
-              <View style={{ marginTop: 16 }}>
-                <View style={{ backgroundColor: 'rgba(16,185,129,0.05)', padding: 14, borderRadius: 20, marginBottom: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(16,185,129,0.1)' }}>
-                  <View>
-                    <Text style={{ color: '#10b981', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' }}>Total Price</Text>
-                    {isCalculatingPrice ? (
-                      <ActivityIndicator size="small" color="#10b981" style={{ marginTop: 4, alignSelf: 'flex-start' }} />
-                    ) : (
-                      <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', marginTop: 2 }}>
-                        ₹{calculatedPrice !== null ? calculatedPrice.toFixed(2) : (isLongParking ? '---' : ((parkingHours + (parkingMinutes / 60)) * (spots.find(s => s.id === selectedSpotId)?.price || 0)).toFixed(2))}
-                      </Text>
-                    )}
-                  </View>
-                  <View style={{ padding: 8, backgroundColor: 'rgba(16,185,129,0.1)', borderRadius: 10 }}>
-                    <Text style={{ fontSize: 18 }}>💸</Text>
-                  </View>
-                </View>
-
+            <View style={{ marginBottom: 16 }}>
+              <View style={{ flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 12, padding: 3, marginBottom: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' }}>
                 <TouchableOpacity 
-                  activeOpacity={0.9}
-                  style={{ backgroundColor: '#6366f1', paddingVertical: 16, borderRadius: 18, alignItems: 'center', marginBottom: 20 }} 
-                  onPress={() => {
-                    if (!selectedSpotId) return;
-                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                    handleCreateBooking('online');
-                  }}
+                  style={{ flex: 1, paddingVertical: 10, borderRadius: 9, backgroundColor: !isLongParking && !isManualDuration ? '#6366f1' : 'transparent', alignItems: 'center' }} 
+                  onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setIsLongParking(false); setIsManualDuration(false); }}
                 >
-                  <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>
-                    {isLoading ? 'Reserving...' : 'Confirm Reservation'}
-                  </Text>
+                  <Text style={{ color: !isLongParking && !isManualDuration ? '#fff' : '#94a3b8', fontWeight: '900', fontSize: 12 }}>Custom</Text>
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  style={{ flex: 1, paddingVertical: 10, borderRadius: 9, backgroundColor: isManualDuration ? '#6366f1' : 'transparent', alignItems: 'center' }} 
+                  onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setIsLongParking(false); setIsManualDuration(true); }}
+                >
+                  <Text style={{ color: isManualDuration ? '#fff' : '#94a3b8', fontWeight: '900', fontSize: 12 }}>Type Duration</Text>
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  style={{ flex: 1, paddingVertical: 10, borderRadius: 9, backgroundColor: isLongParking ? '#6366f1' : 'transparent', alignItems: 'center' }} 
+                  onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setIsLongParking(true); setIsManualDuration(false); }}
+                >
+                  <Text style={{ color: isLongParking ? '#fff' : '#94a3b8', fontWeight: '900', fontSize: 12 }}>Long Stay</Text>
                 </TouchableOpacity>
               </View>
-            ) : null}
+
+              {(!isLongParking && !isManualDuration) && (
+                <View style={{ marginBottom: 16 }}>
+                  <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 8, textTransform: 'uppercase' }}>Hours</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
+                    {[0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 24].map(h => (
+                      <TouchableOpacity
+                        key={h}
+                        onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setParkingHours(h); }}
+                        style={{ 
+                          width: 44, height: 44, 
+                          backgroundColor: parkingHours === h ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)', 
+                          borderWidth: 2, borderColor: parkingHours === h ? '#6366f1' : 'rgba(255,255,255,0.08)', 
+                          borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 6 
+                        }}
+                      >
+                        <Text style={{ color: '#fff', fontWeight: '900', fontSize: 13 }}>{h}h</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                  <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 8, textTransform: 'uppercase' }}>Minutes</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                    {[0, 15, 30, 45].map(m => (
+                      <TouchableOpacity
+                        key={m}
+                        onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setParkingMinutes(m); }}
+                        style={{ 
+                          width: 48, height: 48, 
+                          backgroundColor: parkingMinutes === m ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)', 
+                          borderWidth: 2, borderColor: parkingMinutes === m ? '#6366f1' : 'rgba(255,255,255,0.08)', 
+                          borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 8 
+                        }}
+                      >
+                        <Text style={{ color: '#fff', fontWeight: '900', fontSize: 14 }}>{m}m</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
+
+              {isManualDuration && (
+                <View style={{ marginBottom: 16 }}>
+                  <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 6, textTransform: 'uppercase' }}>Hours</Text>
+                      <TextInput
+                        style={{ 
+                          backgroundColor: 'rgba(255,255,255,0.03)', color: '#fff', 
+                          paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, 
+                          borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.08)',
+                          fontSize: 14, fontWeight: '800', textAlign: 'center' 
+                        }}
+                        keyboardType="numeric"
+                        value={parkingHours.toString()}
+                        onChangeText={(val) => {
+                          const hrs = parseInt(val, 10);
+                          setParkingHours(isNaN(hrs) ? 0 : hrs);
+                        }}
+                        placeholder="0"
+                        placeholderTextColor="rgba(255,255,255,0.15)"
+                      />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 6, textTransform: 'uppercase' }}>Minutes</Text>
+                      <TextInput
+                        style={{ 
+                          backgroundColor: 'rgba(255,255,255,0.03)', color: '#fff', 
+                          paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, 
+                          borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.08)',
+                          fontSize: 14, fontWeight: '800', textAlign: 'center' 
+                        }}
+                        keyboardType="numeric"
+                        value={parkingMinutes.toString()}
+                        onChangeText={(val) => {
+                          const mins = parseInt(val, 10);
+                          setParkingMinutes(isNaN(mins) ? 0 : mins);
+                        }}
+                        placeholder="0"
+                        placeholderTextColor="rgba(255,255,255,0.15)"
+                      />
+                    </View>
+                  </View>
+                </View>
+              )}
+
+              {isLongParking && (
+                <View style={{ marginBottom: 16 }}>
+                  <Text style={{ color: '#64748b', marginBottom: 8, fontSize: 10, fontWeight: '800', textTransform: 'uppercase' }}>End Date</Text>
+                  <TextInput
+                    style={{ backgroundColor: 'rgba(255,255,255,0.03)', color: '#fff', padding: 14, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', fontSize: 15, fontWeight: '600' }}
+                    placeholder="DD-MM-YYYY"
+                    placeholderTextColor="#475569"
+                    value={parkingEndDate}
+                    onChangeText={setParkingEndDate}
+                  />
+                </View>
+              )}
+
+              {/* Car Category Option while confirming */}
+              {vehicleType === 'car' && (
+                <View style={{ marginTop: 8 }}>
+                  <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 1 }}>Car Category</Text>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                    {[
+                      { label: 'Sedan', image: require('../../assets/images/vehicles/sedan.png') },
+                      { label: 'SUV', image: require('../../assets/images/vehicles/suv.png') },
+                      { label: 'Hatchback', image: require('../../assets/images/vehicles/hatchback.png') },
+                      { label: 'Minivan', image: require('../../assets/images/vehicles/minivan.png') },
+                    ].map(t => (
+                      <TouchableOpacity
+                        key={t.label}
+                        activeOpacity={0.7}
+                        style={{
+                          flex: 1, backgroundColor: vehicleSubType === t.label ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)',
+                          paddingVertical: 10, borderRadius: 14, alignItems: 'center', justifyContent: 'center',
+                          borderWidth: 2, borderColor: vehicleSubType === t.label ? '#6366f1' : 'rgba(255,255,255,0.08)'
+                        }}
+                        onPress={() => {
+                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                          setVehicleSubType(t.label);
+                        }}
+                      >
+                        <Image source={t.image} style={{ width: 44, height: 22, marginBottom: 4, opacity: vehicleSubType === t.label ? 1 : 0.6 }} resizeMode="contain" />
+                        <Text style={{ color: vehicleSubType === t.label ? '#fff' : '#94a3b8', fontWeight: '800', fontSize: 10 }}>{t.label}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+              )}
+            </View>
+
+            {/* Price + Confirm */}
+            <View style={{ marginTop: 16 }}>
+              <View style={{ backgroundColor: 'rgba(16,185,129,0.05)', padding: 14, borderRadius: 20, marginBottom: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(16,185,129,0.1)' }}>
+                <View>
+                  <Text style={{ color: '#10b981', fontSize: 10, fontWeight: '900', textTransform: 'uppercase' }}>Total Price</Text>
+                  {isCalculatingPrice ? (
+                    <ActivityIndicator size="small" color="#10b981" style={{ marginTop: 4, alignSelf: 'flex-start' }} />
+                  ) : (
+                    <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', marginTop: 2 }}>
+                      ₹{calculatedPrice !== null ? calculatedPrice.toFixed(2) : (isLongParking ? '---' : ((parkingHours + (parkingMinutes / 60)) * (spots.find(s => s.id === selectedSpotId)?.price || 0)).toFixed(2))}
+                    </Text>
+                  )}
+                </View>
+                <View style={{ padding: 8, backgroundColor: 'rgba(16,185,129,0.1)', borderRadius: 10 }}>
+                  <Text style={{ fontSize: 18 }}>💸</Text>
+                </View>
+              </View>
+
+              <TouchableOpacity 
+                activeOpacity={0.9}
+                style={{ backgroundColor: selectedSlot ? '#6366f1' : 'rgba(99,102,241,0.4)', paddingVertical: 16, borderRadius: 18, alignItems: 'center', marginBottom: 20 }} 
+                onPress={() => {
+                  if (!selectedSlot) {
+                    Alert.alert('Select a Slot', 'Please select a parking slot before confirming.');
+                    return;
+                  }
+                  if (!selectedSpotId) return;
+                  Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                  handleCreateBooking('online');
+                }}
+              >
+                <Text style={{ color: selectedSlot ? '#fff' : 'rgba(255,255,255,0.6)', fontSize: 16, fontWeight: '900' }}>
+                  {isLoading ? 'Reserving...' : 'Confirm Reservation'}
+                </Text>
+              </TouchableOpacity>
+            </View>
           </ScrollView>
         </View>
       )}
