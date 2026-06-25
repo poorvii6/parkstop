@@ -1346,7 +1346,38 @@ export default function FinderDashboard() {
             ))}
           </View>
 
-          {vehicleType !== '' && (
+          {vehicleType === 'car' && (
+            <View style={{ marginBottom: 20 }}>
+              <Text style={{ color: '#94a3b8', fontSize: 10, fontWeight: '700', marginBottom: 12, textAlign: 'center', letterSpacing: 1.2 }}>SELECT CAR CATEGORY</Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
+                {[
+                  { label: 'Sedan', image: require('../../assets/images/vehicles/sedan.png') },
+                  { label: 'SUV', image: require('../../assets/images/vehicles/suv.png') },
+                  { label: 'Hatchback', image: require('../../assets/images/vehicles/hatchback.png') },
+                  { label: 'Minivan', image: require('../../assets/images/vehicles/minivan.png') },
+                ].map(t => (
+                  <TouchableOpacity
+                    key={t.label}
+                    activeOpacity={0.7}
+                    style={{
+                      width: '47%', backgroundColor: vehicleSubType === t.label ? 'rgba(99,102,241,0.12)' : 'rgba(255,255,255,0.02)',
+                      padding: 12, borderRadius: 16, alignItems: 'center',
+                      borderWidth: 1.5, borderColor: vehicleSubType === t.label ? '#6366f1' : 'rgba(255,255,255,0.05)'
+                    }}
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      setVehicleSubType(t.label);
+                    }}
+                  >
+                    <Image source={t.image} style={{ width: 60, height: 32, marginBottom: 6, opacity: vehicleSubType === t.label ? 1 : 0.6 }} resizeMode="contain" />
+                    <Text style={{ color: vehicleSubType === t.label ? '#fff' : '#94a3b8', fontWeight: '800', fontSize: 12 }}>{t.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          )}
+
+          {(vehicleType === 'bike' || (vehicleType === 'car' && vehicleSubType !== '')) && (
             <TouchableOpacity
               activeOpacity={0.9}
               style={{ 
@@ -1356,10 +1387,8 @@ export default function FinderDashboard() {
               }}
               onPress={() => {
                 Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                const finalSubType = vehicleType === 'car' && !vehicleSubType ? 'Sedan' : vehicleSubType;
                 AsyncStorage.setItem('parkstop_vehicle_type', vehicleType);
-                AsyncStorage.setItem('parkstop_vehicle_subtype', finalSubType);
-                setVehicleSubType(finalSubType);
+                AsyncStorage.setItem('parkstop_vehicle_subtype', vehicleSubType);
                 setStep('home');
               }}
             >
@@ -1417,17 +1446,7 @@ export default function FinderDashboard() {
             )}
           </View>
 
-          {/* Vehicle Badge */}
-          <View style={{ position: 'absolute', top: Platform.OS === 'ios' ? 78 : 70, left: 16, zIndex: 100 }}>
-            <TouchableOpacity 
-              onPress={() => { setStep('vehicle_select'); }}
-              style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(30,41,59,0.9)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' }}
-            >
-              <Text style={{ fontSize: 14, marginRight: 6 }}>{vehicleType === 'bike' ? '🏍️' : '🚗'}</Text>
-              <Text style={{ color: '#fff', fontSize: 11, fontWeight: '800' }}>{vehicleSubType || vehicleType}</Text>
-              <Text style={{ color: '#6366f1', fontSize: 10, fontWeight: '700', marginLeft: 6 }}>Change</Text>
-            </TouchableOpacity>
-          </View>
+
 
           {/* Saved Spots Shortcut */}
           <TouchableOpacity 
