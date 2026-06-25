@@ -431,6 +431,87 @@ class AuthController {
     }
   }
 
+  /**
+   * 🌐 SOCIAL LOGIN (Google / Apple)
+   */
+  static async socialLogin(req, res) {
+    try {
+      const { email, name, provider, token } = req.body;
+      if (!email) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email is required'
+        });
+      }
+
+      console.log(`[SOCIAL LOGIN] Provider: ${provider}, Email: ${email}`);
+
+      let user = await User.findByEmail(email);
+
+      if (!user) {
+        // Create user if not exists
+        const randomPassword = `OAUTH_MOCK_${Math.random().toString(36).slice(-8)}_${Date.now()}`;
+        user = await User.create({
+          email,
+          password: randomPassword,
+          name: name || email.split('@')[0],
+          phone: '',
+          role: 'finder' // default to finder
+        });
+      }
+
+      // Generate access token
+      const accessToken = jwt.sign(
+        {
+          id: user.id,
+          role: user.role,
+          name: user.full_name || user.name
+        },
+        config.jwt.secret,
+        { expiresIn: '24h' }
+      );
+
+      // Generate refresh token
+      const refreshToken = jwt.sign(
+        {
+          id: user.id
+        },
+        config.jwt.refreshSecret,
+        { expiresIn: '7d' }
+      );
+
+      const refreshExpiry = new Date();
+      refreshExpiry.setDate(refreshExpiry.getDate() + 7);
+
+      await prisma.users.update({
+        where: { id: user.id },
+        data: {
+          refresh_token: refreshToken,
+          refresh_token_expires: refreshExpiry
+        }
+      });
+
+      delete user.password;
+
+      res.json({
+        success: true,
+        message: 'Social login successful',
+        data: {
+          user,
+          access_token: accessToken,
+          refresh_token: refreshToken
+        }
+      });
+
+    } catch (error) {
+      logger.error('Social login error:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Error authenticating with social provider: ' + error.message
+      });
+    }
+  }
+
 }
 
 module.exports = AuthController;

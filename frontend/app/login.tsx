@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, Platform, KeyboardAvoidingView, ScrollView } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, Platform, KeyboardAvoidingView, ScrollView, Modal } from 'react-native';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import apiClient from '../api/client';
@@ -11,6 +11,12 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+
+  // Social Auth States
+  const [oauthProvider, setOauthProvider] = useState<'google' | 'apple' | null>(null);
+  const [customOauthEmail, setCustomOauthEmail] = useState('');
+  const [customOauthName, setCustomOauthName] = useState('');
+  const [oauthLoading, setOauthLoading] = useState(false);
 
   const handleLogin = async () => {
     if (!email || !password) return Alert.alert('Hold up!', 'Please enter your email and password');
@@ -31,6 +37,37 @@ export default function LoginScreen() {
       else Alert.alert('Login Failed', msg);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSocialLogin = async (selectedEmail: string, selectedName: string) => {
+    if (!selectedEmail) return Alert.alert('Error', 'Please enter a valid email address');
+    if (!selectedEmail.includes('@')) return Alert.alert('Error', 'Please enter a valid email address');
+    
+    setOauthLoading(true);
+    try {
+      console.log(`[SOCIAL AUTH] Connecting to backend for email: ${selectedEmail}, provider: ${oauthProvider}`);
+      const response = await apiClient.post('/auth/social-login', {
+        email: selectedEmail,
+        name: selectedName || selectedEmail.split('@')[0],
+        provider: oauthProvider,
+        token: 'mock_oauth_token_' + Date.now()
+      });
+
+      if (response.data.success) {
+        await AsyncStorage.setItem('access_token', response.data.data.access_token);
+        await AsyncStorage.setItem('user_role', response.data.data.user.role);
+        setOauthProvider(null);
+        setCustomOauthEmail('');
+        setCustomOauthName('');
+        router.replace('/welcome');
+      }
+    } catch (error: any) {
+      console.error('[SOCIAL AUTH] Social Login Error:', error.response?.data || error.message);
+      const msg = error.response?.data?.message || error.message || 'Connection failed';
+      Alert.alert('Authentication Failed', msg);
+    } finally {
+      setOauthLoading(false);
     }
   };
 
@@ -83,14 +120,14 @@ export default function LoginScreen() {
 
             <TouchableOpacity 
               style={[styles.googleBtn, { backgroundColor: '#FFFFFF' }]} 
-              onPress={() => Alert.alert('Coming Soon', 'Google sign-in is not yet implemented.')}
+              onPress={() => setOauthProvider('google')}
             >
               <Text style={[styles.googleBtnText, { color: '#000000' }]}>Continue with Google</Text>
             </TouchableOpacity>
 
             <TouchableOpacity 
               style={[styles.googleBtn, { backgroundColor: '#000000', borderColor: '#FFFFFF', marginTop: 12 }]} 
-              onPress={() => Alert.alert('Coming Soon', 'Apple sign-in is not yet implemented.')}
+              onPress={() => setOauthProvider('apple')}
             >
               <Text style={styles.googleBtnText}>Continue with Apple</Text>
             </TouchableOpacity>
@@ -112,6 +149,121 @@ export default function LoginScreen() {
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Simulated OAuth Modal */}
+      <Modal
+        visible={oauthProvider !== null}
+        transparent={true}
+        animationType="slide"
+        statusBarTranslucent
+        onRequestClose={() => setOauthProvider(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.oauthContainer}>
+            <View style={styles.oauthHeader}>
+              <Text style={styles.oauthHeaderTitle}>
+                {oauthProvider === 'google' ? '🌐 Sign in with Google' : ' Sign in with Apple'}
+              </Text>
+              <Text style={styles.oauthHeaderSubtitle}>
+                {oauthProvider === 'google' 
+                  ? 'ParkStop wants to use "google.com" to sign in' 
+                  : 'ParkStop wants to authenticate using your Apple ID'}
+              </Text>
+            </View>
+
+            {oauthLoading ? (
+              <View style={{ paddingVertical: 40, alignItems: 'center' }}>
+                <ActivityIndicator size="large" color="#6366f1" />
+                <Text style={{ color: '#94a3b8', marginTop: 12, fontWeight: '600' }}>Authenticating...</Text>
+              </View>
+            ) : (
+              <ScrollView bounces={false} showsVerticalScrollIndicator={false} contentContainerStyle={{ gap: 16 }}>
+                <Text style={styles.oauthSectionTitle}>Choose a test account</Text>
+                
+                {/* Profile Options */}
+                <TouchableOpacity 
+                  style={styles.oauthProfileBtn}
+                  onPress={() => handleSocialLogin(
+                    oauthProvider === 'google' ? 'alex.jones@gmail.com' : 'alex.jones@icloud.com',
+                    'Alex Jones'
+                  )}
+                >
+                  <View style={styles.oauthAvatar}>
+                    <Text style={styles.oauthAvatarText}>AJ</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.oauthProfileName}>Alex Jones</Text>
+                    <Text style={styles.oauthProfileEmail}>
+                      {oauthProvider === 'google' ? 'alex.jones@gmail.com' : 'alex.jones@icloud.com'}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+
+                <TouchableOpacity 
+                  style={styles.oauthProfileBtn}
+                  onPress={() => handleSocialLogin(
+                    oauthProvider === 'google' ? 'sarah.parker@gmail.com' : 'sarah.parker@icloud.com',
+                    'Sarah Parker'
+                  )}
+                >
+                  <View style={[styles.oauthAvatar, { backgroundColor: '#10b981' }]}>
+                    <Text style={styles.oauthAvatarText}>SP</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.oauthProfileName}>Sarah Parker</Text>
+                    <Text style={styles.oauthProfileEmail}>
+                      {oauthProvider === 'google' ? 'sarah.parker@gmail.com' : 'sarah.parker@icloud.com'}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+
+                <View style={styles.dividerRow}>
+                  <View style={styles.dividerLine} />
+                  <Text style={styles.dividerText}>OR TYPE MANUAL EMAIL</Text>
+                  <View style={styles.dividerLine} />
+                </View>
+
+                {/* Custom Inputs */}
+                <View style={{ gap: 10 }}>
+                  <TextInput
+                    style={styles.oauthInput}
+                    placeholder="Full Name"
+                    placeholderTextColor="rgba(255,255,255,0.25)"
+                    value={customOauthName}
+                    onChangeText={setCustomOauthName}
+                  />
+                  <TextInput
+                    style={styles.oauthInput}
+                    placeholder="email@example.com"
+                    placeholderTextColor="rgba(255,255,255,0.25)"
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    value={customOauthEmail}
+                    onChangeText={setCustomOauthEmail}
+                  />
+                  <TouchableOpacity 
+                    style={styles.oauthSubmitBtn}
+                    onPress={() => handleSocialLogin(customOauthEmail, customOauthName)}
+                  >
+                    <Text style={styles.oauthSubmitBtnText}>Continue with custom email</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <TouchableOpacity 
+                  style={styles.oauthCancelBtn}
+                  onPress={() => {
+                    setOauthProvider(null);
+                    setCustomOauthEmail('');
+                    setCustomOauthName('');
+                  }}
+                >
+                  <Text style={styles.oauthCancelBtnText}>Cancel</Text>
+                </TouchableOpacity>
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -137,5 +289,131 @@ const styles = StyleSheet.create({
   googleBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 16 },
   registerLink: { marginTop: 16, alignItems: 'center' },
   linkText: { color: BlueprintColors.textSecondary, fontSize: 14 },
-  linkBold: { color: BlueprintColors.primaryAccent, fontWeight: '700' }
+  linkBold: { color: BlueprintColors.primaryAccent, fontWeight: '700' },
+  
+  // OAuth Modal styling
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    justifyContent: 'flex-end',
+  },
+  oauthContainer: {
+    backgroundColor: '#0f172a',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    padding: 24,
+    paddingBottom: Platform.OS === 'ios' ? 40 : 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.05)',
+  },
+  oauthHeader: {
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  oauthHeaderTitle: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#fff',
+    letterSpacing: -0.5,
+  },
+  oauthHeaderSubtitle: {
+    fontSize: 13,
+    color: '#94a3b8',
+    textAlign: 'center',
+    marginTop: 6,
+    fontWeight: '500',
+  },
+  oauthSectionTitle: {
+    color: '#64748b',
+    fontSize: 10,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: 4,
+  },
+  oauthProfileBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.06)',
+    borderRadius: 16,
+    padding: 14,
+    gap: 14,
+  },
+  oauthAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#6366f1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  oauthAvatarText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 14,
+  },
+  oauthProfileName: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 15,
+  },
+  oauthProfileEmail: {
+    color: '#94a3b8',
+    fontSize: 12,
+    marginTop: 2,
+    fontWeight: '500',
+  },
+  dividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 10,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  dividerText: {
+    color: '#64748b',
+    fontSize: 9,
+    fontWeight: '800',
+    marginHorizontal: 12,
+  },
+  oauthInput: {
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.06)',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  oauthSubmitBtn: {
+    backgroundColor: '#6366f1',
+    borderRadius: 16,
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginTop: 6,
+  },
+  oauthSubmitBtnText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 15,
+  },
+  oauthCancelBtn: {
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    borderRadius: 16,
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  oauthCancelBtnText: {
+    color: '#94a3b8',
+    fontWeight: '800',
+    fontSize: 15,
+  },
 });

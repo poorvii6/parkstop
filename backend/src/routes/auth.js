@@ -41,6 +41,19 @@ router.post(
 );
 
 /**
+ * SOCIAL LOGIN
+ */
+router.post(
+  '/social-login',
+  [
+    body('email').isEmail(),
+    body('provider').isIn(['google', 'apple']),
+    validate
+  ],
+  AuthController.socialLogin
+);
+
+/**
  * REFRESH TOKEN
  */
 router.post(
