@@ -6,7 +6,7 @@ import Constants from 'expo-constants';
 
 let cachedApiUrl: string | null = null;
 
-const getAPIUrl = async () => {
+const getAPIUrlSync = () => {
   if (cachedApiUrl) return cachedApiUrl;
 
   let apiUrl =
@@ -30,12 +30,16 @@ const getAPIUrl = async () => {
   }
 
   cachedApiUrl = apiUrl;
-
   console.log(`[API] Using backend: ${apiUrl}`);
   return apiUrl;
 };
 
+const getAPIUrl = async () => {
+  return getAPIUrlSync();
+};
+
 const apiClient = axios.create({
+  baseURL: getAPIUrlSync(),
   timeout: 15000, // Reduced timeout for faster failure/retry
   headers: {
     'Bypass-Tunnel-Reminder': 'true',
