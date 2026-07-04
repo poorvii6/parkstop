@@ -19,17 +19,6 @@ const authenticate = async (req, res, next) => {
 
     const token = authHeader.substring(7);
 
-    // Skip verification for development guest mode
-    if (token === 'offline_token' && config.env === 'development') {
-      req.user = {
-        id: 1,
-        email: 'guest@parkstop.app',
-        role: 'FINDER',
-        full_name: 'Guest User'
-      };
-      return next();
-    }
-
     let decodedFirebase = null;
 
     try {
@@ -129,16 +118,6 @@ const optionalAuth = async (req, res, next) => {
 
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.substring(7);
-
-      if (token === 'offline_token' && config.env === 'development') {
-        req.user = {
-          id: 1,
-          email: 'guest@parkstop.app',
-          role: 'FINDER',
-          full_name: 'Guest User'
-        };
-        return next();
-      }
 
       let decodedFirebase = null;
       try {

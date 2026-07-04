@@ -43,3 +43,7 @@ app-example
 # Environment files
 .env
 .env.*
+
+# Firebase service credentials
+google-services.json
+GoogleService-Info.plist

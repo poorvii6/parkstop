@@ -43,7 +43,7 @@ export default function RegisterScreen() {
     setLoading(true);
 
     try {
-      console.log(`[GMAIL OTP] Requesting backend to send verification email to ${email}...`);
+      if (__DEV__) console.log(`[GMAIL OTP] Requesting backend to send verification email to ${email}...`);
       const response = await apiClient.post('/auth/send-otp', { email });
       
       if (response.data.success) {
@@ -66,7 +66,7 @@ export default function RegisterScreen() {
 
     setOtpLoading(true);
     try {
-      console.log(`[GMAIL OTP] Verifying OTP code for ${email}...`);
+      if (__DEV__) console.log(`[GMAIL OTP] Verifying OTP code for ${email}...`);
       const response = await apiClient.post('/auth/verify-otp', {
         email,
         code: otpCode
@@ -91,7 +91,7 @@ export default function RegisterScreen() {
     let firebaseUser: any = null;
 
     try {
-      console.log(`[AUTH] Registering user in Firebase...`);
+      if (__DEV__) console.log(`[AUTH] Registering user in Firebase...`);
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       firebaseUser = userCredential.user;
 
@@ -104,7 +104,7 @@ export default function RegisterScreen() {
         throw tokenErr;
       }
 
-      console.log(`[AUTH] Firebase account created. Registering in ParkStop local DB...`);
+      if (__DEV__) console.log(`[AUTH] Firebase account created. Registering in ParkStop local DB...`);
       try {
         const response = await apiClient.post('/auth/register', {
           name,

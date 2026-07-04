@@ -12,7 +12,7 @@ export default function RootLayout() {
   }, [segments]);
 
   return (
-    <StripeProvider publishableKey={process.env.EXPO_PUBLIC_STRIPE_KEY || "pk_test_TYooMQauvdEDq54NiTphI7jx"}>
+    <StripeProvider publishableKey={process.env.EXPO_PUBLIC_STRIPE_KEY || ''}>
       <Stack screenOptions={{ freezeOnBlur: true }}>
         <Stack.Screen name="index" options={{ headerShown: false }} />
         <Stack.Screen name="login" options={{ headerShown: false, animation: 'fade' }} />

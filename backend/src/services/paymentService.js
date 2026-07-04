@@ -61,28 +61,19 @@ class PaymentService {
       }
 
       // 2. Verify signature
-      const isValid = (signature === 'mock_upi_intent' && process.env.NODE_ENV !== 'production') 
-        ? true 
-        : razorpayAdapter.verifyPaymentSignature(orderId, paymentId, signature);
+      const isValid = razorpayAdapter.verifyPaymentSignature(orderId, paymentId, signature);
       
       if (!isValid) {
         throw new Error('Payment signature verification failed.');
       }
 
-      // 3. Fetch payment details from Razorpay (bypass with mock details during local non-prod testing)
+      // 3. Fetch payment details from Razorpay
       let paymentDetails;
       const user = booking.users;
       const arrears = (user && user.balance < 0) ? Math.abs(Number(user.balance)) : 0;
       const expectedAmountPaise = Math.round((Number(booking.total_price) + arrears) * 100);
 
-      if (signature === 'mock_upi_intent' && process.env.NODE_ENV !== 'production') {
-        paymentDetails = {
-          status: 'captured',
-          amount: expectedAmountPaise
-        };
-      } else {
-        paymentDetails = await razorpayAdapter.fetchPayment(paymentId);
-      }
+      paymentDetails = await razorpayAdapter.fetchPayment(paymentId);
 
       // 4. Verify payment status is captured
       if (paymentDetails.status !== 'captured') {

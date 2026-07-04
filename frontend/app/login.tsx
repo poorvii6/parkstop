@@ -19,14 +19,14 @@ export default function LoginScreen() {
     setLoading(true);
 
     try {
-      console.log(`[AUTH] Authenticating with Firebase for email: ${email}`);
+      if (__DEV__) console.log(`[AUTH] Authenticating with Firebase for email: ${email}`);
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const firebaseUser = userCredential.user;
 
-      console.log(`[AUTH] Firebase login successful. Retrieving ID token...`);
+      if (__DEV__) console.log(`[AUTH] Firebase login successful. Retrieving ID token...`);
       const firebaseToken = await firebaseUser.getIdToken();
 
-      console.log(`[AUTH] Synchronizing session profile with ParkStop database...`);
+      if (__DEV__) console.log(`[AUTH] Synchronizing session profile with ParkStop database...`);
       const response = await apiClient.post('/auth/social-login', {
         email: firebaseUser.email || email,
         token: firebaseToken
@@ -46,15 +46,11 @@ export default function LoginScreen() {
     }
   };
 
-  const handleSocialLogin = async (providerName: 'google' | 'apple') => {
-    if (providerName === 'apple') {
-      Alert.alert('Sign in with Apple', 'Apple Sign-In requires active provisioning profiles. Please use Email/Password sign-in or Google for development.');
-      return;
-    }
+  const handleSocialLogin = async (providerName: 'google') => {
 
     try {
       setLoading(true);
-      console.log(`[SOCIAL AUTH] Triggering Firebase Google Sign-In...`);
+      if (__DEV__) console.log(`[SOCIAL AUTH] Triggering Firebase Google Sign-In...`);
       const provider = new GoogleAuthProvider();
       
       let userCredential;
@@ -78,7 +74,7 @@ export default function LoginScreen() {
           const { signInWithCredential } = require('firebase/auth');
           
           GoogleSignin.configure({
-            webClientId: '1004284557988-h41uhmkqd31872dicfos21gj59rh5vr5.apps.googleusercontent.com',
+            webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '',
           });
           
           await GoogleSignin.hasPlayServices();
@@ -103,7 +99,7 @@ export default function LoginScreen() {
 
       const firebaseUser = userCredential.user;
       const firebaseToken = await firebaseUser.getIdToken();
-      console.log(`[SOCIAL AUTH] Firebase login successful. Syncing profile...`);
+      if (__DEV__) console.log(`[SOCIAL AUTH] Firebase login successful. Syncing profile...`);
       const response = await apiClient.post('/auth/social-login', {
         email: firebaseUser.email,
         name: firebaseUser.displayName || '',
@@ -183,27 +179,13 @@ export default function LoginScreen() {
                   <Text style={[styles.googleBtnText, { color: '#000000' }]}>Continue with Google</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity 
-                  style={[styles.googleBtn, { backgroundColor: '#000000', borderColor: '#FFFFFF', marginTop: 12 }]} 
-                  onPress={() => handleSocialLogin('apple')}
-                >
-                  <Text style={styles.googleBtnText}>Continue with Apple</Text>
-                </TouchableOpacity>
+
 
                 <TouchableOpacity onPress={() => router.replace('/register')} style={styles.registerLink}>
                   <Text style={styles.linkText}>Don't have an account? <Text style={styles.linkBold}>Sign Up</Text></Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity 
-                  style={[styles.googleBtn, { marginTop: 20, borderColor: BlueprintColors.primaryAccent }]} 
-                  onPress={async () => {
-                    await AsyncStorage.setItem('access_token', 'offline_token');
-                    await AsyncStorage.setItem('user_role', 'FINDER');
-                    router.replace('/welcome');
-                  }}
-                >
-                  <Text style={[styles.googleBtnText, { color: BlueprintColors.primaryAccent }]}>Skip Login (4G Guest Mode)</Text>
-                </TouchableOpacity>
+
               </View>
             </>
           )}

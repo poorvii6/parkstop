@@ -30,7 +30,7 @@ const getAPIUrlSync = () => {
   }
 
   cachedApiUrl = apiUrl;
-  console.log(`[API] Using backend: ${apiUrl}`);
+  if (__DEV__) console.log(`[API] Using backend: ${apiUrl}`);
   return apiUrl;
 };
 
@@ -53,9 +53,11 @@ apiClient.interceptors.request.use(
       config.baseURL = await getAPIUrl();
     }
 
-    console.log('[API REQUEST]');
-    console.log('Base URL:', config.baseURL);
-    console.log('Final URL:', `${config.baseURL}${config.url}`);
+    if (__DEV__) {
+      console.log('[API REQUEST]');
+      console.log('Base URL:', config.baseURL);
+      console.log('Final URL:', `${config.baseURL}${config.url}`);
+    }
 
     try {
       const currentUser = auth.currentUser;
@@ -84,7 +86,7 @@ apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
     if (error.response && error.response.status === 401) {
-      console.log('[API] Request returned 401 Unauthorized - Redirecting to login.');
+      if (__DEV__) console.log('[API] Request returned 401 Unauthorized - Redirecting to login.');
       
       // Clear local session storage
       await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user_role']);

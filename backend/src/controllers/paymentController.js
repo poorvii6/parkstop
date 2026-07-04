@@ -464,9 +464,7 @@ class PaymentController {
     try {
       const { order_id, payment_id, signature, amount } = req.body;
 
-      const isValid = (signature === 'mock_upi_intent' && process.env.NODE_ENV !== 'production')
-        ? true
-        : require('../services/payments/RazorpayAdapter').verifyPaymentSignature(order_id, payment_id, signature);
+      const isValid = require('../services/payments/RazorpayAdapter').verifyPaymentSignature(order_id, payment_id, signature);
 
       if (!isValid) {
         return res.status(400).json({ success: false, message: 'Payment verification failed' });
