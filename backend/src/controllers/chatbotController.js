@@ -12,7 +12,7 @@ class ChatbotController {
         return res.status(400).json({ success: false, message: 'Please provide a prompt' });
       }
 
-      const systemPrompt = role === 'spotter'
+      const systemPrompt = role.toLowerCase() === 'spotter'
         ? `You are ParkStop's helpful assistant for Spotters (parking space owners) in India.
            Help them with: listing spots, understanding earnings (platform takes 15-30% commission based on location type), 
            OTP verification process, payout setup via UPI or bank, managing bookings, and app features.

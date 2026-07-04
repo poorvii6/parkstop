@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Platform } from '
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { auth } from '../services/firebase';
 import { BlueprintTheme, BlueprintColors } from '../constants/BlueprintTheme';
 
 export default function WelcomeScreen() {
@@ -60,7 +61,16 @@ export default function WelcomeScreen() {
           <TouchableOpacity style={BlueprintTheme.buttonPrimary} onPress={handleContinue}>
             <Text style={BlueprintTheme.buttonPrimaryText}>Accept and continue</Text>
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => router.replace('/login')} style={styles.declineBtn}>
+          <TouchableOpacity 
+            onPress={async () => {
+              await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user_role']);
+              try {
+                await auth.signOut();
+              } catch (err) {}
+              router.replace('/login');
+            }} 
+            style={styles.declineBtn}
+          >
             <Text style={styles.declineText}>Decline</Text>
           </TouchableOpacity>
         </View>

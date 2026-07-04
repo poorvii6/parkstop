@@ -9,13 +9,10 @@ async function run() {
 
     // 1. Create a test finder user
     const email = `test_finder_${Date.now()}@example.com`;
-    const password = 'password123';
-    const hashedPassword = await bcrypt.hash(password, 10);
 
     const user = await prisma.users.create({
       data: {
         email,
-        password: hashedPassword,
         name: 'Test Finder Simple',
         role: 'finder',
         balance: 0.00
@@ -28,7 +25,6 @@ async function run() {
     const spotter = await prisma.users.create({
       data: {
         email: spotterEmail,
-        password: hashedPassword,
         name: 'Test Spotter Simple',
         role: 'spotter',
         balance: 0.00

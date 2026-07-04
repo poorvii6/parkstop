@@ -34,7 +34,15 @@ const server = http.createServer(app);
 initializeSocket(server);
 
 // Security
-app.use(helmet());
+if (process.env.NODE_ENV === 'production') {
+  app.use(helmet());
+} else {
+  // Disable CSP and HSTS in development to allow inline scripts/CDNs and avoid forcing HTTPS
+  app.use(helmet({
+    contentSecurityPolicy: false,
+    hsts: false
+  }));
+}
 app.use(compression());
 
 // Rate limiting
@@ -135,20 +143,22 @@ app.use(errorHandler);
 
 const PORT = process.env.PORT || 3000;
 
-server.listen(PORT, '0.0.0.0', async () => {
-  logger.info(`🚀 Server running on port ${PORT}`);
+if (process.env.NODE_ENV !== 'test') {
+  server.listen(PORT, '0.0.0.0', async () => {
+    logger.info(`🚀 Server running on port ${PORT}`);
 
-  try {
-    const prisma = require('./config/prisma');
-    await prisma.$connect();
-    logger.info('✅ Database connected (Prisma)');
-  } catch (error) {
-    logger.error('❌ Database connection failed:', error);
-    process.exit(1);
-  }
+    try {
+      const prisma = require('./config/prisma');
+      await prisma.$connect();
+      logger.info('✅ Database connected (Prisma)');
+    } catch (error) {
+      logger.error('❌ Database connection failed:', error);
+      process.exit(1);
+    }
 
-  startBookingExpiryJob();
-});
+    startBookingExpiryJob();
+  });
+}
 
 
 module.exports = { app, server };

@@ -27,7 +27,38 @@ class LocationController {
   // Get last known location
   static async getLocation(req, res) {
     try {
-      const location = await Location.findByUser(req.params.userId);
+      const targetUserId = parseInt(req.params.userId);
+      const currentUserId = req.user.id;
+
+      if (currentUserId !== targetUserId) {
+        const prisma = require('../config/prisma');
+        // Check if there is a mutual active booking
+        const activeBooking = await prisma.bookings.findFirst({
+          where: {
+            status: 'active',
+            OR: [
+              {
+                user_id: currentUserId,
+                parking_spots: {
+                  spotter_id: targetUserId
+                }
+              },
+              {
+                user_id: targetUserId,
+                parking_spots: {
+                  spotter_id: currentUserId
+                }
+              }
+            ]
+          }
+        });
+
+        if (!activeBooking) {
+          return res.status(403).json({ success: false, message: 'Unauthorized to view this user\'s location' });
+        }
+      }
+
+      const location = await Location.findByUser(targetUserId);
 
       res.json({ success: true, data: location });
     } catch (error) {

@@ -147,14 +147,18 @@ class BookingController {
       const completedBooking = await Booking.verifyCheckoutOTP(bookingId, otp);
 
       // 💰 Auto-payout or Cash Ledger logic
+      let spot = null;
+      let spotterEarning = 0;
       try {
         const booking = await Booking.findById(bookingId);
         if (booking && (booking.payment_status === 'paid' || booking.payment_mode === 'cash')) {
-          const spot = await ParkingSpot.findById(booking.spot_id);
+          spot = await ParkingSpot.findById(booking.spot_id);
           if (spot && spot.spotter_id) {
-            const { spotterEarning, platformFee } = CommissionService.calculateCommission(
+            const commission = CommissionService.calculateCommission(
               booking.total_price, spot.location_type
             );
+            spotterEarning = commission.spotterEarning;
+            const platformFee = commission.platformFee;
 
             // Update booking with commission split
             await require('../config/prisma').bookings.update({
@@ -188,34 +192,36 @@ class BookingController {
       } catch (payoutErr) {
         logger.error(`Payout/Ledger error after checkout OTP for booking ${bookingId}:`, payoutErr);
 
-        // Mark payout as failed so admin can retry
-        await require('../config/prisma').payouts.create({
-          data: {
-            user_id: spot.spotter_id,
-            booking_id: parseInt(bookingId),
-            amount: spotterEarning || 0, // Fallback if undefined
-            status: 'failed_needs_retry',
-            failure_reason: payoutErr.message,
-            mode: 'UPI',
-            narration: `FAILED payout - Booking #${bookingId} - needs manual review`
+        if (spot && spot.spotter_id) {
+          // Mark payout as failed so admin can retry
+          await require('../config/prisma').payouts.create({
+            data: {
+              user_id: spot.spotter_id,
+              booking_id: parseInt(bookingId),
+              amount: spotterEarning || 0, // Fallback if undefined
+              status: 'failed_needs_retry',
+              failure_reason: payoutErr.message,
+              mode: 'UPI',
+              narration: `FAILED payout - Booking #${bookingId} - needs manual review`
+            }
+          }).catch(e => logger.error('Could not create failed payout record:', e));
+
+          // Always ensure balance is credited as fallback
+          if (spotterEarning) {
+            await require('../config/prisma').users.update({
+              where: { id: spot.spotter_id },
+              data: { balance: { increment: parseFloat(spotterEarning) } }
+            }).catch(e => logger.error('CRITICAL: balance credit also failed:', e));
           }
-        }).catch(e => logger.error('Could not create failed payout record:', e));
 
-        // Always ensure balance is credited as fallback
-        if (spotterEarning) {
-          await require('../config/prisma').users.update({
-            where: { id: spot.spotter_id },
-            data: { balance: { increment: parseFloat(spotterEarning) } }
-          }).catch(e => logger.error('CRITICAL: balance credit also failed:', e));
+          // Notify Spotter their payment is being processed
+          const { emitToUser } = require('../config/socket');
+          emitToUser(spot.spotter_id, 'payout:pending', {
+            bookingId,
+            amount: spotterEarning,
+            message: 'Your earnings are being processed and will reflect in your wallet shortly.'
+          });
         }
-
-        // Notify Spotter their payment is being processed
-        const { emitToUser } = require('../config/socket');
-        emitToUser(spot.spotter_id, 'payout:pending', {
-          bookingId,
-          amount: spotterEarning,
-          message: 'Your earnings are being processed and will reflect in your wallet shortly.'
-        });
       }
 
       res.json({
@@ -269,12 +275,15 @@ class BookingController {
       const completedBooking = await Booking.complete(bookingId, otp);
 
       // 💰 Auto-payout or Cash Ledger logic
+      let spotterEarning = 0;
       try {
         const completedData = await Booking.findById(bookingId);
         if (completedData && (completedData.payment_status === 'paid' || completedData.payment_mode === 'cash')) {
-          const { spotterEarning, platformFee } = CommissionService.calculateCommission(
+          const commission = CommissionService.calculateCommission(
             completedData.total_price, spot.location_type
           );
+          spotterEarning = commission.spotterEarning;
+          const platformFee = commission.platformFee;
 
           // Update booking with commission split
           await require('../config/prisma').bookings.update({
@@ -373,33 +382,44 @@ class BookingController {
         return res.status(403).json({ success: false, message: 'Unauthorized' });
       }
 
-      // Mark as completed but unpaid
-      const completedBooking = await require('../config/prisma').bookings.update({
-        where: { id: parseInt(bookingId) },
-        data: {
-          status: 'completed',
-          payment_status: 'unpaid_arrears',
-          actual_end_time: new Date(),
-          updated_at: new Date()
-        }
+      const prisma = require('../config/prisma');
+
+      // Mark as completed but unpaid in a database transaction
+      const completedBooking = await prisma.$transaction(async (tx) => {
+        const updatedBooking = await tx.bookings.update({
+          where: { id: parseInt(bookingId) },
+          data: {
+            status: 'completed',
+            payment_status: 'unpaid_arrears',
+            actual_end_time: new Date(),
+            updated_at: new Date()
+          }
+        });
+
+        // Calculate commission based on what WAS owed
+        const { spotterEarning } = CommissionService.calculateCommission(
+          updatedBooking.total_price, spot.location_type
+        );
+
+        // 1. Credit the Spotter their 80% so they don't suffer
+        await tx.users.update({
+          where: { id: spot.spotter_id },
+          data: { balance: { increment: spotterEarning } }
+        });
+
+        // 2. Penalize the Finder by deducting the FULL amount from their balance
+        await tx.users.update({
+          where: { id: booking.user_id },
+          data: { balance: { decrement: updatedBooking.total_price } }
+        });
+
+        return updatedBooking;
       });
 
-      // Calculate commission based on what WAS owed
-      const { spotterEarning, platformFee } = CommissionService.calculateCommission(
+      // Recalculate spotterEarning and platformFee for logging
+      const { spotterEarning } = CommissionService.calculateCommission(
         completedBooking.total_price, spot.location_type
       );
-
-      // 1. Credit the Spotter their 80% so they don't suffer
-      await require('../config/prisma').users.update({
-        where: { id: spot.spotter_id },
-        data: { balance: { increment: spotterEarning } }
-      });
-
-      // 2. Penalize the Finder by deducting the FULL amount from their balance
-      await require('../config/prisma').users.update({
-        where: { id: booking.user_id },
-        data: { balance: { decrement: completedBooking.total_price } }
-      });
 
       logger.info(`Arrears applied for Booking ${bookingId}: Spotter ${spot.spotter_id} credited ₹${spotterEarning}. Finder ${booking.user_id} deducted ₹${completedBooking.total_price}.`);
 
@@ -441,25 +461,35 @@ class BookingController {
         booking.total_price, spot.location_type
       );
 
-      // 1. Update Booking to paid with cash
-      const updatedBooking = await require('../config/prisma').bookings.update({
-        where: { id: parseInt(bookingId) },
-        data: {
-          payment_status: 'paid',
-          payment_mode: 'cash',
-          status: 'completed',
-          platform_fee: platformFee,
-          spotter_earning: spotterEarning,
-          updated_at: new Date()
+      const prisma = require('../config/prisma');
+
+      // Update booking and deduct platform fee from spotter in a transaction
+      const updatedBooking = await prisma.$transaction(async (tx) => {
+        // 1. Update Booking to paid with cash
+        const bookingRecord = await tx.bookings.update({
+          where: { id: parseInt(bookingId) },
+          data: {
+            payment_status: 'paid',
+            payment_mode: 'cash',
+            status: 'completed',
+            platform_fee: platformFee,
+            spotter_earning: spotterEarning,
+            updated_at: new Date()
+          }
+        });
+
+        // 2. Deduct platform fee from spotter's wallet
+        if (platformFee > 0) {
+          await tx.users.update({
+            where: { id: spot.spotter_id },
+            data: { balance: { decrement: platformFee } }
+          });
         }
+
+        return bookingRecord;
       });
 
-      // 2. Deduct platform fee from spotter's wallet
       if (platformFee > 0) {
-        await require('../config/prisma').users.update({
-          where: { id: spot.spotter_id },
-          data: { balance: { decrement: platformFee } }
-        });
         logger.info(`Cash checkout ${bookingId}: Deducted ₹${platformFee} from spotter ${spot.spotter_id}`);
       }
 

@@ -11,7 +11,7 @@ class PayoutController {
    */
   static async setupPayoutAccount(req, res) {
     try {
-      if (req.user.role !== 'spotter') {
+      if (req.user.role.toLowerCase() !== 'spotter') {
         return res.status(403).json({ success: false, message: 'Only spotters can set up payout accounts' });
       }
 
@@ -153,7 +153,7 @@ class PayoutController {
    */
   static async updatePayoutDetails(req, res) {
     try {
-      if (req.user.role !== 'spotter') {
+      if (req.user.role.toLowerCase() !== 'spotter') {
         return res.status(403).json({ success: false, message: 'Only spotters can update payout details' });
       }
 

@@ -1,9 +1,10 @@
-const jwt = require('jsonwebtoken');
 const config = require('../config/env');
 const logger = require('../utils/logger');
+const admin = require('../config/firebase');
+const prisma = require('../config/prisma');
 
 /**
- * 🔒 Authenticate user (JWT)
+ * 🔒 Authenticate user (Firebase ID Token Only)
  */
 const authenticate = async (req, res, next) => {
   try {
@@ -17,57 +18,75 @@ const authenticate = async (req, res, next) => {
     }
 
     const token = authHeader.substring(7);
-    const decoded = jwt.verify(token, config.jwt.secret);
 
-    req.user = {
-      id: decoded.id,
-      email: decoded.email,
-      role: decoded.role,
-      full_name: decoded.name
-    };
+    // Skip verification for development guest mode
+    if (token === 'offline_token' && config.env === 'development') {
+      req.user = {
+        id: 1,
+        email: 'guest@parkstop.app',
+        role: 'FINDER',
+        full_name: 'Guest User'
+      };
+      return next();
+    }
 
-    // Prevent stale JWT / Role Mismatch (e.g. from database re-seeds or role switching mismatches):
-    // Dynamically retrieve the latest user details from the database.
-    const prisma = require('../config/prisma');
+    let decodedFirebase = null;
+
     try {
-      const user = await prisma.users.findUnique({
-        where: { id: parseInt(decoded.id) },
-        select: { role: true, email: true, full_name: true }
+      decodedFirebase = await admin.auth.verifyIdToken(token);
+    } catch (fbError) {
+      logger.error('Firebase token verification failed:', fbError.message);
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid or expired token.',
       });
-      if (user) {
-        req.user.role = user.role;
-        if (user.email) req.user.email = user.email;
-        if (user.full_name) req.user.full_name = user.full_name;
-      } else {
-        // User not found in database (e.g. database was reset / re-seeded)
+    }
+
+    if (decodedFirebase) {
+      // Find the local Postgres user by firebase_uid
+      let user = await prisma.users.findUnique({
+        where: { firebase_uid: decodedFirebase.uid }
+      });
+
+      // Fallback: If firebase_uid is not set but email matches, link them
+      if (!user && decodedFirebase.email) {
+        user = await prisma.users.findUnique({
+          where: { email: decodedFirebase.email }
+        });
+        if (user) {
+          user = await prisma.users.update({
+            where: { id: user.id },
+            data: { firebase_uid: decodedFirebase.uid }
+          });
+        }
+      }
+
+      if (!user) {
         return res.status(401).json({
           success: false,
-          message: 'User account not found. Please log in again.',
+          message: 'User account not registered in ParkStop database. Please register first.',
+          code: 'USER_NOT_REGISTERED',
+          firebase_user: {
+            uid: decodedFirebase.uid,
+            email: decodedFirebase.email,
+            name: decodedFirebase.name || ''
+          }
         });
       }
-    } catch (dbErr) {
-      logger.error('Error fetching user in authenticate middleware:', dbErr);
+
+      req.user = {
+        id: user.id,
+        email: user.email,
+        role: user.role,
+        full_name: user.full_name || user.name,
+        firebase_uid: user.firebase_uid
+      };
     }
 
     next();
 
   } catch (error) {
-    logger.error('Authentication error:', error);
-
-    if (error.name === 'TokenExpiredError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Token expired. Please login again.',
-      });
-    }
-
-    if (error.name === 'JsonWebTokenError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid token.',
-      });
-    }
-
+    logger.error('Authentication middleware error:', error);
     return res.status(500).json({
       success: false,
       message: 'Authentication failed',
@@ -102,7 +121,7 @@ const authorize = (...allowedRoles) => {
 };
 
 /**
- * Optional auth
+ * Optional auth (Firebase ID Token Only)
  */
 const optionalAuth = async (req, res, next) => {
   try {
@@ -110,28 +129,50 @@ const optionalAuth = async (req, res, next) => {
 
     if (authHeader && authHeader.startsWith('Bearer ')) {
       const token = authHeader.substring(7);
-      const decoded = jwt.verify(token, config.jwt.secret);
 
-      req.user = {
-        id: decoded.id,
-        email: decoded.email,
-        role: decoded.role,
-        full_name: decoded.name
-      };
+      if (token === 'offline_token' && config.env === 'development') {
+        req.user = {
+          id: 1,
+          email: 'guest@parkstop.app',
+          role: 'FINDER',
+          full_name: 'Guest User'
+        };
+        return next();
+      }
 
-      const prisma = require('../config/prisma');
+      let decodedFirebase = null;
       try {
-        const user = await prisma.users.findUnique({
-          where: { id: parseInt(decoded.id) },
-          select: { role: true, email: true, full_name: true }
+        decodedFirebase = await admin.auth.verifyIdToken(token);
+      } catch (fbError) {
+        // ignore
+      }
+
+      if (decodedFirebase) {
+        let user = await prisma.users.findUnique({
+          where: { firebase_uid: decodedFirebase.uid }
         });
-        if (user) {
-          req.user.role = user.role;
-          if (user.email) req.user.email = user.email;
-          if (user.full_name) req.user.full_name = user.full_name;
+
+        if (!user && decodedFirebase.email) {
+          user = await prisma.users.findUnique({
+            where: { email: decodedFirebase.email }
+          });
+          if (user) {
+            user = await prisma.users.update({
+              where: { id: user.id },
+              data: { firebase_uid: decodedFirebase.uid }
+            });
+          }
         }
-      } catch (dbErr) {
-        logger.debug('Optional auth DB fetch failed:', dbErr.message);
+
+        if (user) {
+          req.user = {
+            id: user.id,
+            email: user.email,
+            role: user.role,
+            full_name: user.full_name || user.name,
+            firebase_uid: user.firebase_uid
+          };
+        }
       }
     }
   } catch (error) {

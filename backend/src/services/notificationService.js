@@ -76,11 +76,10 @@ class NotificationService {
       data: { bookingId: booking.id },
     });
 
-    // 3. Send system push notification
-    const otp = booking.otp_code || booking.otp || '';
+    // 3. Send system push notification (Do not expose OTP to the Spotter)
     await this.sendPushNotification(spotterId, {
       title: 'New Booking Request 🚗',
-      body: `${finderName} booked your spot. OTP: ${otp}`,
+      body: `${finderName} booked your spot. Open the app to view details.`,
       data: { bookingId: booking.id, type: 'new_booking' },
     });
   }
@@ -100,7 +99,7 @@ class NotificationService {
 
     await this.sendPushNotification(finderId, {
       title: 'Parking Spot Reserved! ✅',
-      body: `Your reservation is confirmed. OTP: ${otp}`,
+      body: `Your reservation is confirmed. Open the app to view your check-in OTP.`,
       data: { bookingId: booking.id, otp, type: 'booking_confirmed' },
     });
   }

@@ -154,7 +154,6 @@ export default function ProfileModal() {
         try {
           const res = await apiClient.post('/auth/switch-role', { newRole });
           if (res.data.success) {
-            await AsyncStorage.setItem('access_token', res.data.data.access_token);
             await AsyncStorage.setItem('user_role', res.data.data.role.toUpperCase());
             router.replace(newRole === 'finder' ? '/finder' : '/spotter');
           }
@@ -198,7 +197,6 @@ export default function ProfileModal() {
       });
 
       if (res.data.success) {
-        await AsyncStorage.setItem('access_token', res.data.data.access_token);
         await AsyncStorage.setItem('user_role', res.data.data.role.toUpperCase());
         setShowRoleRegModal(false);
         Alert.alert('🎉 Registered', `You have registered as a ${newRole} and switched modes!`);
@@ -285,7 +283,23 @@ export default function ProfileModal() {
               <ListItem icon="time" color={C.success} bg={C.successSoft} title="Recent Bookings" sub="Your last 10 bookings" onPress={() => setScreen('recent_bookings')} />
             </>
           )}
-          <ListItem icon="card" color={C.warning} bg={C.warningSoft} title="Payout Methods" sub="Bank, UPI, PayPal" onPress={() => setScreen('payouts')} />
+          {role === 'SPOTTER' && (
+            <ListItem
+              icon="card"
+              color={C.warning}
+              bg={C.warningSoft}
+              title="Payout Methods"
+              sub="Bank, UPI, PayPal"
+              onPress={() => {
+                if (router.canDismiss()) {
+                  router.dismiss();
+                } else {
+                  router.back();
+                }
+                router.push('/spotter/payout-setup');
+              }}
+            />
+          )}
           <ListItem icon="notifications" color="#FFA500" bg="rgba(255,165,0,0.1)" title="Notification Preferences" sub="Push, Email, SMS" onPress={() => setScreen('alerts')} />
           <ListItem icon="shield-checkmark" color={C.success} bg={C.successSoft} title="Identity Verification" sub="Driver License" onPress={() => setScreen('id_status')} last />
         </View>

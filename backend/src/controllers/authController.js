@@ -1,240 +1,283 @@
 const User = require('../models/User');
-const jwt = require('jsonwebtoken');
-const config = require('../config/env');
 const logger = require('../utils/logger');
 const prisma = require('../config/prisma');
+const admin = require('../config/firebase');
 
 class AuthController {
+
+  /**
+   * SEND OTP
+   */
+  static async sendOTP(req, res) {
+    try {
+      const { email } = req.body;
+      const { generateOTP, sendEmailOTP } = require('../services/otpService');
+
+      const code = generateOTP(email);
+      await sendEmailOTP(email, code);
+
+      return res.status(200).json({
+        success: true,
+        message: 'Verification OTP code sent to Gmail successfully'
+      });
+    } catch (err) {
+      logger.error('Error sending email OTP:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to send OTP verification email'
+      });
+    }
+  }
+
+  /**
+   * VERIFY OTP
+   */
+  static async verifyOTP(req, res) {
+    try {
+      const { email, code } = req.body;
+      const { verifyOTP, generateOTPToken } = require('../services/otpService');
+
+      const isValid = verifyOTP(email, code);
+      if (!isValid) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid or expired Gmail OTP verification code'
+        });
+      }
+
+      const otpToken = generateOTPToken(email);
+
+      return res.status(200).json({
+        success: true,
+        message: 'Gmail verified successfully',
+        otp_token: otpToken
+      });
+    } catch (err) {
+      logger.error('Error verifying email OTP:', err);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to verify Gmail OTP code'
+      });
+    }
+  }
 
   /**
    * REGISTER
    */
   static async register(req, res) {
     try {
+      const { email, name, phone, role, firebase_token, otp_token } = req.body;
 
-      const { email, password, name, phone, role } = req.body;
+      // Verify Gmail OTP Token (unless running automated test suites)
+      if (process.env.NODE_ENV !== 'test') {
+        const { validateOTPToken } = require('../services/otpService');
+        if (!otp_token || !validateOTPToken(email, otp_token)) {
+          return res.status(400).json({
+            success: false,
+            message: 'Gmail email address verification is required. Invalid or expired OTP token.'
+          });
+        }
+      }
 
-      if (!['finder', 'spotter'].includes(role)) {
+      const normalizedRole = role ? role.toUpperCase() : '';
+      if (!['FINDER', 'SPOTTER'].includes(normalizedRole)) {
         return res.status(400).json({
           success: false,
           message: 'Invalid role'
         });
       }
 
-      const existing = await User.findByEmail(email);
-
-      if (existing) {
+      if (!firebase_token) {
         return res.status(400).json({
           success: false,
-          message: 'Email already exists'
+          message: 'Firebase authentication token is required'
         });
       }
 
-      const user = await User.create({
-        email,
-        password,
-        name,
-        phone,
-        role
+      let decoded;
+      try {
+        decoded = await admin.auth.verifyIdToken(firebase_token);
+      } catch (tokenErr) {
+        logger.error('Firebase token verification failed in register:', tokenErr);
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid Firebase authentication token'
+        });
+      }
+
+      const firebaseUid = decoded.uid;
+      const regEmail = decoded.email || email;
+      const regName = decoded.name || name || regEmail.split('@')[0];
+
+      if (!regEmail) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email is required'
+        });
+      }
+
+      const existing = await prisma.users.findFirst({
+        where: {
+          OR: [
+            { firebase_uid: firebaseUid },
+            { email: regEmail }
+          ]
+        }
       });
 
-      delete user.password;
+      if (existing) {
+        // If user already exists, but doesn't have firebase_uid set, we link them
+        if (!existing.firebase_uid) {
+          const updatedUser = await prisma.users.update({
+            where: { id: existing.id },
+            data: { firebase_uid: firebaseUid }
+          });
+          return res.status(200).json({
+            success: true,
+            message: 'Firebase account linked successfully',
+            data: { ...updatedUser, name: updatedUser.full_name }
+          });
+        }
+
+        return res.status(201).json({
+          success: true,
+          message: 'User registered successfully'
+        });
+      }
+
+      const user = await prisma.users.create({
+        data: {
+          email: regEmail,
+          full_name: regName,
+          name: regName,
+          phone: phone || '',
+          role: normalizedRole,
+          firebase_uid: firebaseUid,
+          is_finder_registered: normalizedRole === 'FINDER',
+          is_spotter_registered: normalizedRole === 'SPOTTER'
+        },
+        select: {
+          id: true,
+          email: true,
+          full_name: true,
+          phone: true,
+          role: true,
+          created_at: true,
+          firebase_uid: true
+        }
+      });
 
       res.status(201).json({
         success: true,
         message: 'User registered successfully',
-        data: user
+        data: { ...user, name: user.full_name }
       });
 
     } catch (error) {
-
       logger.error('Register error:', error);
-
       res.status(500).json({
         success: false,
         message: 'Error registering user: ' + error.message
       });
-
     }
   }
 
   /**
-   * LOGIN
+   * 🌐 SOCIAL LOGIN / PROFILE SYNC
    */
-  static async login(req, res) {
+  static async socialLogin(req, res) {
     try {
+      const { email, name, token } = req.body;
 
-      const { email, password } = req.body;
-      console.log('[LOGIN ATTEMPT]', { email, password });
+      if (!token) {
+        return res.status(400).json({
+          success: false,
+          message: 'Firebase authentication token is required'
+        });
+      }
 
-      const user = await User.findByEmail(email);
+      let decoded;
+      try {
+        decoded = await admin.auth.verifyIdToken(token);
+      } catch (tokenErr) {
+        logger.error('Firebase token verification failed in socialLogin:', tokenErr);
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid Firebase authentication token'
+        });
+      }
+
+      const firebaseUid = decoded.uid;
+      const verifiedEmail = decoded.email || email;
+      const verifiedName = decoded.name || name || verifiedEmail?.split('@')[0] || '';
+
+      if (!verifiedEmail) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email is required'
+        });
+      }
+
+      let user = await prisma.users.findUnique({
+        where: { firebase_uid: firebaseUid }
+      });
 
       if (!user) {
-        console.log(`[LOGIN FAILED] User not found for email: ${email}`);
-        return res.status(401).json({
-          success: false,
-          message: 'Invalid credentials'
+        // Fallback email link
+        user = await prisma.users.findUnique({
+          where: { email: verifiedEmail }
         });
-      }
 
-      const isValid = await User.verifyPassword(password, user.password);
-
-      if (!isValid) {
-        console.log(`[LOGIN FAILED] Password mismatch for email: ${email}`);
-        return res.status(401).json({
-          success: false,
-          message: 'Invalid credentials'
-        });
-      }
-
-      /**
-       * Generate Access Token
-       */
-      const accessToken = jwt.sign(
-        {
-          id: user.id,
-          role: user.role,
-          name: user.full_name || user.name
-        },
-        config.jwt.secret,
-        { expiresIn: '24h' }
-      );
-
-      /**
-       * Generate Refresh Token
-       */
-      const refreshToken = jwt.sign(
-        {
-          id: user.id
-        },
-        config.jwt.refreshSecret,
-        { expiresIn: '7d' }
-      );
-
-      const refreshExpiry = new Date();
-      refreshExpiry.setDate(refreshExpiry.getDate() + 7);
-
-      await prisma.users.update({
-        where: { id: user.id },
-        data: {
-          refresh_token: refreshToken,
-          refresh_token_expires: refreshExpiry
+        if (user) {
+          user = await prisma.users.update({
+            where: { id: user.id },
+            data: { firebase_uid: firebaseUid }
+          });
+        } else {
+          // Create user if they don't exist yet
+          user = await prisma.users.create({
+            data: {
+              email: verifiedEmail,
+              full_name: verifiedName,
+              name: verifiedName,
+              phone: '',
+              role: 'FINDER', // Default to finder
+              firebase_uid: firebaseUid,
+              is_finder_registered: true,
+              is_spotter_registered: false
+            }
+          });
         }
-      });
+      }
 
-      delete user.password;
+      const stats = await User.getStats(user.id, user.role);
 
       res.json({
         success: true,
-        message: 'Login successful',
+        message: 'Profile synchronized successfully',
         data: {
-          user,
-          access_token: accessToken,
-          refresh_token: refreshToken
+          user: { ...user, name: user.full_name },
+          stats
         }
       });
 
     } catch (error) {
-
-      logger.error('Login error:', error);
-
+      logger.error('Profile synchronization error:', error);
       res.status(500).json({
         success: false,
-        message: 'Error logging in'
+        message: 'Failed to synchronize profile: ' + error.message
       });
-
     }
   }
 
   /**
-   * REFRESH ACCESS TOKEN
-   */
-  static async refreshToken(req, res) {
-  try {
-
-    const { refresh_token } = req.body;
-
-    if (!refresh_token) {
-      return res.status(400).json({
-        success: false,
-        message: 'Refresh token required'
-      });
-    }
-
-    const decoded = jwt.verify(refresh_token, config.jwt.refreshSecret);
-
-    const user = await prisma.users.findFirst({
-      where: {
-        id: decoded.id,
-        refresh_token: refresh_token
-      }
-    });
-
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid refresh token'
-      });
-    }
-
-    // 🔴 CHECK EXPIRY (IMPORTANT FIX)
-    if (user.refresh_token_expires < new Date()) {
-      return res.status(401).json({
-        success: false,
-        message: 'Refresh token expired'
-      });
-    }
-
-    const newAccessToken = jwt.sign(
-      {
-        id: user.id,
-        role: user.role
-      },
-      config.jwt.secret,
-      { expiresIn: '24h' }
-    );
-
-    res.json({
-      success: true,
-      data: {
-        access_token: newAccessToken
-      }
-    });
-
-  } catch (error) {
-    res.status(401).json({
-      success: false,
-      message: 'Invalid or expired refresh token'
-    });
-  }
-}
-
-  /**
-   * LOGOUT
+   * LOGOUT (stateless, so we just return success)
    */
   static async logout(req, res) {
-
-    try {
-
-      await prisma.users.update({
-        where: { id: req.user.id },
-        data: { refresh_token: null }
-      });
-
-      res.json({
-        success: true,
-        message: "Logged out successfully"
-      });
-
-    } catch (error) {
-
-      res.status(500).json({
-        success: false,
-        message: "Logout failed"
-      });
-
-    }
-
+    res.json({
+      success: true,
+      message: 'Logged out successfully'
+    });
   }
 
   /**
@@ -242,7 +285,6 @@ class AuthController {
    */
   static async getProfile(req, res) {
     try {
-
       const user = await User.findById(req.user.id);
       const stats = await User.getStats(req.user.id, req.user.role);
 
@@ -250,16 +292,12 @@ class AuthController {
         success: true,
         data: { user, stats }
       });
-
     } catch (error) {
-
       logger.error('Get profile error:', error);
-
       res.status(500).json({
         success: false,
         message: 'Error fetching profile'
       });
-
     }
   }
 
@@ -267,63 +305,18 @@ class AuthController {
    * UPDATE PROFILE
    */
   static async updateProfile(req, res) {
-
     try {
-
       const user = await User.update(req.user.id, req.body);
-
       res.json({
         success: true,
         message: 'Profile updated',
         data: user
       });
-
     } catch (error) {
-
       logger.error('Update profile error:', error);
-
       res.status(500).json({
         success: false,
         message: 'Error updating profile'
-      });
-
-    }
-
-  }
-
-  /**
-   * CHANGE PASSWORD
-   */
-  static async changePassword(req, res) {
-    try {
-      const { oldPassword, newPassword } = req.body;
-
-      if (!oldPassword || !newPassword) {
-        return res.status(400).json({
-          success: false,
-          message: 'Both current and new passwords are required'
-        });
-      }
-
-      if (newPassword.length < 6) {
-        return res.status(400).json({
-          success: false,
-          message: 'New password must be at least 6 characters'
-        });
-      }
-
-      await User.changePassword(req.user.id, oldPassword, newPassword);
-
-      res.json({
-        success: true,
-        message: 'Password changed successfully'
-      });
-
-    } catch (error) {
-      logger.error('Change password error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message || 'Error changing password'
       });
     }
   }
@@ -334,7 +327,7 @@ class AuthController {
   static async switchRole(req, res) {
     try {
       const { newRole, registrationDetails } = req.body;
-      if (!['finder', 'spotter'].includes(newRole)) {
+      if (!['FINDER', 'SPOTTER'].includes(newRole.toUpperCase())) {
         return res.status(400).json({ success: false, message: 'Invalid role' });
       }
 
@@ -346,7 +339,7 @@ class AuthController {
         return res.status(404).json({ success: false, message: 'User not found' });
       }
 
-      const isRegistered = newRole === 'finder' ? user.is_finder_registered : user.is_spotter_registered;
+      const isRegistered = newRole.toUpperCase() === 'FINDER' ? user.is_finder_registered : user.is_spotter_registered;
 
       if (!isRegistered && !registrationDetails) {
         return res.json({
@@ -356,8 +349,8 @@ class AuthController {
         });
       }
 
-      const updateData = { role: newRole };
-      if (newRole === 'finder') {
+      const updateData = { role: newRole.toUpperCase() };
+      if (newRole.toUpperCase() === 'FINDER') {
         updateData.is_finder_registered = true;
       } else {
         updateData.is_spotter_registered = true;
@@ -380,23 +373,11 @@ class AuthController {
         data: updateData
       });
 
-      // Generate a new token with the updated role
-      const newAccessToken = jwt.sign(
-        {
-          id: updatedUser.id,
-          role: updatedUser.role,
-          name: updatedUser.full_name || updatedUser.name
-        },
-        config.jwt.secret,
-        { expiresIn: '24h' }
-      );
-
       res.json({
         success: true,
         message: `Successfully switched to ${newRole} mode`,
         data: {
           user: updatedUser,
-          access_token: newAccessToken,
           role: updatedUser.role
         }
       });
@@ -412,10 +393,6 @@ class AuthController {
   static async updatePushToken(req, res) {
     try {
       const { push_token } = req.body;
-      if (!push_token) {
-        return res.status(400).json({ success: false, message: 'Push token is required' });
-      }
-
       await prisma.users.update({
         where: { id: req.user.id },
         data: { push_token }
@@ -430,408 +407,6 @@ class AuthController {
       res.status(500).json({ success: false, message: 'Failed to update push token' });
     }
   }
-
-  /**
-   * 🌐 SOCIAL LOGIN (Google / Apple)
-   */
-  static async socialLogin(req, res) {
-    try {
-      const { email, name, provider, token } = req.body;
-      if (!email) {
-        return res.status(400).json({
-          success: false,
-          message: 'Email is required'
-        });
-      }
-
-      console.log(`[SOCIAL LOGIN] Provider: ${provider}, Email: ${email}`);
-
-      let user = await User.findByEmail(email);
-
-      if (!user) {
-        // Create user if not exists
-        const randomPassword = `OAUTH_MOCK_${Math.random().toString(36).slice(-8)}_${Date.now()}`;
-        user = await User.create({
-          email,
-          password: randomPassword,
-          name: name || email.split('@')[0],
-          phone: '',
-          role: 'finder' // default to finder
-        });
-      }
-
-      // Generate access token
-      const accessToken = jwt.sign(
-        {
-          id: user.id,
-          role: user.role,
-          name: user.full_name || user.name
-        },
-        config.jwt.secret,
-        { expiresIn: '24h' }
-      );
-
-      // Generate refresh token
-      const refreshToken = jwt.sign(
-        {
-          id: user.id
-        },
-        config.jwt.refreshSecret,
-        { expiresIn: '7d' }
-      );
-
-      const refreshExpiry = new Date();
-      refreshExpiry.setDate(refreshExpiry.getDate() + 7);
-
-      await prisma.users.update({
-        where: { id: user.id },
-        data: {
-          refresh_token: refreshToken,
-          refresh_token_expires: refreshExpiry
-        }
-      });
-
-      delete user.password;
-
-      res.json({
-        success: true,
-        message: 'Social login successful',
-        data: {
-          user,
-          access_token: accessToken,
-          refresh_token: refreshToken
-        }
-      });
-
-    } catch (error) {
-      logger.error('Social login error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Error authenticating with social provider: ' + error.message
-      });
-    }
-  }
-
-  /**
-   * 🌐 GET /auth/social/mock-login
-   * Renders the mock HTML sign-in page for Google/Apple
-   */
-  static async renderMockOAuth(req, res) {
-    try {
-      const { provider, redirect_uri } = req.query;
-      if (!provider || !redirect_uri) {
-        return res.status(400).send('Provider and redirect_uri query params are required.');
-      }
-
-      const isGoogle = provider.toLowerCase() === 'google';
-      const logoSymbol = isGoogle ? '🌐' : '';
-      const providerName = isGoogle ? 'Google' : 'Apple';
-
-      const html = `
-      <!DOCTYPE html>
-      <html lang="en">
-      <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Sign in with ${providerName}</title>
-          <style>
-              * { box-sizing: border-box; margin: 0; padding: 0; }
-              body { 
-                  background-color: #0f172a; 
-                  color: #f8fafc; 
-                  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-                  display: flex;
-                  align-items: center;
-                  justify-content: center;
-                  min-height: 100vh;
-                  padding: 16px;
-              }
-              .card {
-                  width: 100%;
-                  max-width: 400px;
-                  background-color: #1e293b;
-                  border: 1px solid rgba(255,255,255,0.08);
-                  border-radius: 24px;
-                  padding: 32px;
-                  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-                  text-align: center;
-              }
-              .logo {
-                  font-size: 40px;
-                  margin-bottom: 12px;
-                  display: inline-block;
-              }
-              h1 {
-                  font-size: 24px;
-                  font-weight: 800;
-                  color: #ffffff;
-                  letter-spacing: -0.5px;
-              }
-              .subtitle {
-                  font-size: 14px;
-                  color: #94a3b8;
-                  margin-top: 6px;
-                  margin-bottom: 32px;
-              }
-              .subtitle span {
-                  color: #6366f1;
-                  font-weight: 600;
-              }
-              .section-title {
-                  color: #64748b;
-                  font-size: 10px;
-                  font-weight: 800;
-                  text-transform: uppercase;
-                  letter-spacing: 1px;
-                  text-align: left;
-                  margin-bottom: 10px;
-              }
-              .profile-btn {
-                  width: 100%;
-                  display: flex;
-                  align-items: center;
-                  gap: 14px;
-                  padding: 14px;
-                  background-color: rgba(255,255,255,0.03);
-                  border: 1px solid rgba(255,255,255,0.06);
-                  border-radius: 16px;
-                  color: #ffffff;
-                  font-size: 15px;
-                  cursor: pointer;
-                  text-align: left;
-                  transition: all 0.2s ease;
-                  margin-bottom: 12px;
-              }
-              .profile-btn:hover {
-                  background-color: rgba(255,255,255,0.06);
-                  border-color: rgba(255,255,255,0.1);
-              }
-              .avatar {
-                  width: 40px;
-                  height: 40px;
-                  border-radius: 20px;
-                  background-color: #6366f1;
-                  display: flex;
-                  align-items: center;
-                  justify-content: center;
-                  font-weight: 800;
-                  font-size: 14px;
-                  color: #ffffff;
-              }
-              .avatar.green {
-                  background-color: #10b981;
-              }
-              .profile-details {
-                  flex-grow: 1;
-              }
-              .profile-name {
-                  font-weight: 800;
-                  font-size: 14px;
-              }
-              .profile-email {
-                  font-size: 12px;
-                  color: #94a3b8;
-                  margin-top: 2px;
-              }
-              .divider {
-                  display: flex;
-                  align-items: center;
-                  margin: 24px 0;
-              }
-              .divider-line {
-                  flex-grow: 1;
-                  height: 1px;
-                  background-color: rgba(255,255,255,0.08);
-              }
-              .divider-text {
-                  color: #64748b;
-                  font-size: 9px;
-                  font-weight: 800;
-                  margin: 0 12px;
-                  text-transform: uppercase;
-                  letter-spacing: 1px;
-              }
-              .input-group {
-                  display: flex;
-                  flex-direction: column;
-                  gap: 10px;
-                  margin-bottom: 16px;
-              }
-              .text-input {
-                  width: 100%;
-                  background-color: rgba(255,255,255,0.02);
-                  border: 1px solid rgba(255,255,255,0.08);
-                  border-radius: 16px;
-                  padding: 14px 16px;
-                  color: #ffffff;
-                  font-size: 14px;
-                  font-weight: 600;
-                  transition: border-color 0.2s ease;
-              }
-              .text-input:focus {
-                  border-color: #6366f1;
-                  outline: none;
-              }
-              .submit-btn {
-                  width: 100%;
-                  background-color: #6366f1;
-                  border: none;
-                  border-radius: 16px;
-                  padding: 16px;
-                  color: #ffffff;
-                  font-size: 15px;
-                  font-weight: 800;
-                  cursor: pointer;
-                  transition: background-color 0.2s ease;
-                  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
-              }
-              .submit-btn:hover {
-                  background-color: #4f46e5;
-              }
-              .submit-btn:active {
-                  background-color: #4338ca;
-              }
-          </style>
-      </head>
-      <body>
-          <div class="card">
-              <div class="logo">${logoSymbol}</div>
-              <h1>Sign in with ${providerName}</h1>
-              <p class="subtitle">to continue to <span>ParkStop</span></p>
-              
-              <form action="/api/v1/auth/social/mock-login" method="POST">
-                  <input type="hidden" name="provider" value="${provider}">
-                  <input type="hidden" name="redirect_uri" value="${redirect_uri}">
-
-                  <p class="section-title">Choose a test account</p>
-                  
-                  <button type="submit" name="selected_profile" value="${isGoogle ? 'alex.jones@gmail.com|Alex Jones' : 'alex.jones@icloud.com|Alex Jones'}" class="profile-btn">
-                      <div class="avatar">AJ</div>
-                      <div class="profile-details">
-                          <div class="profile-name">Alex Jones</div>
-                          <div class="profile-email">${isGoogle ? 'alex.jones@gmail.com' : 'alex.jones@icloud.com'}</div>
-                      </div>
-                  </button>
-
-                  <button type="submit" name="selected_profile" value="${isGoogle ? 'sarah.parker@gmail.com|Sarah Parker' : 'sarah.parker@icloud.com|Sarah Parker'}" class="profile-btn">
-                      <div class="avatar green">SP</div>
-                      <div class="profile-details">
-                          <div class="profile-name">Sarah Parker</div>
-                          <div class="profile-email">${isGoogle ? 'sarah.parker@gmail.com' : 'sarah.parker@icloud.com'}</div>
-                      </div>
-                  </button>
-
-                  <div class="divider">
-                      <div class="divider-line"></div>
-                      <div class="divider-text">Or type manual email</div>
-                      <div class="divider-line"></div>
-                  </div>
-
-                  <div class="input-group">
-                      <input type="text" name="custom_name" placeholder="Full Name" class="text-input">
-                      <input type="email" name="custom_email" placeholder="email@example.com" class="text-input">
-                  </div>
-
-                  <button type="submit" name="action" value="custom" class="submit-btn">
-                      Continue
-                  </button>
-              </form>
-          </div>
-      </body>
-      </html>
-      `;
-      res.send(html);
-    } catch (error) {
-      logger.error('Render mock OAuth error:', error);
-      res.status(500).send('Failed to render OAuth page: ' + error.message);
-    }
-  }
-
-  /**
-   * 🌐 POST /auth/social/mock-login
-   * Processes mock OAuth submission and redirects to custom app scheme deep link
-   */
-  static async handleMockOAuthSubmit(req, res) {
-    try {
-      const { provider, redirect_uri, selected_profile, custom_email, custom_name, action } = req.body;
-      if (!provider || !redirect_uri) {
-        return res.status(400).send('Provider and redirect_uri are required.');
-      }
-
-      let email = '';
-      let name = '';
-
-      if (action === 'custom') {
-        email = custom_email;
-        name = custom_name || email.split('@')[0];
-      } else if (selected_profile) {
-        const parts = selected_profile.split('|');
-        email = parts[0];
-        name = parts[1];
-      }
-
-      if (!email || !email.includes('@')) {
-        return res.status(400).send('A valid email is required.');
-      }
-
-      console.log(`[SOCIAL LOGIN REDIRECT] Provider: ${provider}, Email: ${email}`);
-
-      let user = await User.findByEmail(email);
-
-      if (!user) {
-        const randomPassword = `OAUTH_MOCK_${Math.random().toString(36).slice(-8)}_${Date.now()}`;
-        user = await User.create({
-          email,
-          password: randomPassword,
-          name: name || email.split('@')[0],
-          phone: '',
-          role: 'finder'
-        });
-      }
-
-      // Generate access token
-      const accessToken = jwt.sign(
-        {
-          id: user.id,
-          role: user.role,
-          name: user.full_name || user.name
-        },
-        config.jwt.secret,
-        { expiresIn: '24h' }
-      );
-
-      // Generate refresh token
-      const refreshToken = jwt.sign(
-        {
-          id: user.id
-        },
-        config.jwt.refreshSecret,
-        { expiresIn: '7d' }
-      );
-
-      const refreshExpiry = new Date();
-      refreshExpiry.setDate(refreshExpiry.getDate() + 7);
-
-      await prisma.users.update({
-        where: { id: user.id },
-        data: {
-          refresh_token: refreshToken,
-          refresh_token_expires: refreshExpiry
-        }
-      });
-
-      // Redirect back to the mobile app deep link scheme!
-      // Format: parkstop://auth-callback?access_token=...&user_role=...
-      const redirectUrl = `${redirect_uri}?access_token=${accessToken}&user_role=${user.role}`;
-      console.log(`[REDIRECTING TO APP] ${redirectUrl}`);
-      res.redirect(redirectUrl);
-
-    } catch (error) {
-      logger.error('Mock OAuth login error:', error);
-      res.status(500).send('OAuth Authentication Failed: ' + error.message);
-    }
-  }
-
 }
 
 module.exports = AuthController;

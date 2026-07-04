@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, Alert, ScrollView, ActivityIndicator, Platform } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, Alert, ScrollView, ActivityIndicator, Platform, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons, FontAwesome5 } from '@expo/vector-icons';
 import * as Location from 'expo-location';
+import * as ImagePicker from 'expo-image-picker';
+import * as Haptics from 'expo-haptics';
+import MapLibreView from '../../components/MapLibreView';
 import apiClient from '../../api/client';
 import { SC, TF, SP, RAD, SS } from '../../constants/SpotterTheme';
 
@@ -26,6 +29,67 @@ export default function SpotsScreen() {
   const [longitude, setLongitude] = useState('');
   const [creating, setCreating] = useState(false);
   const [editingSpotId, setEditingSpotId] = useState<number | null>(null);
+  const [pickedImages, setPickedImages] = useState<string[]>([]);
+  const [useLiveLocation, setUseLiveLocation] = useState(true);
+
+  useEffect(() => {
+    let subscription: Location.LocationSubscription | null = null;
+
+    if (mode === 'create' && useLiveLocation && !editingSpotId) {
+      (async () => {
+        try {
+          const { status } = await Location.requestForegroundPermissionsAsync();
+          if (status !== 'granted') return;
+
+          const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+          setLatitude(current.coords.latitude.toFixed(8));
+          setLongitude(current.coords.longitude.toFixed(8));
+
+          subscription = await Location.watchPositionAsync(
+            {
+              accuracy: Location.Accuracy.High,
+              timeInterval: 2000,
+              distanceInterval: 1,
+            },
+            (loc) => {
+              setLatitude(loc.coords.latitude.toFixed(8));
+              setLongitude(loc.coords.longitude.toFixed(8));
+            }
+          );
+        } catch (e) {
+          console.log('Error watching live location', e);
+        }
+      })();
+    }
+
+    return () => {
+      if (subscription) {
+        subscription.remove();
+      }
+    };
+  }, [mode, useLiveLocation, editingSpotId]);
+
+  const pickImages = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission Denied', 'Media library access is required to add photos.');
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsMultipleSelection: true,
+      selectionLimit: 5 - pickedImages.length,
+      quality: 0.8,
+    });
+    if (!result.canceled) {
+      const uris = result.assets.map(asset => asset.uri);
+      setPickedImages(prev => [...prev, ...uris].slice(0, 5));
+    }
+  };
+
+  const removePickedImage = (index: number) => {
+    setPickedImages(prev => prev.filter((_, idx) => idx !== index));
+  };
 
   useEffect(() => {
     fetchMySpots();
@@ -70,6 +134,9 @@ export default function SpotsScreen() {
 
     setCreating(true);
     try {
+      const existingWebImages = pickedImages.filter(img => img.startsWith('http') || img.startsWith('https'));
+      const localImageUris = pickedImages.filter(img => !img.startsWith('http') && !img.startsWith('https'));
+
       const payload = {
         title: title.trim(),
         description: description.trim(),
@@ -80,8 +147,10 @@ export default function SpotsScreen() {
         total_slots: totalSlots,
         car_slots: parseInt(carSlots || '0'),
         bike_slots: parseInt(bikeSlots || '0'),
+        images: existingWebImages // Keep old images
       };
 
+      let spotId = editingSpotId;
       if (editingSpotId) {
         const res = await apiClient.put(`/spots/${editingSpotId}`, payload);
         if (res.data?.success) {
@@ -90,8 +159,31 @@ export default function SpotsScreen() {
       } else {
         const res = await apiClient.post('/spots', payload);
         if (res.data?.success) {
+          spotId = res.data.data.id;
           Alert.alert('🎉 Spot Created!', `"${title}" is now live on ParkStop.`);
         }
+      }
+
+      // Upload local images if any
+      if (spotId && localImageUris.length > 0) {
+        const formData = new FormData();
+        localImageUris.forEach((uri, idx) => {
+          const uriParts = uri.split('.');
+          const fileType = uriParts[uriParts.length - 1] || 'jpg';
+          
+          // React Native FormData file append format
+          formData.append('images', {
+            uri: Platform.OS === 'ios' ? uri.replace('file://', '') : uri,
+            name: `photo_${idx}_${Date.now()}.${fileType}`,
+            type: `image/${fileType === 'jpg' ? 'jpeg' : fileType}`
+          } as any);
+        });
+
+        await apiClient.post(`/spots/${spotId}/images`, formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data'
+          }
+        });
       }
 
       setTitle('');
@@ -102,6 +194,7 @@ export default function SpotsScreen() {
       setAddress('');
       setLatitude('');
       setLongitude('');
+      setPickedImages([]);
       setEditingSpotId(null);
       setMode('list');
       setLoadingSpots(true);
@@ -123,6 +216,7 @@ export default function SpotsScreen() {
     setAddress(spot.address || '');
     setLatitude(spot.latitude?.toString() || '');
     setLongitude(spot.longitude?.toString() || '');
+    setPickedImages(spot.images || []); // Load existing pictures
     setMode('create');
   };
 
@@ -182,14 +276,14 @@ export default function SpotsScreen() {
         <View style={s.toggleRow}>
           <TouchableOpacity
             style={[s.toggleBtn, mode === 'list' && s.toggleActive]}
-            onPress={() => { setMode('list'); setEditingSpotId(null); setTitle(''); setAddress(''); setPrice(''); }}
+            onPress={() => { setMode('list'); setEditingSpotId(null); setTitle(''); setAddress(''); setPrice(''); setPickedImages([]); setUseLiveLocation(true); }}
           >
             <Ionicons name="list" size={18} color={mode === 'list' ? '#FFF' : SC.textMuted} />
             <Text style={[s.toggleText, mode === 'list' && { color: '#FFF' }]}>My Spots</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[s.toggleBtn, mode === 'create' && s.toggleActive]}
-            onPress={() => { setMode('create'); setEditingSpotId(null); setTitle(''); setAddress(''); setPrice(''); }}
+            onPress={() => { setMode('create'); setEditingSpotId(null); setTitle(''); setAddress(''); setPrice(''); setPickedImages([]); setUseLiveLocation(true); }}
           >
             <Ionicons name="add-circle" size={18} color={mode === 'create' ? '#FFF' : SC.textMuted} />
             <Text style={[s.toggleText, mode === 'create' && { color: '#FFF' }]}>{editingSpotId ? 'Edit Spot' : 'Create New'}</Text>
@@ -222,7 +316,11 @@ export default function SpotsScreen() {
                 <View key={i} style={s.spotCard}>
                   <View style={s.spotHeader}>
                     <View style={s.spotIconBox}>
-                      <Ionicons name="location" size={20} color={SC.accent} />
+                      {spot.images && spot.images.length > 0 ? (
+                        <Image source={{ uri: spot.images[0] }} style={{ width: '100%', height: '100%', borderRadius: 8 }} />
+                      ) : (
+                        <Ionicons name="location" size={20} color={SC.accent} />
+                      )}
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={{ color: SC.textPrimary, ...TF.bodyBold }}>{spot.title}</Text>
@@ -337,15 +435,118 @@ export default function SpotsScreen() {
               />
             </View>
 
-            {/* LOCATION SECTION */}
+            {/* PHOTOS OF THE SPOT */}
             <View style={SS.inputGroup}>
-              <Text style={SS.inputLabel}>LOCATION *</Text>
-              <TouchableOpacity style={s.locationBtn} onPress={detectLocation}>
-                <Ionicons name="navigate" size={18} color={SC.accent} />
-                <Text style={s.locationBtnText}>
-                  {latitude && longitude ? `${latitude}, ${longitude}` : 'Tap to detect your location'}
-                </Text>
-              </TouchableOpacity>
+              <Text style={SS.inputLabel}>PHOTOS OF THE SPOT (MAX 5)</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexDirection: 'row', marginTop: 10, marginBottom: 4 }}>
+                {pickedImages.map((uri, idx) => (
+                  <View key={idx} style={{ position: 'relative', width: 72, height: 72, marginRight: 12, borderRadius: RAD.sm, overflow: 'hidden', borderWidth: 1, borderColor: SC.border }}>
+                    <Image source={{ uri }} style={{ width: '100%', height: '100%' }} />
+                    <TouchableOpacity 
+                      onPress={() => removePickedImage(idx)} 
+                      style={{ position: 'absolute', top: 4, right: 4, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 10, width: 20, height: 20, justifyContent: 'center', alignItems: 'center' }}
+                    >
+                      <Ionicons name="close" size={14} color="#FFF" />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+                {pickedImages.length < 5 && (
+                  <TouchableOpacity 
+                    onPress={pickImages} 
+                    style={{ width: 72, height: 72, backgroundColor: SC.bgCard, borderRadius: RAD.sm, borderStyle: 'dashed', borderWidth: 1.5, borderColor: SC.borderActive, justifyContent: 'center', alignItems: 'center' }}
+                  >
+                    <Ionicons name="camera" size={22} color={SC.accent} />
+                    <Text style={{ color: SC.textMuted, fontSize: 9, marginTop: 4, fontWeight: '800' }}>Add Photo</Text>
+                  </TouchableOpacity>
+                )}
+              </ScrollView>
+            </View>
+
+            {/* LOCATION SECTION WITH LIVE MAP */}
+            <View style={SS.inputGroup}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <Text style={SS.inputLabel}>SPOT LOCATION *</Text>
+                
+                {/* Live GPS / Custom Marker Status Toggle */}
+                <TouchableOpacity 
+                  onPress={() => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    if (!useLiveLocation) {
+                      setUseLiveLocation(true);
+                    } else {
+                      setUseLiveLocation(false);
+                    }
+                  }}
+                  style={{ 
+                    flexDirection: 'row', 
+                    alignItems: 'center', 
+                    backgroundColor: useLiveLocation ? 'rgba(16,185,129,0.12)' : 'rgba(59,130,246,0.12)', 
+                    paddingHorizontal: 8, 
+                    paddingVertical: 3, 
+                    borderRadius: RAD.sm, 
+                    borderWidth: 1, 
+                    borderColor: useLiveLocation ? 'rgba(16,185,129,0.3)' : 'rgba(59,130,246,0.3)' 
+                  }}
+                >
+                  <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: useLiveLocation ? '#10b981' : '#3b82f6', marginRight: 5 }} />
+                  <Text style={{ color: useLiveLocation ? '#10b981' : '#3b82f6', fontSize: 10, fontWeight: '800' }}>
+                    {useLiveLocation ? 'Live GPS Active' : 'Custom Pin Set'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+              
+              {/* Map Preview Webview */}
+              {latitude && longitude ? (
+                <View style={{ height: 200, borderRadius: RAD.md, overflow: 'hidden', marginBottom: 12, borderWidth: 1, borderColor: SC.border }}>
+                  <MapLibreView
+                    userLocation={{ lat: parseFloat(latitude), lng: parseFloat(longitude) }}
+                    markers={[{
+                      id: 'new_spot',
+                      lat: parseFloat(latitude),
+                      lng: parseFloat(longitude),
+                      price: parseFloat(price) || 0,
+                      available: true,
+                      title: title || 'New Parking Spot'
+                    }]}
+                    onMapPress={(coords) => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                      setUseLiveLocation(false); // Disable live tracking when placing custom pin
+                      setLatitude(coords[0].toFixed(8));
+                      setLongitude(coords[1].toFixed(8));
+                    }}
+                    hideControls={true}
+                  />
+                </View>
+              ) : (
+                <View style={{ height: 200, borderRadius: RAD.md, backgroundColor: SC.bgCard, justifyContent: 'center', alignItems: 'center', marginBottom: 12, borderWidth: 1, borderColor: SC.border }}>
+                  <ActivityIndicator color={SC.accent} size="small" />
+                  <Text style={{ color: SC.textMuted, fontSize: 12, marginTop: 8, fontWeight: '700' }}>Waiting for GPS signal...</Text>
+                </View>
+              )}
+
+              {/* Reset to GPS Button if custom pin is active */}
+              {!useLiveLocation && !editingSpotId && (
+                <TouchableOpacity 
+                  onPress={async () => {
+                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    setUseLiveLocation(true);
+                  }}
+                  style={{ 
+                    flexDirection: 'row', 
+                    alignItems: 'center', 
+                    justifyContent: 'center', 
+                    backgroundColor: 'rgba(255,255,255,0.04)', 
+                    paddingVertical: 10, 
+                    borderRadius: RAD.sm, 
+                    borderWidth: 1, 
+                    borderColor: 'rgba(255,255,255,0.08)',
+                    marginBottom: 12
+                  }}
+                >
+                  <Ionicons name="refresh-circle" size={16} color={SC.accent} style={{ marginRight: 6 }} />
+                  <Text style={{ color: SC.accent, fontSize: 12, fontWeight: '800' }}>Recenter to Live GPS Location</Text>
+                </TouchableOpacity>
+              )}
             </View>
 
             <View style={{ flexDirection: 'row', gap: 12, marginBottom: SP.xl }}>

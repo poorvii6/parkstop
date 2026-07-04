@@ -1,10 +1,7 @@
 const prisma = require('../config/prisma');
-const bcrypt = require('bcryptjs');
 
 async function seed() {
   try {
-    const hashedPassword = await bcrypt.hash('password123', 10);
-
     const usersToSeed = [
       {
         email: 'finder@example.com',
@@ -53,7 +50,6 @@ async function seed() {
       const created = await prisma.users.upsert({
         where: { email: u.email },
         update: {
-          password: hashedPassword,
           role: u.role,
           full_name: u.name,
           name: u.name,
@@ -63,7 +59,6 @@ async function seed() {
         },
         create: {
           email: u.email,
-          password: hashedPassword,
           full_name: u.name,
           name: u.name,
           role: u.role,

@@ -7,7 +7,7 @@ class AnalyticsController {
     try {
       const { spotterId } = req.params;
 
-      if (req.user.role !== 'spotter' || req.user.id != spotterId) {
+      if (req.user.role.toLowerCase() !== 'spotter' || req.user.id != spotterId) {
         return res.status(403).json({
           success: false,
           message: 'Access denied'

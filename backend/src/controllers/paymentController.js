@@ -10,7 +10,7 @@ class PaymentController {
    */
   static async createCheckoutSession(req, res) {
     try {
-      if (req.user.role !== 'finder') {
+      if (req.user.role.toLowerCase() !== 'finder') {
         return res.status(403).json({ success: false, message: 'Only finders can process payments' });
       }
 
@@ -184,33 +184,48 @@ class PaymentController {
         return res.status(400).json({ success: false, message: 'Method and amount required' });
       }
 
-      // Check if user has enough balance
-      const user = await require('../config/prisma').users.findUnique({
-        where: { id: req.user.id }
+      const prisma = require('../config/prisma');
+
+      // Use a transaction to prevent race conditions
+      const result = await prisma.$transaction(async (tx) => {
+        // Fetch user inside transaction
+        const user = await tx.users.findUnique({
+          where: { id: req.user.id }
+        });
+
+        if (!user || user.balance < amount) {
+          throw new Error('Insufficient balance');
+        }
+
+        // Record withdrawal request
+        const withdrawal = await tx.withdrawals.create({
+          data: {
+            user_id: req.user.id,
+            amount: parseFloat(amount),
+            payment_method_id: parseInt(methodId),
+            status: 'pending'
+          }
+        });
+
+        // Deduct balance
+        const updatedUser = await tx.users.update({
+          where: { id: req.user.id },
+          data: { balance: { decrement: parseFloat(amount) } }
+        });
+
+        // Double check against negative balance
+        if (updatedUser.balance < 0) {
+          throw new Error('Insufficient balance');
+        }
+
+        return withdrawal;
       });
 
-      if (user.balance < amount) {
+      res.json({ success: true, message: 'Withdrawal initiated', data: result });
+    } catch (error) {
+      if (error.message === 'Insufficient balance') {
         return res.status(400).json({ success: false, message: 'Insufficient balance' });
       }
-
-      // Record withdrawal request (In a real app, this triggers Stripe Payout)
-      const withdrawal = await require('../config/prisma').withdrawals.create({
-        data: {
-          user_id: req.user.id,
-          amount: parseFloat(amount),
-          payment_method_id: parseInt(methodId),
-          status: 'pending'
-        }
-      });
-
-      // Deduct balance
-      await require('../config/prisma').users.update({
-        where: { id: req.user.id },
-        data: { balance: { decrement: parseFloat(amount) } }
-      });
-
-      res.json({ success: true, message: 'Withdrawal initiated', data: withdrawal });
-    } catch (error) {
       logger.error('Withdrawal Controller Error:', error);
       res.status(500).json({ success: false, message: 'Failed to initiate withdrawal' });
     }
@@ -235,7 +250,7 @@ class PaymentController {
    */
   static async createRazorpayOrder(req, res) {
     try {
-      if (req.user.role !== 'finder') {
+      if (req.user.role.toLowerCase() !== 'finder') {
         return res.status(403).json({ success: false, message: 'Only finders can process payments' });
       }
 
@@ -273,7 +288,7 @@ class PaymentController {
    */
   static async verifyRazorpayPayment(req, res) {
     try {
-      if (req.user.role !== 'finder') {
+      if (req.user.role.toLowerCase() !== 'finder') {
         return res.status(403).json({ success: false, message: 'Only finders can process payments' });
       }
 
@@ -310,7 +325,7 @@ class PaymentController {
    */
   static async verifyStripePayment(req, res) {
     try {
-      if (req.user.role !== 'finder') {
+      if (req.user.role.toLowerCase() !== 'finder') {
         return res.status(403).json({ success: false, message: 'Only finders can process payments' });
       }
 
@@ -396,7 +411,7 @@ class PaymentController {
   static async verifyClearDuesPayment(req, res) {
     try {
       const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
-      const isValid = await require('../services/payments/RazorpayAdapter').verifySignature(
+      const isValid = require('../services/payments/RazorpayAdapter').verifyPaymentSignature(
         razorpay_order_id, razorpay_payment_id, razorpay_signature
       );
       if (!isValid) return res.status(400).json({ success: false, message: 'Invalid payment signature' });

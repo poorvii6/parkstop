@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Animated } from 'react-native';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BlueprintColors } from '../constants/BlueprintTheme';
+import { auth } from '../services/firebase';
 
 export default function SplashScreen() {
   const router = useRouter();
@@ -22,9 +23,11 @@ export default function SplashScreen() {
       try {
         const token = await AsyncStorage.getItem('access_token');
         const role = await AsyncStorage.getItem('user_role');
-        
-        if (!token) {
-          router.replace('/login'); // Prefer login as entry point now
+        const isOffline = token === 'offline_token';
+        const hasFirebaseUser = auth.currentUser !== null;
+
+        if (!hasFirebaseUser && !isOffline) {
+          router.replace('/login');
         } else {
           const r = role ? role.toUpperCase() : '';
           if (r === 'ADMIN') router.replace('/admin');

@@ -109,12 +109,10 @@ model users {
   id                    Int               @id @default(autoincrement())
   name                  String            @db.VarChar(100)
   email                 String            @unique @db.VarChar(150)
-  password              String
+  firebase_uid          String?           @unique @db.VarChar(128)
   role                  String            @db.VarChar(20)
   created_at            DateTime?         @default(now()) @db.Timestamp(6)
   phone                 String?           @db.VarChar(20)
-  refresh_token         String?
-  refresh_token_expires DateTime?         @db.Timestamp(6)
   full_name             String?           @db.VarChar(255)
   stripe_account_id     String?           @db.VarChar(255)
   payout_provider       String?           @default("stripe") @db.VarChar(20)

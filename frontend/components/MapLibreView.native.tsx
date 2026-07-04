@@ -222,7 +222,7 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
         function initMap(data) {
           map = window.map = new maplibregl.Map({
             container: 'map',
-            style: 'https://tiles.openfreemap.org/styles/liberty',
+            style: 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json',
             center: data.userLocation,
             zoom: data.isActiveNavigation ? 18.5 : 16,
             pitch: data.isActiveNavigation ? 55 : 0,
@@ -243,7 +243,7 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
             destMarker = new maplibregl.Marker({ element: destEl, anchor: 'bottom' });
 
             // Satellite
-            map.addSource('satellite', { type:'raster', tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'], tileSize:256 });
+            map.addSource('satellite', { type:'raster', tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'], tileSize:256, maxzoom:19 });
             map.addLayer({ id:'satellite-layer', type:'raster', source:'satellite', layout:{visibility:'none'} });
 
             // Traveled route (gray)

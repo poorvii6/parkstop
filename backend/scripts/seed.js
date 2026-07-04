@@ -1,18 +1,16 @@
 const db = require('../src/config/database');
-const bcrypt = require('bcryptjs');
 
 async function seed() {
   console.log('🌱 Seeding database...');
 
   try {
-    // 1. Create a default spotter
-    const hashedPassword = await bcrypt.hash('password123', 10);
+    // 1. Create a default spotter (no password column, include name and full_name)
     const userRes = await db.query(
-      `INSERT INTO users (email, password, full_name, role)
+      `INSERT INTO users (email, name, full_name, role)
        VALUES ($1, $2, $3, $4)
-       ON CONFLICT (email) DO UPDATE SET full_name = EXCLUDED.full_name
+       ON CONFLICT (email) DO UPDATE SET full_name = EXCLUDED.full_name, name = EXCLUDED.name
        RETURNING id`,
-      ['spotter@parkstop.com', hashedPassword, 'Master Spotter', 'spotter']
+      ['spotter@parkstop.com', 'Master Spotter', 'Master Spotter', 'spotter']
     );
     const spotterId = userRes.rows[0].id;
 

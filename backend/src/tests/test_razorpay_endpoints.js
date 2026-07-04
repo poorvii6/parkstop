@@ -14,7 +14,6 @@ async function testRazorpayEndpoints() {
       create: {
         name: 'Razorpay Test Finder',
         email: 'finder_test_rzp@parkstop.com',
-        password: 'hashed_password',
         role: 'finder'
       }
     });
@@ -25,7 +24,6 @@ async function testRazorpayEndpoints() {
       create: {
         name: 'Razorpay Test Spotter',
         email: 'spotter_test_rzp@parkstop.com',
-        password: 'hashed_password',
         role: 'spotter'
       }
     });

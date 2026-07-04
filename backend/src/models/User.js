@@ -1,23 +1,20 @@
 const prisma = require('../config/prisma');
-const bcrypt = require('bcryptjs');
 const logger = require('../utils/logger');
 
 class User {
 
-  static async create({ email, password, name, phone, role }) {
+  static async create({ email, name, phone, role, firebase_uid }) {
     try {
-      const hashedPassword = await bcrypt.hash(password, 10);
-
       const user = await prisma.users.create({
         data: {
           email,
-          password: hashedPassword,
           full_name: name,
-          name: name, // Maintain both for compatibility
-          phone,
-          role,
-          is_finder_registered: role === 'finder',
-          is_spotter_registered: role === 'spotter'
+          name: name,
+          phone: phone || '',
+          role: role.toUpperCase(),
+          firebase_uid,
+          is_finder_registered: role.toUpperCase() === 'FINDER',
+          is_spotter_registered: role.toUpperCase() === 'SPOTTER'
         },
         select: {
           id: true,
@@ -25,7 +22,8 @@ class User {
           full_name: true,
           phone: true,
           role: true,
-          created_at: true
+          created_at: true,
+          firebase_uid: true
         }
       });
 
@@ -64,15 +62,11 @@ class User {
         payout_mode: true,
         is_finder_registered: true,
         is_spotter_registered: true,
-        balance: true
+        firebase_uid: true
       }
     });
     if (!user) return null;
     return { ...user, name: user.full_name };
-  }
-
-  static async verifyPassword(plainPassword, hashedPassword) {
-    return bcrypt.compare(plainPassword, hashedPassword);
   }
 
   static async update(id, updates) {
@@ -105,31 +99,12 @@ class User {
         payout_mode: true,
         balance: true,
         is_finder_registered: true,
-        is_spotter_registered: true
+        is_spotter_registered: true,
+        firebase_uid: true
       }
     });
 
     return { ...user, name: user.full_name };
-  }
-
-  static async changePassword(id, oldPassword, newPassword) {
-    const user = await prisma.users.findUnique({
-      where: { id: parseInt(id) },
-      select: { id: true, password: true }
-    });
-
-    if (!user) throw new Error('User not found');
-
-    const isValid = await bcrypt.compare(oldPassword, user.password);
-    if (!isValid) throw new Error('Current password is incorrect');
-
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-    await prisma.users.update({
-      where: { id: parseInt(id) },
-      data: { password: hashedPassword }
-    });
-
-    return true;
   }
 
   static async getStats(userId, role) {

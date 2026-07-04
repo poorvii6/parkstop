@@ -23,7 +23,6 @@ export default function RootLayout() {
         <Stack.Screen name="finder/index" options={{ headerShown: false }} />
         <Stack.Screen name="spotter" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', headerShown: false }} />
-        <Stack.Screen name="profile-details" options={{ headerShown: false, animation: 'slide_from_right' }} />
         <Stack.Screen name="payments" options={{ headerShown: false, animation: 'slide_from_right' }} />
       </Stack>
       <StatusBar style="light" />

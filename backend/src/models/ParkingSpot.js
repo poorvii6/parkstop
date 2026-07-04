@@ -245,7 +245,7 @@ class ParkingSpot {
         status: 'completed'
       },
       _sum: {
-        total_price: true
+        spotter_earning: true
       }
     });
 
@@ -265,7 +265,7 @@ class ParkingSpot {
       },
       select: {
         created_at: true,
-        total_price: true
+        spotter_earning: true
       }
     });
 
@@ -277,7 +277,7 @@ class ParkingSpot {
     recentCompletedBookings.forEach(item => {
       const dayDiff = Math.floor((today - new Date(item.created_at)) / (1000 * 60 * 60 * 24));
       if (dayDiff >= 0 && dayDiff < 7) {
-        trend[6 - dayDiff] += Number(item.total_price || 0);
+        trend[6 - dayDiff] += Number(item.spotter_earning || 0);
       }
     });
 
@@ -327,7 +327,7 @@ class ParkingSpot {
 
     return {
       active_spots: activeSpotsCount,
-      earnings: Number(earnings._sum.total_price || 0),
+      earnings: Number(earnings._sum.spotter_earning || 0),
       revenue_trend: trend,
       surge_factor: Number(avgSurge.toFixed(1)),
       inventory: activeSpots,

@@ -3,7 +3,6 @@ process.env.PRISMA_CLIENT_ENGINE_TYPE = 'binary';
 require('dotenv').config({ path: path.resolve(__dirname, '../../../backend/.env') });
 
 const prisma = require('../../../backend/src/config/prisma');
-const bcrypt = require('../../../backend/node_modules/bcryptjs');
 
 async function resetDB() {
   // Clear all related tables in correct dependency order
@@ -24,15 +23,12 @@ async function resetDB() {
 }
 
 async function seedDB() {
-  const hashedPassword = await bcrypt.hash('password123', 10);
-
   // 1. Upsert Spotter User
   const spotter = await prisma.users.upsert({
     where: { email: 'spotter@example.com' },
     update: { balance: 1000.00, role: 'spotter' },
     create: {
       email: 'spotter@example.com',
-      password: hashedPassword,
       name: 'John Spotter',
       full_name: 'John Spotter',
       role: 'spotter',
@@ -48,7 +44,6 @@ async function seedDB() {
     update: { balance: 0.00, role: 'finder' },
     create: {
       email: 'finder@example.com',
-      password: hashedPassword,
       name: 'Jane Finder',
       full_name: 'Jane Finder',
       role: 'finder',
@@ -62,7 +57,6 @@ async function seedDB() {
     update: { balance: 1000.00, role: 'spotter' },
     create: {
       email: 'spotter@parkstop.com',
-      password: hashedPassword,
       name: 'Master Spotter',
       full_name: 'Master Spotter',
       role: 'spotter',
@@ -77,7 +71,6 @@ async function seedDB() {
     update: { balance: 100.00, role: 'finder' },
     create: {
       email: 'finder@parkstop.com',
-      password: hashedPassword,
       name: 'Master Finder',
       full_name: 'Master Finder',
       role: 'finder',
@@ -90,7 +83,6 @@ async function seedDB() {
     update: { role: 'finder' },
     create: {
       email: 'finder@test.com',
-      password: hashedPassword,
       name: 'Test Finder',
       full_name: 'Test Finder',
       role: 'finder',
@@ -103,7 +95,6 @@ async function seedDB() {
     update: { role: 'spotter' },
     create: {
       email: 'spotter@test.com',
-      password: hashedPassword,
       name: 'Test Spotter',
       full_name: 'Test Spotter',
       role: 'spotter',

@@ -116,9 +116,15 @@ router.post(
   async (req, res) => {
     try {
       const spotId = req.params.id;
-      const imageUrls = req.files.map(f => f.path); // Cloudinary URL
+      const prisma = require('../config/prisma');
+      const existingSpot = await prisma.parking_spots.findUnique({
+        where: { id: parseInt(spotId) },
+        select: { images: true }
+      });
+      const existingImages = Array.isArray(existingSpot?.images) ? existingSpot.images : [];
+      const imageUrls = [...existingImages, ...req.files.map(f => f.path)];
 
-      const spot = await require('../config/prisma').parking_spots.update({
+      const spot = await prisma.parking_spots.update({
         where: { id: parseInt(spotId) },
         data: { images: imageUrls }
       });

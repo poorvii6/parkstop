@@ -1,16 +1,16 @@
 {
   "expo": {
-    "name": "Smart Parking",
-    "slug": "smart-parking",
+    "name": "ParkStop",
+    "slug": "parkstop",
     "scheme": "smart-parking",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "splash": {
       "image": "./assets/images/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#0C0C14"
     },
     "updates": {
       "fallbackToCacheTimeout": 0
@@ -20,7 +20,14 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.smartparking.app"
+      "bundleIdentifier": "com.smartparking.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Allow Smart Parking to access your location to find nearby parking spots.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Allow Smart Parking to use your location for navigating to available spots in the background.",
+        "UIBackgroundModes": [
+          "location"
+        ]
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -30,7 +37,8 @@
       "package": "com.smartparking.app",
       "permissions": [
         "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION"
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION"
       ]
     },
     "web": {
@@ -39,6 +47,7 @@
     "plugins": [
       "expo-router",
       "expo-web-browser",
+      "expo-notifications",
       [
         "expo-location",
         {
@@ -59,7 +68,8 @@
           "enableGooglePay": true
         }
       ],
-      "expo-font"
+      "expo-font",
+      "@react-native-google-signin/google-signin"
     ]
   }
 }

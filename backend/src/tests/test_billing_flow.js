@@ -14,7 +14,6 @@ async function simulateBillingFlow() {
       create: {
         name: 'Test Finder',
         email: 'finder_test@parkstop.com',
-        password: 'hashed_password',
         role: 'finder'
       }
     });
@@ -25,7 +24,6 @@ async function simulateBillingFlow() {
       create: {
         name: 'Test Spotter',
         email: 'spotter_test@parkstop.com',
-        password: 'hashed_password',
         role: 'spotter',
         stripe_account_id: 'acct_mock_spotter_123'
       }

@@ -1,67 +1,43 @@
 const express = require('express');
-const { body } = require('express-validator');
-
+const { validateRegister, validateSocialLogin, validateSendOtp, validateVerifyOtp } = require('../middleware/authValidator');
 const AuthController = require('../controllers/authController');
 const { authenticate } = require('../middleware/auth');
-const validate = require('../middleware/validator');
+const loginRateLimiter = require('../middleware/loginRateLimiter');
 
 const router = express.Router();
+
+/**
+ * OTP VERIFICATION
+ */
+router.post(
+  '/send-otp',
+  validateSendOtp,
+  AuthController.sendOTP
+);
+
+router.post(
+  '/verify-otp',
+  validateVerifyOtp,
+  AuthController.verifyOTP
+);
 
 /**
  * REGISTER
  */
 router.post(
   '/register',
-  [
-    body('email').isEmail(),
-    body('password')
-      .isLength({ min: 8 })
-      .withMessage('Password must be at least 8 characters')
-      .matches(/\d/)
-      .withMessage('Password must contain at least one number'),
-    body('name').notEmpty(),
-    body('phone').optional().isString(),
-    body('role').isIn(['finder', 'spotter']),
-    validate
-  ],
+  validateRegister,
   AuthController.register
 );
 
 /**
- * LOGIN
- */
-router.post(
-  '/login',
-  [
-    body('email').isEmail(),
-    body('password').notEmpty(),
-    validate
-  ],
-  AuthController.login
-);
-
-/**
- * SOCIAL LOGIN
+ * SOCIAL LOGIN / PROFILE SYNC
  */
 router.post(
   '/social-login',
-  [
-    body('email').isEmail(),
-    body('provider').isIn(['google', 'apple']),
-    validate
-  ],
+  loginRateLimiter,
+  validateSocialLogin,
   AuthController.socialLogin
-);
-
-router.get('/social/mock-login', AuthController.renderMockOAuth);
-router.post('/social/mock-login', AuthController.handleMockOAuthSubmit);
-
-/**
- * REFRESH TOKEN
- */
-router.post(
-  '/refresh',
-  AuthController.refreshToken
 );
 
 /**
@@ -86,12 +62,6 @@ router.put(
   '/profile',
   authenticate,
   AuthController.updateProfile
-);
-
-router.post(
-  '/change-password',
-  authenticate,
-  AuthController.changePassword
 );
 
 router.post(

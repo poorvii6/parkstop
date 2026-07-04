@@ -1425,8 +1425,11 @@ export default function FinderDashboard() {
                       style: 'destructive',
                       onPress: async () => {
                         try { await apiClient.post('/auth/logout'); } catch(e) {}
-                        await AsyncStorage.removeItem('access_token');
-                        await AsyncStorage.setItem('user_role', '');
+                        await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user_role']);
+                        try {
+                          const { auth } = require('../../services/firebase');
+                          await auth.signOut();
+                        } catch (err) {}
                         router.replace('/login');
                       }
                     }
@@ -1738,6 +1741,23 @@ export default function FinderDashboard() {
                 </TouchableOpacity>
               </View>
             </View>
+
+            {/* Spot Images Carousel */}
+            {(() => {
+              const currentSpot = spots.find(s => s.id === selectedSpotId);
+              if (currentSpot?.images && currentSpot.images.length > 0) {
+                return (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flexDirection: 'row', marginBottom: 16 }} contentContainerStyle={{ gap: 12 }}>
+                    {currentSpot.images.map((img: string, idx: number) => (
+                      <View key={idx} style={{ width: 140, height: 90, borderRadius: 14, overflow: 'hidden', backgroundColor: 'rgba(255,255,255,0.03)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' }}>
+                        <Image source={{ uri: img }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+                      </View>
+                    ))}
+                  </ScrollView>
+                );
+              }
+              return null;
+            })()}
 
             {/* Spot Info Card */}
             <View style={{ backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: 20, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.04)' }}>

@@ -152,7 +152,7 @@ export default function PaymentMethodsScreen() {
       setHistory(fetchedHistory);
       
       // Fetch user profile for real balance if they are a spotter
-      if (storedRole === 'spotter') {
+      if (storedRole && storedRole.toLowerCase() === 'spotter') {
          const profileRes = await apiClient.get('/auth/profile');
          if (profileRes.data?.success) {
             const userBalance = profileRes.data.data.user.balance;
@@ -291,7 +291,7 @@ export default function PaymentMethodsScreen() {
           </View>
         )}
 
-        {role === 'spotter' && (
+        {role && role.toLowerCase() === 'spotter' && (
           <LinearGradient colors={[BlueprintColors.primaryAccent, '#BEF264']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.earningsCard}>
             <Text style={styles.earningsLabel}>Net Earnings</Text>
             <Text style={styles.earningsAmount}>₹{Number(balance || 0).toFixed(2)}</Text>
@@ -304,7 +304,7 @@ export default function PaymentMethodsScreen() {
           </LinearGradient>
         )}
 
-        <Text style={styles.sectionLabel}>{role === 'finder' ? 'Saved Payment Methods' : 'Bank & UPI Accounts'}</Text>
+        <Text style={styles.sectionLabel}>{(role && role.toLowerCase() === 'finder') ? 'Saved Payment Methods' : 'Bank & UPI Accounts'}</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.cardsScroll}>
           {methods.filter(m => m.method_type === 'card').map((m) => (
             <CreditCard 

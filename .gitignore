@@ -9,3 +9,8 @@ dist/
 build/
 *.txt
 !README.txt
+firebase-service-account.json
+*.key
+*.pem
+secrets/
+.env*

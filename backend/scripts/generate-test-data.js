@@ -1,17 +1,14 @@
 const prisma = require('../src/config/prisma');
-const bcrypt = require('bcryptjs');
 
 async function main() {
   console.log('🌱 Seeding test data...');
 
   // 1. Create a Test Spotter
-  const hashedUserPassword = await bcrypt.hash('password123', 10);
   const spotter = await prisma.users.upsert({
     where: { email: 'spotter@test.com' },
     update: {},
     create: {
       email: 'spotter@test.com',
-      password: hashedUserPassword,
       name: 'Test Spotter',
       full_name: 'Test Spotter',
       phone: '9876543210',
@@ -26,7 +23,6 @@ async function main() {
     update: {},
     create: {
       email: 'finder@test.com',
-      password: hashedUserPassword,
       name: 'Test Finder',
       full_name: 'Test Finder',
       phone: '1234567890',

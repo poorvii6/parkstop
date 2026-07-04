@@ -1,8 +1,8 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
-import * as Device from 'expo-device';
 import Constants from 'expo-constants';
+import { auth } from '../services/firebase';
 
 let cachedApiUrl: string | null = null;
 
@@ -40,7 +40,7 @@ const getAPIUrl = async () => {
 
 const apiClient = axios.create({
   baseURL: getAPIUrlSync(),
-  timeout: 15000, // Reduced timeout for faster failure/retry
+  timeout: 15000,
   headers: {
     'Bypass-Tunnel-Reminder': 'true',
   },
@@ -58,32 +58,43 @@ apiClient.interceptors.request.use(
     console.log('Final URL:', `${config.baseURL}${config.url}`);
 
     try {
-      const token = await AsyncStorage.getItem('access_token');
-      if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
+      const currentUser = auth.currentUser;
+      if (currentUser) {
+        const token = await currentUser.getIdToken();
+        if (token) {
+          config.headers.Authorization = `Bearer ${token}`;
+        }
+      } else {
+        // Fallback for guest mode / offline_token
+        const token = await AsyncStorage.getItem('access_token');
+        if (token) {
+          config.headers.Authorization = `Bearer ${token}`;
+        }
       }
     } catch (e) {
-      console.error('AsyncStorage Error:', e);
+      console.error('Auth Request Interceptor Error:', e);
     }
     return config;
   },
   (error) => Promise.reject(error)
 );
 
+// RESPONSE INTERCEPTOR: Handle 401 Unauthorized globally
 apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
     if (error.response && error.response.status === 401) {
-      if (error.config.url?.includes('/auth/login')) {
-        return Promise.reject(error);
+      console.log('[API] Request returned 401 Unauthorized - Redirecting to login.');
+      
+      // Clear local session storage
+      await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user_role']);
+      
+      try {
+        await auth.signOut();
+      } catch (signOutErr) {
+        console.error('Signout Error on 401:', signOutErr);
       }
 
-      const token = await AsyncStorage.getItem('access_token');
-      if (token === 'offline_token') return Promise.reject(error);
-      
-      console.log('401 Unauthorized - Clearing session');
-      await AsyncStorage.multiRemove(['access_token', 'user_role']);
-      
       if (Platform.OS !== 'web') {
         const { Alert } = require('react-native');
         Alert.alert('Session Expired', 'Please log in again.', [{ text: 'OK' }]);

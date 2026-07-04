@@ -5,13 +5,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import apiClient from '../api/client';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { BlueprintTheme, BlueprintColors } from '../constants/BlueprintTheme';
-import * as WebBrowser from 'expo-web-browser';
-import * as Linking from 'expo-linking';
-
-// Ensure WebBrowser finishes redirect actions correctly on Web
-if (Platform.OS === 'web') {
-  WebBrowser.maybeCompleteAuthSession();
-}
+import { signInWithEmailAndPassword, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
+import { auth } from '../services/firebase';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
@@ -24,16 +19,26 @@ export default function LoginScreen() {
     setLoading(true);
 
     try {
-      console.log(`[AUTH] Attempting login for email: ${email}`);
-      const response = await apiClient.post('/auth/login', { email, password });
+      console.log(`[AUTH] Authenticating with Firebase for email: ${email}`);
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const firebaseUser = userCredential.user;
+
+      console.log(`[AUTH] Firebase login successful. Retrieving ID token...`);
+      const firebaseToken = await firebaseUser.getIdToken();
+
+      console.log(`[AUTH] Synchronizing session profile with ParkStop database...`);
+      const response = await apiClient.post('/auth/social-login', {
+        email: firebaseUser.email || email,
+        token: firebaseToken
+      });
+
       if (response.data.success) {
-        await AsyncStorage.setItem('access_token', response.data.data.access_token);
         await AsyncStorage.setItem('user_role', response.data.data.user.role);
         router.replace('/welcome');
       }
     } catch (error: any) {
       console.error('[AUTH] Login Error:', error.response?.data || error.message);
-      const msg = error.response?.data?.message || (error.response?.data?.errors ? 'Invalid email or password' : null) || error.message || 'Network error';
+      const msg = error.response?.data?.message || 'Incorrect email or password';
       if (Platform.OS === 'web') alert('Login Failed: ' + msg);
       else Alert.alert('Login Failed', msg);
     } finally {
@@ -41,45 +46,77 @@ export default function LoginScreen() {
     }
   };
 
-  const handleSocialWebLogin = async (provider: 'google' | 'apple') => {
+  const handleSocialLogin = async (providerName: 'google' | 'apple') => {
+    if (providerName === 'apple') {
+      Alert.alert('Sign in with Apple', 'Apple Sign-In requires active provisioning profiles. Please use Email/Password sign-in or Google for development.');
+      return;
+    }
+
     try {
       setLoading(true);
+      console.log(`[SOCIAL AUTH] Triggering Firebase Google Sign-In...`);
+      const provider = new GoogleAuthProvider();
       
-      // 1. Create a redirect URL back to the mobile app
-      const redirectUrl = Linking.createURL('auth-callback');
-      console.log(`[SOCIAL AUTH] Redirect scheme set to: ${redirectUrl}`);
-
-      // 2. Point to our backend mock login page, passing provider and redirect URI
-      const authUrl = `${apiClient.defaults.baseURL}/auth/social/mock-login?provider=${provider}&redirect_uri=${encodeURIComponent(redirectUrl)}`;
-      console.log(`[SOCIAL AUTH] Launching browser at: ${authUrl}`);
-
-      // 3. Open Web Browser Auth Session (opens custom tab on mobile, popup on web)
-      const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUrl);
-
-      // 4. Process deep-link callback results
-      if (result.type === 'success' && result.url) {
-        console.log(`[SOCIAL AUTH] Redirect succeeded with URL: ${result.url}`);
-        
-        // Parse redirect URL parameters
-        const parsed = Linking.parse(result.url);
-        const { access_token, user_role } = parsed.queryParams || {};
-
-        if (access_token) {
-          await AsyncStorage.setItem('access_token', access_token as string);
-          await AsyncStorage.setItem('user_role', (user_role as string) || 'FINDER');
-          console.log('[SOCIAL AUTH] Credentials stored. Redirecting to welcome...');
-          router.replace('/welcome');
-        } else {
-          Alert.alert('Authentication Failed', 'Token not found in redirect callback.');
-        }
-      } else if (result.type === 'cancel') {
-        console.log('[SOCIAL AUTH] Login cancelled by user.');
+      let userCredential;
+      if (Platform.OS === 'web') {
+        userCredential = await signInWithPopup(auth, provider);
       } else {
-        Alert.alert('Authentication Failed', 'Browser session closed unexpectedly.');
+        const Constants = require('expo-constants').default;
+        const isExpoGo = Constants.appOwnership === 'expo';
+        
+        if (isExpoGo) {
+          setLoading(false);
+          Alert.alert(
+            'Development Build Required',
+            'Native Google Sign-In cannot run inside the default Expo Go app. Please use your Web browser, or use Email/Password sign-in to test locally.'
+          );
+          return;
+        }
+
+        try {
+          const { GoogleSignin } = require('@react-native-google-signin/google-signin');
+          const { signInWithCredential } = require('firebase/auth');
+          
+          GoogleSignin.configure({
+            webClientId: '1004284557988-h41uhmkqd31872dicfos21gj59rh5vr5.apps.googleusercontent.com',
+          });
+          
+          await GoogleSignin.hasPlayServices();
+          const { idToken } = await GoogleSignin.signIn();
+          const credential = GoogleAuthProvider.credential(idToken);
+          userCredential = await signInWithCredential(auth, credential);
+        } catch (err: any) {
+          setLoading(false);
+          if (err.code === 'SIGN_IN_CANCELLED') {
+            Alert.alert('Cancelled', 'Sign-in was cancelled.');
+          } else {
+            Alert.alert(
+              'Development Build Required',
+              'Native Google Sign-In cannot run inside the default Expo Go app. Please use your Web browser, or use Email/Password sign-in to test locally.'
+            );
+          }
+          return; // Exit gracefully without crashing
+        }
+      }
+
+      if (!userCredential) return;
+
+      const firebaseUser = userCredential.user;
+      const firebaseToken = await firebaseUser.getIdToken();
+      console.log(`[SOCIAL AUTH] Firebase login successful. Syncing profile...`);
+      const response = await apiClient.post('/auth/social-login', {
+        email: firebaseUser.email,
+        name: firebaseUser.displayName || '',
+        token: firebaseToken
+      });
+
+      if (response.data.success) {
+        await AsyncStorage.setItem('user_role', response.data.data.user.role);
+        router.replace('/welcome');
       }
     } catch (error: any) {
-      console.error('[SOCIAL AUTH] Web OAuth Error:', error);
-      Alert.alert('Authentication Error', error.message || 'Failed to complete authentication.');
+      console.error('[SOCIAL AUTH] OAuth Error:', error);
+      Alert.alert('Authentication Failed', error.message || 'Failed to complete social login.');
     } finally {
       setLoading(false);
     }
@@ -141,14 +178,14 @@ export default function LoginScreen() {
 
                 <TouchableOpacity 
                   style={[styles.googleBtn, { backgroundColor: '#FFFFFF' }]} 
-                  onPress={() => handleSocialWebLogin('google')}
+                  onPress={() => handleSocialLogin('google')}
                 >
                   <Text style={[styles.googleBtnText, { color: '#000000' }]}>Continue with Google</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity 
                   style={[styles.googleBtn, { backgroundColor: '#000000', borderColor: '#FFFFFF', marginTop: 12 }]} 
-                  onPress={() => handleSocialWebLogin('apple')}
+                  onPress={() => handleSocialLogin('apple')}
                 >
                   <Text style={styles.googleBtnText}>Continue with Apple</Text>
                 </TouchableOpacity>
