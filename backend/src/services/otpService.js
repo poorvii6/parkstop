@@ -31,14 +31,9 @@ function generateOTP(email) {
  * @param {string} code
  */
 async function sendEmailOTP(email, code) {
-  const smtpHost = process.env.SMTP_HOST;
-  const smtpPort = process.env.SMTP_PORT;
-  const smtpUser = process.env.SMTP_USER;
-  const smtpPass = process.env.SMTP_PASS;
+  const resendApiKey = process.env.RESEND_API_KEY;
 
-  const isConfigured = smtpHost && smtpPort && smtpUser && smtpPass;
-
-  if (!isConfigured) {
+  if (!resendApiKey) {
     logger.info(`\n======================================================\n` +
                 `[GMAIL MOCK] Sending OTP to: ${email}\n` +
                 `Subject: ParkStop Verification Code\n` +
@@ -48,38 +43,38 @@ async function sendEmailOTP(email, code) {
   }
 
   try {
-    const transporter = nodemailer.createTransport({
-      host: smtpHost,
-      port: parseInt(smtpPort),
-      secure: parseInt(smtpPort) === 465, // true for 465, false for other ports
-      family: 4, // force IPv4, avoids Railway's broken IPv6 route to Gmail
-      auth: {
-        user: smtpUser,
-        pass: smtpPass
-      }
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${resendApiKey}`
+      },
+      body: JSON.stringify({
+        from: 'ParkStop Support <onboarding@resend.dev>',
+        to: email.toLowerCase(),
+        subject: 'Verify your ParkStop Account',
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
+            <h2 style="color: #3b82f6; text-align: center; margin-bottom: 24px;">ParkStop Verification</h2>
+            <p style="color: #475569; font-size: 16px; line-height: 24px;">Thank you for registering with ParkStop. Please enter the following 6-digit verification code inside your mobile app to verify your Gmail account:</p>
+            <div style="margin: 32px 0; text-align: center;">
+              <span style="display: inline-block; font-size: 32px; font-weight: 800; color: #1e293b; letter-spacing: 4px; padding: 12px 24px; background-color: #f1f5f9; border-radius: 8px; border: 1px solid #cbd5e1;">${code}</span>
+            </div>
+            <p style="color: #94a3b8; font-size: 14px; text-align: center; margin-top: 24px;">This code is valid for 5 minutes. If you did not request this verification, please ignore this email.</p>
+          </div>
+        `
+      })
     });
 
-    const mailOptions = {
-      from: `"ParkStop Support" <${smtpUser}>`,
-      to: email,
-      subject: 'Verify your ParkStop Account',
-      text: `Your ParkStop email verification code is: ${code}. This code is valid for 5 minutes.`,
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
-          <h2 style="color: #3b82f6; text-align: center; margin-bottom: 24px;">ParkStop Verification</h2>
-          <p style="color: #475569; font-size: 16px; line-height: 24px;">Thank you for registering with ParkStop. Please enter the following 6-digit verification code inside your mobile app to verify your Gmail account:</p>
-          <div style="margin: 32px 0; text-align: center;">
-            <span style="display: inline-block; font-size: 32px; font-weight: 800; color: #1e293b; letter-spacing: 4px; padding: 12px 24px; background-color: #f1f5f9; border-radius: 8px; border: 1px solid #cbd5e1;">${code}</span>
-          </div>
-          <p style="color: #94a3b8; font-size: 14px; text-align: center; margin-top: 24px;">This code is valid for 5 minutes. If you did not request this verification, please ignore this email.</p>
-        </div>
-      `
-    };
+    const resData = await response.json();
 
-    await transporter.sendMail(mailOptions);
-    logger.info(`Real Gmail verification email successfully sent to ${email}`);
+    if (!response.ok) {
+      throw new Error(resData.message || `HTTP error! Status: ${response.status}`);
+    }
+
+    logger.info(`Real Gmail verification email successfully sent to ${email} via Resend HTTPS API`);
   } catch (err) {
-    logger.error(`Failed to send Gmail OTP to ${email}:`, err);
+    logger.error(`Failed to send Gmail OTP to ${email} via Resend:`, err);
     throw err;
   }
 }
