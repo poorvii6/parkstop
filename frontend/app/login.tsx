@@ -90,7 +90,14 @@ export default function LoginScreen() {
           });
           
           await GoogleSignin.hasPlayServices();
-          const { idToken } = await GoogleSignin.signIn();
+          const result = await GoogleSignin.signIn();
+          if (__DEV__) console.log('[SOCIAL AUTH] Google Sign-In raw result:', JSON.stringify(result));
+          
+          const idToken = result.idToken || result.data?.idToken;
+          if (!idToken) {
+            throw new Error('Google Sign-In completed but failed to obtain ID Token.');
+          }
+          
           const credential = GoogleAuthProvider.credential(idToken);
           userCredential = await signInWithCredential(auth, credential);
         } catch (err: any) {
