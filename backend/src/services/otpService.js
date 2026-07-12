@@ -52,6 +52,7 @@ async function sendEmailOTP(email, code) {
       host: smtpHost,
       port: parseInt(smtpPort),
       secure: parseInt(smtpPort) === 465, // true for 465, false for other ports
+      family: 4, // force IPv4, avoids Railway's broken IPv6 route to Gmail
       auth: {
         user: smtpUser,
         pass: smtpPass
