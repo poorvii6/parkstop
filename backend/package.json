@@ -4,7 +4,7 @@
   "description": "Smart Parking Backend API - Production Ready",
   "main": "src/server.js",
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "scripts": {
     "start": "npx prisma db push --accept-data-loss && node src/server.js",
@@ -36,6 +36,7 @@
     "firebase-admin": "^14.1.0",
     "helmet": "^7.1.0",
     "ioredis": "^5.11.1",
+    "jose": "4.15.9",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
     "multer": "^2.2.0",
@@ -55,5 +56,8 @@
     "jest": "^30.4.2",
     "nodemon": "^3.0.2",
     "supertest": "^7.2.2"
+  },
+  "overrides": {
+    "jose": "4.15.9"
   }
 }
