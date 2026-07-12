@@ -29,6 +29,7 @@ const disputeRoutes = require('./routes/disputes');
 const bookingsSimpleRoutes = require('./routes/bookingsSimple');
 
 const app = express();
+app.set('trust proxy', 1);
 const server = http.createServer(app);
 
 initializeSocket(server);
