@@ -95,12 +95,13 @@ export default function LoginScreen() {
           userCredential = await signInWithCredential(auth, credential);
         } catch (err: any) {
           setLoading(false);
+          console.error('[SOCIAL AUTH] Google Sign-In failed:', err);
           if (err.code === 'SIGN_IN_CANCELLED') {
             Alert.alert('Cancelled', 'Sign-in was cancelled.');
           } else {
             Alert.alert(
-              'Development Build Required',
-              'Native Google Sign-In cannot run inside the default Expo Go app. Please use your Web browser, or use Email/Password sign-in to test locally.'
+              'Google Sign-In Error',
+              `Code: ${err.code || 'UNKNOWN'}\nMessage: ${err.message || 'An error occurred.'}`
             );
           }
           return; // Exit gracefully without crashing
