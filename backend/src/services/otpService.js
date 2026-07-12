@@ -1,6 +1,5 @@
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
-const nodemailer = require('nodemailer');
 const logger = require('../utils/logger');
 
 // Local in-memory cache for Email OTP codes
