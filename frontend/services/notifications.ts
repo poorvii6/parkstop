@@ -1,24 +1,44 @@
 import * as Device from 'expo-device';
-import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import apiClient from '../api/client';
 
-// Configure how notifications appear when the app is in the foreground
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
+const isExpoGo = Constants.appOwnership === 'expo';
+
+// Only load and configure expo-notifications if not running in Expo Go
+let Notifications: any = null;
+if (!isExpoGo) {
+  try {
+    Notifications = require('expo-notifications');
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowAlert: true,
+        shouldPlaySound: true,
+        shouldSetBadge: true,
+        shouldShowBanner: true,
+        shouldShowList: true,
+      }),
+    });
+  } catch (err) {
+    console.warn('Failed to load expo-notifications:', err);
+  }
+}
 
 /**
  * Request permission and get the Expo Push Token for the current device.
  * It will then send the token to our backend to be saved to the database.
  */
 export async function registerForPushNotificationsAsync() {
+  if (isExpoGo) {
+    console.log('[Push Notifications] Remote push notifications functionality is disabled/removed in Expo Go SDK 53+. Please use a development build.');
+    return null;
+  }
+
+  if (!Notifications) {
+    console.log('[Push Notifications] expo-notifications library is not loaded.');
+    return null;
+  }
+
   let token;
 
   if (Platform.OS === 'android') {

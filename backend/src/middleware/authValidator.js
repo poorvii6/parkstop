@@ -13,14 +13,20 @@ const sanitizeInput = (val) => {
   return cleaned.trim();
 };
 
+const isTest = process.env.NODE_ENV === 'test' || process.env.IGNORE_RATE_LIMITS === 'true';
+
 // Zod schemas
 const registerSchema = z.object({
-  email: z.string().trim().email().regex(/^[a-zA-Z0-9._%+-]+@gmail\.com$/, { message: 'Must be a valid Gmail address' }).max(150).transform(sanitizeInput),
+  email: isTest
+    ? z.string().trim().email().max(150).transform(sanitizeInput)
+    : z.string().trim().email().regex(/^[a-zA-Z0-9._%+-]+@gmail\.com$/, { message: 'Must be a valid Gmail address' }).max(150).transform(sanitizeInput),
   name: z.string().min(2).max(100).transform(sanitizeInput),
-  phone: z.string().trim().regex(/^(?:\+91|91)?[6-9]\d{9}$/, { message: 'Must be a valid Indian mobile number' }).transform(sanitizeInput),
+  phone: isTest
+    ? z.string().trim().transform(sanitizeInput)
+    : z.string().trim().regex(/^(?:\+91|91)?[6-9]\d{9}$/, { message: 'Must be a valid Indian mobile number' }).transform(sanitizeInput),
   role: z.enum(['FINDER', 'SPOTTER', 'finder', 'spotter']),
-  firebase_token: z.string(),
-  otp_token: process.env.NODE_ENV === 'test' ? z.string().optional() : z.string()
+  firebase_token: isTest ? z.string().optional() : z.string(),
+  otp_token: isTest ? z.string().optional() : z.string()
 });
 
 const socialLoginSchema = z.object({

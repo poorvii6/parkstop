@@ -162,3 +162,4 @@ if (process.env.NODE_ENV !== 'test') {
 
 
 module.exports = { app, server };
+// Nodemon trigger reload to load new env variables

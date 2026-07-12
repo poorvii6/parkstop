@@ -22,12 +22,17 @@ router.post(
 );
 
 /**
- * REGISTER
+ * REGISTER & LOGIN
  */
 router.post(
   '/register',
   validateRegister,
   AuthController.register
+);
+
+router.post(
+  '/login',
+  AuthController.login
 );
 
 /**

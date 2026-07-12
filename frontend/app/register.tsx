@@ -4,8 +4,9 @@ import { useRouter } from 'expo-router';
 import apiClient from '../api/client';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { BlueprintTheme, BlueprintColors } from '../constants/BlueprintTheme';
-import { createUserWithEmailAndPassword } from 'firebase/auth';
+import { createUserWithEmailAndPassword, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { auth } from '../services/firebase';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function RegisterScreen() {
   const [name, setName] = useState('');
@@ -21,6 +22,80 @@ export default function RegisterScreen() {
   const [otpLoading, setOtpLoading] = useState(false);
 
   const router = useRouter();
+
+  const handleSocialLogin = async (providerName: 'google') => {
+    try {
+      setLoading(true);
+      if (__DEV__) console.log(`[SOCIAL AUTH] Triggering Firebase Google Sign-In...`);
+      const provider = new GoogleAuthProvider();
+      
+      let userCredential;
+      if (Platform.OS === 'web') {
+        userCredential = await signInWithPopup(auth, provider);
+      } else {
+        const Constants = require('expo-constants').default;
+        const isExpoGo = Constants.appOwnership === 'expo';
+        
+        if (isExpoGo) {
+          setLoading(false);
+          Alert.alert(
+            'Development Build Required',
+            'Native Google Sign-In cannot run inside the default Expo Go app. Please use your Web browser, or use Email/Password sign-in to test locally.'
+          );
+          return;
+        }
+
+        try {
+          const { GoogleSignin } = require('@react-native-google-signin/google-signin');
+          const { signInWithCredential } = require('firebase/auth');
+          
+          GoogleSignin.configure({
+            webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '',
+          });
+          
+          await GoogleSignin.hasPlayServices();
+          const { idToken } = await GoogleSignin.signIn();
+          const credential = GoogleAuthProvider.credential(idToken);
+          userCredential = await signInWithCredential(auth, credential);
+        } catch (err: any) {
+          setLoading(false);
+          if (err.code === 'SIGN_IN_CANCELLED') {
+            Alert.alert('Cancelled', 'Sign-in was cancelled.');
+          } else {
+            Alert.alert(
+              'Development Build Required',
+              'Native Google Sign-In cannot run inside the default Expo Go app. Please use your Web browser, or use Email/Password sign-in to test locally.'
+            );
+          }
+          return; // Exit gracefully without crashing
+        }
+      }
+
+      if (!userCredential) return;
+
+      const firebaseUser = userCredential.user;
+      const firebaseToken = await firebaseUser.getIdToken();
+      if (__DEV__) console.log(`[SOCIAL AUTH] Firebase login successful. Syncing profile...`);
+      const response = await apiClient.post('/auth/social-login', {
+        email: firebaseUser.email,
+        name: firebaseUser.displayName || '',
+        token: firebaseToken,
+        role: role
+      });
+
+      if (response.data.success) {
+        await AsyncStorage.setItem('user_role', response.data.data.user.role);
+        if (Platform.OS === 'web') alert('Welcome to ParkStop!');
+        else Alert.alert('Welcome to ParkStop!', 'Thank you for joining our network.');
+        router.replace('/welcome');
+      }
+    } catch (error: any) {
+      console.error('[SOCIAL AUTH] OAuth Error:', error);
+      Alert.alert('Authentication Failed', error.message || 'Failed to complete social login.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleRegister = async () => {
     // 1. Basic empty check
@@ -52,7 +127,10 @@ export default function RegisterScreen() {
       }
     } catch (otpErr: any) {
       console.error('[GMAIL OTP] Send OTP request failed:', otpErr.response?.data || otpErr.message);
-      const msg = otpErr.response?.data?.message || 'Failed to send OTP verification email. Please try again.';
+      let msg = otpErr.response?.data?.message || 'Failed to send OTP verification email. Please try again.';
+      if (otpErr.message === 'Network Error') {
+        msg = `Network Error: Cannot connect to backend server.\n\nExpected URL: ${apiClient.defaults.baseURL || 'http://localhost:3000/api/v1'}\n\nPlease check that:\n1. Your backend server is running.\n2. Your phone is on the same Wi-Fi network.\n3. Windows Firewall is not blocking port 3000.`;
+      }
       Alert.alert('Send OTP Failed', msg);
     } finally {
       setLoading(false);
@@ -116,9 +194,10 @@ export default function RegisterScreen() {
         });
 
         if (response.data.success) {
-          if (Platform.OS === 'web') alert('Success! Your account has been created.');
-          else Alert.alert('Success!', 'Your account has been created.');
-          router.replace('/login');
+          await AsyncStorage.setItem('user_role', role);
+          if (Platform.OS === 'web') alert('Welcome to ParkStop!');
+          else Alert.alert('Welcome to ParkStop!', 'Thank you for joining our network.');
+          router.replace('/welcome');
         }
       } catch (backendError: any) {
         console.error('[AUTH] Backend register failed, rolling back Firebase user:', backendError.response?.data || backendError.message);
@@ -230,6 +309,14 @@ export default function RegisterScreen() {
               {loading ? <ActivityIndicator color="#FFFFFF" /> : <Text style={BlueprintTheme.buttonPrimaryText}>Sign Up</Text>}
             </TouchableOpacity>
 
+            <TouchableOpacity 
+              style={[styles.googleBtn, { backgroundColor: '#FFFFFF' }]} 
+              onPress={() => handleSocialLogin('google')}
+              disabled={loading}
+            >
+              <Text style={[styles.googleBtnText, { color: '#000000' }]}>Continue with Google</Text>
+            </TouchableOpacity>
+
             <TouchableOpacity onPress={() => router.replace('/login')} style={styles.loginLink}>
               <Text style={styles.linkText}>Already have an account? <Text style={styles.linkBold}>Login</Text></Text>
             </TouchableOpacity>
@@ -321,6 +408,15 @@ const styles = StyleSheet.create({
   loginLink: { marginTop: 16, alignItems: 'center' },
   linkText: { color: BlueprintColors.textSecondary, fontSize: 14 },
   linkBold: { color: BlueprintColors.primaryAccent, fontWeight: '700' },
+  googleBtn: { 
+    backgroundColor: 'rgba(255,255,255,0.05)', 
+    paddingVertical: 18, 
+    borderRadius: 16, 
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)'
+  },
+  googleBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 16 },
   // OTP Modal Styles
   modalOverlay: {
     flex: 1,

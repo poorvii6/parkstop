@@ -34,11 +34,23 @@ export default function LoginScreen() {
 
       if (response.data.success) {
         await AsyncStorage.setItem('user_role', response.data.data.user.role);
-        router.replace('/welcome');
+        const hasAccepted = await AsyncStorage.getItem('has_accepted_terms');
+        if (hasAccepted === 'true') {
+          const r = response.data.data.user.role.toUpperCase();
+          if (r === 'ADMIN') router.replace('/admin');
+          else if (r === 'SPOTTER') router.replace('/spotter');
+          else if (r === 'FINDER') router.replace('/finder');
+          else router.replace('/role-selection');
+        } else {
+          router.replace('/welcome');
+        }
       }
     } catch (error: any) {
       console.error('[AUTH] Login Error:', error.response?.data || error.message);
-      const msg = error.response?.data?.message || 'Incorrect email or password';
+      let msg = error.response?.data?.message || 'Incorrect email or password';
+      if (error.message === 'Network Error') {
+        msg = `Network Error: Cannot connect to backend server.\n\nExpected URL: ${apiClient.defaults.baseURL || 'http://localhost:3000/api/v1'}\n\nPlease check that:\n1. Your backend server is running.\n2. Your phone is on the same Wi-Fi network.\n3. Windows Firewall is not blocking port 3000.`;
+      }
       if (Platform.OS === 'web') alert('Login Failed: ' + msg);
       else Alert.alert('Login Failed', msg);
     } finally {
@@ -108,7 +120,16 @@ export default function LoginScreen() {
 
       if (response.data.success) {
         await AsyncStorage.setItem('user_role', response.data.data.user.role);
-        router.replace('/welcome');
+        const hasAccepted = await AsyncStorage.getItem('has_accepted_terms');
+        if (hasAccepted === 'true') {
+          const r = response.data.data.user.role.toUpperCase();
+          if (r === 'ADMIN') router.replace('/admin');
+          else if (r === 'SPOTTER') router.replace('/spotter');
+          else if (r === 'FINDER') router.replace('/finder');
+          else router.replace('/role-selection');
+        } else {
+          router.replace('/welcome');
+        }
       }
     } catch (error: any) {
       console.error('[SOCIAL AUTH] OAuth Error:', error);

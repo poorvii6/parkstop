@@ -9,6 +9,7 @@ import { BlueprintTheme, BlueprintColors } from '../constants/BlueprintTheme';
 export default function WelcomeScreen() {
   const router = useRouter();
   const [role, setRole] = useState<string>('');
+  const [isChecked, setIsChecked] = useState(false);
 
   useEffect(() => {
     const loadRole = async () => {
@@ -19,10 +20,16 @@ export default function WelcomeScreen() {
   }, []);
 
   const handleContinue = async () => {
-    if (role === 'ADMIN') router.replace('/admin');
-    else if (role === 'SPOTTER') router.replace('/spotter');
-    else if (role === 'FINDER') router.replace('/finder');
-    else router.replace('/');
+    if (!isChecked) return;
+    try {
+      await AsyncStorage.setItem('has_accepted_terms', 'true');
+      if (role === 'ADMIN') router.replace('/admin');
+      else if (role === 'SPOTTER') router.replace('/spotter');
+      else if (role === 'FINDER') router.replace('/finder');
+      else router.replace('/');
+    } catch (e) {
+      console.error('Error saving terms acceptance:', e);
+    }
   };
 
   return (
@@ -35,36 +42,93 @@ export default function WelcomeScreen() {
         </View>
 
         <View style={styles.titleSection}>
-          <Text style={styles.mainTitle}>Term of Service</Text>
-          <Text style={styles.subtitle}>Please review our terms before continuing.</Text>
+          <Text style={styles.mainTitle}>Terms of Service</Text>
+          <Text style={styles.subtitle}>Please review and accept our terms before continuing.</Text>
         </View>
 
-        <View style={[BlueprintTheme.glassCard, styles.contentCard]}>
-          <Text style={styles.cardHeader}>Guidelines</Text>
+        {/* 1. Introduction & Acceptance */}
+        <View style={styles.section}>
+          <Text style={styles.sectionHeader}>1. Introduction & Acceptance</Text>
+          <Text style={styles.textBody}>
+            By creating an account or using ParkStop, you enter into a legally binding agreement to follow these Terms of Service. If you do not agree to these terms, do not download, install, or use the application.
+          </Text>
+        </View>
+
+        {/* 2. Account & Eligibility */}
+        <View style={styles.section}>
+          <Text style={styles.sectionHeader}>2. Account & Eligibility</Text>
+          <Text style={styles.textBody}>
+            You must be at least 18 years of age to register for a ParkStop account. You agree to provide accurate, complete, and current information during registration, and to maintain the security of your login credentials.
+          </Text>
+        </View>
+
+        {/* 3. Guidelines & Conduct */}
+        <View style={styles.section}>
+          <Text style={styles.sectionHeader}>3. User Guidelines & Conduct</Text>
           <Text style={styles.textBody}>
             {role === 'SPOTTER' ? (
-              "As a Spotter, you're a key partner in our network. You'll be listing your private space for community use. Ensure your spot is accurately described and available during your listed hours. Commissions are processed weekly."
+              "As a Spotter, you agree to list only private parking spots that you legally own or are authorized to rent. You must accurately describe the spot's size, accessibility, and availability, and ensure that the spot is kept clear and accessible for Finders during booking hours."
             ) : (
-              "Find instant, secure parking anywhere in the city. By using ParkStop, you agree to respect the host's property and follow all local parking regulations. Your booking is valid for the selected duration only."
+              "As a Finder, you agree to park only in your booked spot during the active booking duration. You agree to respect the host's property, obey all posted signage, and remove your vehicle promptly at the end of the booking window. Overstaying may result in towing or additional fines."
             )}
           </Text>
         </View>
 
-        <View style={[BlueprintTheme.glassCard, styles.contentCard]}>
-          <Text style={styles.cardHeader}>Liability & Safety</Text>
+        {/* 4. Payments, Fees & Payouts */}
+        <View style={styles.section}>
+          <Text style={styles.sectionHeader}>4. Payments, Fees & Payouts</Text>
           <Text style={styles.textBody}>
-            ParkStop provides a platform for connecting hosts and finders. We are not responsible for any theft, damage, or accidents that occur at parking locations. Please ensure your vehicle is locked and no valuables are left inside.
+            {role === 'SPOTTER' ? (
+              "Spotter earnings and payouts are processed securely through our payment integration. ParkStop deducts a standard platform convenience fee from each transaction. Payouts are transferred weekly to your connected bank account/wallet after verifying successful completion of spot usage."
+            ) : (
+              "Finders agree to pay all booking fees and applicable convenience charges at the time of reservation. Payments are securely processed online. Cancellations and refunds are governed by the active host cancellation policy."
+            )}
           </Text>
         </View>
 
+        {/* 5. Limitation of Liability */}
+        <View style={styles.section}>
+          <Text style={styles.sectionHeader}>5. Limitation of Liability</Text>
+          <Text style={styles.textBody}>
+            ParkStop acts strictly as a platform connecting hosts and finders. We do not inspect, guarantee, or assume liability for the physical condition, safety, or security of any listed parking space. ParkStop is not responsible for any theft, vandalism, vehicle damage, property damage, or personal injury occurring at parking locations.
+          </Text>
+        </View>
+
+        {/* 6. Governing Law & Dispute Resolution */}
+        <View style={styles.section}>
+          <Text style={styles.sectionHeader}>6. Governing Law & Disputes</Text>
+          <Text style={styles.textBody}>
+            These Terms shall be governed by and construed in accordance with local regulations and national laws. Any legal disputes arising from or relating to the service will be subject to the exclusive jurisdiction of the competent local courts.
+          </Text>
+        </View>
+
+        {/* Interactive Checkbox */}
+        <TouchableOpacity 
+          style={styles.checkboxContainer} 
+          onPress={() => setIsChecked(!isChecked)}
+          activeOpacity={0.8}
+        >
+          <View style={[styles.checkbox, isChecked && styles.checkboxChecked]}>
+            {isChecked && <Text style={styles.checkboxCheckmark}>✓</Text>}
+          </View>
+          <Text style={styles.checkboxLabel}>
+            I have read and agree to the Terms of Service and Privacy Policy
+          </Text>
+        </TouchableOpacity>
+
+        {/* Footer Actions */}
         <View style={styles.footer}>
-          <TouchableOpacity style={BlueprintTheme.buttonPrimary} onPress={handleContinue}>
+          <TouchableOpacity 
+            style={[BlueprintTheme.buttonPrimary, !isChecked && styles.buttonDisabled]} 
+            onPress={handleContinue}
+            disabled={!isChecked}
+          >
             <Text style={BlueprintTheme.buttonPrimaryText}>Accept and continue</Text>
           </TouchableOpacity>
           <TouchableOpacity 
             onPress={async () => {
-              await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user_role']);
               try {
+                await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user_role', 'has_accepted_terms']);
                 await auth.signOut();
               } catch (err) {}
               router.replace('/login');
@@ -86,10 +150,47 @@ const styles = StyleSheet.create({
   titleSection: { marginBottom: 32 },
   mainTitle: { fontSize: 32, fontWeight: '800', color: '#FFFFFF', marginBottom: 8 },
   subtitle: { fontSize: 16, color: BlueprintColors.textSecondary },
-  contentCard: { padding: 20, marginBottom: 20 },
-  cardHeader: { color: '#FFFFFF', fontSize: 18, fontWeight: '700', marginBottom: 12 },
-  textBody: { color: BlueprintColors.textSecondary, fontSize: 15, lineHeight: 22 },
-  footer: { marginTop: 20, gap: 16 },
+  section: { marginBottom: 28, paddingHorizontal: 4 },
+  sectionHeader: { color: '#FFFFFF', fontSize: 18, fontWeight: '700', marginBottom: 10 },
+  textBody: { color: BlueprintColors.textSecondary, fontSize: 15, lineHeight: 24 },
+  checkboxContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 24,
+    paddingHorizontal: 4,
+    gap: 12,
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: BlueprintColors.primaryAccent,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  checkboxChecked: {
+    backgroundColor: BlueprintColors.primaryAccent,
+    borderColor: BlueprintColors.primaryAccent,
+  },
+  checkboxCheckmark: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  checkboxLabel: {
+    color: BlueprintColors.textSecondary,
+    fontSize: 14,
+    flex: 1,
+    lineHeight: 20,
+  },
+  footer: { gap: 16 },
+  buttonDisabled: {
+    opacity: 0.5,
+    shadowOpacity: 0,
+    elevation: 0,
+  },
   declineBtn: { alignItems: 'center', paddingVertical: 12 },
   declineText: { color: BlueprintColors.textSecondary, fontWeight: '600' }
 });

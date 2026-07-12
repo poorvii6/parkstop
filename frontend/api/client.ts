@@ -4,6 +4,8 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import { auth } from '../services/firebase';
 
+import * as Device from 'expo-device';
+
 let cachedApiUrl: string | null = null;
 
 const getAPIUrlSync = () => {
@@ -14,10 +16,15 @@ const getAPIUrlSync = () => {
     'https://parkstop-production.up.railway.app/api/v1';
 
   // In local development, dynamically rewrite localhost to the Metro host IP 
-  // so physical devices and emulators can reach the backend server
-  if (__DEV__ && Platform.OS !== 'web') {
+  // ONLY for emulators/simulators. For physical devices connected via USB, 
+  // we want to preserve 'localhost' so adb reverse works.
+  if (__DEV__ && Platform.OS !== 'web' && !Device.isDevice) {
     const hostUri = Constants.expoConfig?.hostUri || '';
-    const metroHost = hostUri.split(':')[0];
+    let metroHost = hostUri.split(':')[0];
+    if (!metroHost) {
+      metroHost = '192.168.31.68';
+      console.log(`[API] hostUri was empty. Falling back to known Wi-Fi IP: ${metroHost}`);
+    }
     if (metroHost) {
       if (apiUrl.includes('localhost')) {
         apiUrl = apiUrl.replace('localhost', metroHost);
