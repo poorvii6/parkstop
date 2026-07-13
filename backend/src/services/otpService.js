@@ -49,7 +49,7 @@ async function sendEmailOTP(email, code) {
         'Authorization': `Bearer ${resendApiKey}`
       },
       body: JSON.stringify({
-        from: 'ParkStop Support <onboarding@resend.dev>',
+        from: 'ParkStop Support <otp@parkstop.online>',
         to: email.toLowerCase(),
         subject: 'Verify your ParkStop Account',
         html: `
