@@ -145,63 +145,10 @@ function validateOTPToken(email, token) {
   }
 }
 
-/**
- * Send Booking Receipt Email via Resend
- * @param {string} email
- * @param {object} booking
- */
-async function sendBookingReceiptEmail(email, booking) {
-  const resendApiKey = process.env.RESEND_API_KEY;
-
-  if (!resendApiKey) {
-    logger.info(`[GMAIL MOCK] Receipt email to ${email} for Booking #${booking.id} - Amount: ₹${booking.total_price}`);
-    return;
-  }
-
-  try {
-    const response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${resendApiKey}`
-      },
-      body: JSON.stringify({
-        from: 'ParkStop Support <onboarding@resend.dev>',
-        to: email.toLowerCase(),
-        subject: `ParkStop Booking Receipt - #${booking.id}`,
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 500px; margin: 0 auto; padding: 20px; border: 1px solid #e2e8f0; border-radius: 12px; background-color: #ffffff;">
-            <h2 style="color: #10b981; text-align: center; margin-bottom: 24px;">Booking Completed ✅</h2>
-            <p style="color: #475569; font-size: 16px; line-height: 24px;">Thank you for parking with ParkStop. Your booking is completed. Here is your receipt:</p>
-            <div style="background-color: #f1f5f9; padding: 16px; border-radius: 8px; margin: 24px 0;">
-              <p style="margin: 4px 0; color: #475569;"><strong>Booking ID:</strong> #${booking.id}</p>
-              <p style="margin: 4px 0; color: #475569;"><strong>Duration:</strong> ${new Date(booking.start_time).toLocaleString()} - ${new Date(booking.end_time).toLocaleString()}</p>
-              <p style="margin: 4px 0; color: #475569;"><strong>Total Paid:</strong> ₹${booking.total_price}</p>
-              <p style="margin: 4px 0; color: #475569;"><strong>Payment Method:</strong> ${booking.payment_mode ? booking.payment_mode.toUpperCase() : 'ONLINE'}</p>
-            </div>
-            <p style="color: #94a3b8; font-size: 14px; text-align: center; margin-top: 24px;">Thank you for choosing ParkStop. Have a safe drive!</p>
-          </div>
-        `
-      })
-    });
-
-    const resData = await response.json();
-
-    if (!response.ok) {
-      throw new Error(resData.message || `HTTP error! Status: ${response.status}`);
-    }
-
-    logger.info(`Booking receipt successfully sent to ${email} via Resend HTTPS API`);
-  } catch (err) {
-    logger.error(`Failed to send booking receipt to ${email} via Resend:`, err);
-  }
-}
-
 module.exports = {
   generateOTP,
   sendEmailOTP,
   verifyOTP,
   generateOTPToken,
-  validateOTPToken,
-  sendBookingReceiptEmail
+  validateOTPToken
 };
