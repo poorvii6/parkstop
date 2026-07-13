@@ -300,8 +300,10 @@ export default function ProfileModal() {
               }}
             />
           )}
-          <ListItem icon="notifications" color="#FFA500" bg="rgba(255,165,0,0.1)" title="Notification Preferences" sub="Push, Email, SMS" onPress={() => setScreen('alerts')} />
-          <ListItem icon="shield-checkmark" color={C.success} bg={C.successSoft} title="Identity Verification" sub="Driver License" onPress={() => setScreen('id_status')} last />
+          <ListItem icon="notifications" color="#FFA500" bg="rgba(255,165,0,0.1)" title="Notification Preferences" sub="Push, Email, SMS" onPress={() => setScreen('alerts')} last={role !== 'FINDER'} />
+          {role === 'FINDER' && (
+            <ListItem icon="shield-checkmark" color={C.success} bg={C.successSoft} title="Identity Verification" sub="Driver License" onPress={() => setScreen('id_status')} last />
+          )}
         </View>
 
         {/* Support & Legal */}
@@ -311,10 +313,12 @@ export default function ProfileModal() {
         </View>
 
         {/* Actions */}
-        <TouchableOpacity style={st.switchBtn} onPress={handleSwitchRole}>
-          <Ionicons name="swap-horizontal" size={20} color={C.info} />
-          <Text style={st.switchText}>Switch to {role === 'SPOTTER' ? 'Finder' : 'Spotter'}</Text>
-        </TouchableOpacity>
+        {role !== 'SPOTTER' && (
+          <TouchableOpacity style={st.switchBtn} onPress={handleSwitchRole}>
+            <Ionicons name="swap-horizontal" size={20} color={C.info} />
+            <Text style={st.switchText}>Switch to {role === 'SPOTTER' ? 'Finder' : 'Spotter'}</Text>
+          </TouchableOpacity>
+        )}
 
         <TouchableOpacity style={st.signOutBtn} onPress={handleSignOut}>
           <Ionicons name="log-out-outline" size={20} color={C.error} />
