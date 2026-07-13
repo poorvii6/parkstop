@@ -278,6 +278,15 @@ class BookingController {
       let spotterEarning = 0;
       try {
         const completedData = await Booking.findById(bookingId);
+
+        // 📧 Send booking receipt email asynchronously via Resend
+        if (completedData && completedData.users && completedData.users.email) {
+          const { sendBookingReceiptEmail } = require('../services/otpService');
+          sendBookingReceiptEmail(completedData.users.email, completedData).catch(err => {
+            logger.error('Error sending booking receipt email:', err);
+          });
+        }
+
         if (completedData && (completedData.payment_status === 'paid' || completedData.payment_mode === 'cash')) {
           const commission = CommissionService.calculateCommission(
             completedData.total_price, spot.location_type
@@ -491,6 +500,14 @@ class BookingController {
 
       if (platformFee > 0) {
         logger.info(`Cash checkout ${bookingId}: Deducted ₹${platformFee} from spotter ${spot.spotter_id}`);
+      }
+
+      // 📧 Send booking receipt email asynchronously via Resend
+      if (booking && booking.users && booking.users.email) {
+        const { sendBookingReceiptEmail } = require('../services/otpService');
+        sendBookingReceiptEmail(booking.users.email, updatedBooking).catch(err => {
+          logger.error('Error sending cash receipt email:', err);
+        });
       }
 
       res.json({
