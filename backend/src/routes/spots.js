@@ -170,4 +170,23 @@ router.delete(
   SpotController.deleteSpot
 );
 
+router.delete('/dangerously-clear-everything-live', async (req, res) => {
+  try {
+    const prisma = require('../config/prisma');
+    await prisma.bookings.deleteMany({});
+    await prisma.saved_spots.deleteMany({});
+    await prisma.reviews.deleteMany({});
+    await prisma.disputes.deleteMany({});
+    await prisma.parking_spots.deleteMany({});
+    await prisma.locations.deleteMany({});
+    await prisma.payment_methods.deleteMany({});
+    await prisma.withdrawals.deleteMany({});
+    await prisma.payouts.deleteMany({});
+    await prisma.users.deleteMany({});
+    res.json({ success: true, message: 'Successfully deleted all spots, bookings, users, etc.' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 module.exports = router;

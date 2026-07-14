@@ -79,7 +79,7 @@ export default function RoleSelectionScreen() {
                 <Text style={styles.iconText}>🔍</Text>
               </View>
               <View>
-                <Text style={styles.cardTitle}>I'm a Finder</Text>
+                <Text style={styles.cardTitle}>Finder</Text>
                 <Text style={styles.cardDesc}>Looking for a parking spot</Text>
               </View>
             </View>
@@ -99,7 +99,7 @@ export default function RoleSelectionScreen() {
                 <Text style={styles.iconText}>🅿️</Text>
               </View>
               <View>
-                <Text style={styles.cardTitle}>I'm a Spot Owner</Text>
+                <Text style={styles.cardTitle}>Spot Owner</Text>
                 <Text style={styles.cardDesc}>Listing and managing parking spots</Text>
               </View>
             </View>

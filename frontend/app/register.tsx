@@ -272,13 +272,13 @@ export default function RegisterScreen() {
               style={[styles.roleButton, role === 'FINDER' && styles.roleButtonActive]}
               onPress={() => setRole('FINDER')}
             >
-              <Text style={[styles.roleText, role === 'FINDER' && styles.roleTextActive]}>I'm a Finder</Text>
+              <Text style={[styles.roleText, role === 'FINDER' && styles.roleTextActive]}>Finder</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.roleButton, role === 'SPOTTER' && styles.roleButtonActive]}
               onPress={() => setRole('SPOTTER')}
             >
-              <Text style={[styles.roleText, role === 'SPOTTER' && styles.roleTextActive]}>I'm a Spot Owner</Text>
+              <Text style={[styles.roleText, role === 'SPOTTER' && styles.roleTextActive]}>Spot Owner</Text>
             </TouchableOpacity>
           </View>
 
