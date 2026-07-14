@@ -261,6 +261,7 @@ router.get('/route', async (req, res) => {
         } catch (fallbackError) {
             res.status(500).json({ success: false, message: error.message });
         }
+    }
 });
 
 router.get('/test-ola-raw', async (req, res) => {
