@@ -7,8 +7,8 @@ import { SC, TF, SP, RAD, SS } from '../../constants/SpotterTheme';
 
 const FAQ_ITEMS = [
   {
-    q: 'How does ParkStop work for Spotters?',
-    a: 'As a Spotter, you list your empty parking spaces on our map. Drivers (Finders) can then discover and reserve your spot. When they arrive, they show you a unique 6-digit OTP code. Verify this code in the "Verify" tab to start the parking session.',
+    q: 'How does ParkStop work for Spot Owners?',
+    a: 'As a Spot Owner, you list your empty parking spaces on our map. Drivers (Finders) can then discover and reserve your spot. When they arrive, they show you a unique 6-digit OTP code. Verify this code in the "Verify" tab to start the parking session.',
   },
   {
     q: 'Where can I see my total earnings?',
@@ -49,7 +49,7 @@ export default function SupportPage() {
           </Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
             <View style={SS.statusBox}>
-              <Text style={SS.statusLabel}>SPOTTER STATUS</Text>
+              <Text style={SS.statusLabel}>SPOT OWNER STATUS</Text>
               <View style={SS.statusRow}>
                 <Text style={SS.statusText}>Active</Text>
                 <View style={SS.statusDot} />

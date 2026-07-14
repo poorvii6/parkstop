@@ -146,7 +146,7 @@ export const BookingPanel: React.FC<BookingPanelProps> = ({
               <View style={{ alignItems: 'center' }}>
                 <Text style={styles.bookingLabel}>CHECK-IN OTP</Text>
                 <Text style={styles.otpValueLarge}>{bookingDetails?.otp}</Text>
-                <Text style={{ color: '#94a3b8', fontSize: 12, textAlign: 'center', marginTop: 8 }}>Show this OTP to the spotter when you arrive.</Text>
+                <Text style={{ color: '#94a3b8', fontSize: 12, textAlign: 'center', marginTop: 8 }}>Show this OTP to the spot owner when you arrive.</Text>
               </View>
             </View>
 
@@ -189,7 +189,7 @@ export const BookingPanel: React.FC<BookingPanelProps> = ({
               style={[BlueprintTheme.buttonPrimary, styles.simulateBtn]} 
               onPress={() => setStep('active_parking')}
             >
-              <Text style={styles.simulateBtnText}>Simulate Spotter Verification</Text>
+              <Text style={styles.simulateBtnText}>Simulate Spot Owner Verification</Text>
             </TouchableOpacity>
           </>
         )}
@@ -223,7 +223,7 @@ export const BookingPanel: React.FC<BookingPanelProps> = ({
         {step === 'checkout_verification' && (
           <View style={{ alignItems: 'center', paddingVertical: 10 }}>
             <Text style={styles.panelTitle}>Check-Out Verification</Text>
-            <Text style={{ color: BlueprintColors.textSecondary, marginBottom: 24, textAlign: 'center' }}>Show this check-out OTP to the spotter to confirm you are leaving.</Text>
+            <Text style={{ color: BlueprintColors.textSecondary, marginBottom: 24, textAlign: 'center' }}>Show this check-out OTP to the spot owner to confirm you are leaving.</Text>
 
             <View style={styles.checkoutOtpCard}>
               <Text style={styles.bookingLabel}>CHECK-OUT OTP</Text>
@@ -231,7 +231,7 @@ export const BookingPanel: React.FC<BookingPanelProps> = ({
             </View>
 
             <TouchableOpacity style={[BlueprintTheme.buttonPrimary, { width: '100%' }]} onPress={onEndSession}>
-              <Text style={BlueprintTheme.buttonPrimaryText}>Simulate Spotter Check-Out</Text>
+              <Text style={BlueprintTheme.buttonPrimaryText}>Simulate Spot Owner Check-Out</Text>
             </TouchableOpacity>
           </View>
         )}
