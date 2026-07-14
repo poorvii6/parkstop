@@ -274,22 +274,5 @@ router.get('/route', async (req, res) => {
     }
 });
 
-router.get('/test-ola-raw', async (req, res) => {
-    try {
-        const apiKey = process.env.OLA_MAPS_API_KEY;
-        const origin = "12.9784,77.6408";
-        const destination = "12.9715,77.5945";
-        const url = `https://api.olamaps.io/routing/v1/directions?origin=${origin}&destination=${destination}&api_key=${apiKey}`;
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'X-Request-Id': `req-${Date.now()}` }
-        });
-        const data = await response.json();
-        res.json(data);
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
 module.exports = router;
 
