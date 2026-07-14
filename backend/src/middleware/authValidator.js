@@ -32,7 +32,8 @@ const registerSchema = z.object({
 const socialLoginSchema = z.object({
   email: z.string().trim().email().max(150).optional().transform(sanitizeInput),
   name: z.string().max(100).optional().transform(sanitizeInput),
-  token: z.string()
+  token: z.string(),
+  role: z.enum(['FINDER', 'SPOTTER', 'finder', 'spotter']).optional()
 });
 
 const sendOtpSchema = z.object({
