@@ -99,8 +99,8 @@ export default function RoleSelectionScreen() {
                 <Text style={styles.iconText}>🅿️</Text>
               </View>
               <View>
-                <Text style={styles.cardTitle}>I'm a Spotter</Text>
-                <Text style={styles.cardDesc}>Listing parking spots</Text>
+                <Text style={styles.cardTitle}>I'm a Spot Owner</Text>
+                <Text style={styles.cardDesc}>Listing and managing parking spots</Text>
               </View>
             </View>
           </TouchableOpacity>

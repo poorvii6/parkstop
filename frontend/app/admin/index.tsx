@@ -79,7 +79,7 @@ export default function AdminDashboard() {
               <Text style={styles.statValue}>{stats?.total_completed_bookings || '0'}</Text>
             </View>
             <View style={[BlueprintTheme.glassCard, styles.statCard]}>
-              <Text style={styles.statLabel}>Spotter Payouts</Text>
+              <Text style={styles.statLabel}>Spot Owner Payouts</Text>
               <Text style={styles.statValue}>₹{parseFloat(stats?.spotter_payout || '0').toFixed(2)}</Text>
             </View>
           </View>

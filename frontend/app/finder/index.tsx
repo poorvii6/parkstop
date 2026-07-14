@@ -2055,7 +2055,7 @@ export default function FinderDashboard() {
                     <View style={{ flex: 1, alignItems: 'center' }}>
                       <Text style={{ fontSize: 36, marginBottom: 4 }}>🎉</Text>
                       <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', textAlign: 'center' }}>You have reached your destination!</Text>
-                      <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 13, marginTop: 6, textAlign: 'center' }}>Park in Slot {selectedSlot} and show your check-in PIN to the spotter.</Text>
+                      <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 13, marginTop: 6, textAlign: 'center' }}>Park in Slot {selectedSlot} and show your check-in PIN to the spot owner.</Text>
                     </View>
                     <TouchableOpacity style={[styles.continueBtn, { backgroundColor: '#10b981', marginTop: 12, paddingVertical: 14, paddingHorizontal: 28, borderRadius: 16 }]} onPress={() => setStep('arriving')}>
                       <Text style={[styles.continueBtnText, { fontSize: 16 }]}>Check In</Text>
@@ -2323,7 +2323,7 @@ export default function FinderDashboard() {
                   <View style={{ paddingVertical: 10 }}>
                     <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', marginBottom: 4, letterSpacing: -0.5, textAlign: 'center' }}>Check-Out</Text>
                     <Text style={{ color: '#94a3b8', fontSize: 13, marginBottom: 16, fontWeight: '500', textAlign: 'center', lineHeight: 18 }}>
-                      Approach the spotter and present this Exit OTP code to verify checkout.
+                      Approach the spot owner and present this Exit OTP code to verify checkout.
                     </Text>
                     
                     <View style={{ backgroundColor: 'rgba(255,255,255,0.03)', padding: 18, borderRadius: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', marginBottom: 20 }}>
@@ -2432,7 +2432,7 @@ export default function FinderDashboard() {
                     {selectedPaymentMethod === 'cash' && (
                       <View style={{ backgroundColor: 'rgba(16,185,129,0.1)', padding: 12, borderRadius: 12, marginBottom: 16 }}>
                         <Text style={{ color: '#10b981', fontSize: 13, fontWeight: '800', textAlign: 'center' }}>
-                          💵 Please hand over cash to the spotter.
+                          💵 Please hand over cash to the spot owner.
                         </Text>
                       </View>
                     )}

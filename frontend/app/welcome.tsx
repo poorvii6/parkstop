@@ -67,7 +67,7 @@ export default function WelcomeScreen() {
           <Text style={styles.sectionHeader}>3. User Guidelines & Conduct</Text>
           <Text style={styles.textBody}>
             {role === 'SPOTTER' ? (
-              "As a Spotter, you agree to list only private parking spots that you legally own or are authorized to rent. You must accurately describe the spot's size, accessibility, and availability, and ensure that the spot is kept clear and accessible for Finders during booking hours."
+              "As a Spot Owner, you agree to list only private parking spots that you legally own or are authorized to rent. You must accurately describe the spot's size, accessibility, and availability, and ensure that the spot is kept clear and accessible for Finders during booking hours."
             ) : (
               "As a Finder, you agree to park only in your booked spot during the active booking duration. You agree to respect the host's property, obey all posted signage, and remove your vehicle promptly at the end of the booking window. Overstaying may result in towing or additional fines."
             )}
@@ -79,7 +79,7 @@ export default function WelcomeScreen() {
           <Text style={styles.sectionHeader}>4. Payments, Fees & Payouts</Text>
           <Text style={styles.textBody}>
             {role === 'SPOTTER' ? (
-              "Spotter earnings and payouts are processed securely through our payment integration. ParkStop deducts a standard platform convenience fee from each transaction. Payouts are transferred weekly to your connected bank account/wallet after verifying successful completion of spot usage."
+              "Spot Owner earnings and payouts are processed securely through our payment integration. ParkStop deducts a standard platform convenience fee from each transaction. Payouts are transferred weekly to your connected bank account/wallet after verifying successful completion of spot usage."
             ) : (
               "Finders agree to pay all booking fees and applicable convenience charges at the time of reservation. Payments are securely processed online. Cancellations and refunds are governed by the active host cancellation policy."
             )}

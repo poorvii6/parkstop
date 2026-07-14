@@ -318,7 +318,7 @@ export default function ProfileModal() {
         {role !== 'SPOTTER' && (
           <TouchableOpacity style={st.switchBtn} onPress={handleSwitchRole}>
             <Ionicons name="swap-horizontal" size={20} color={C.info} />
-            <Text style={st.switchText}>Switch to {role === 'SPOTTER' ? 'Finder' : 'Spotter'}</Text>
+            <Text style={st.switchText}>Switch to {role === 'SPOTTER' ? 'Finder' : 'Spot Owner'}</Text>
           </TouchableOpacity>
         )}
 
@@ -480,7 +480,7 @@ export default function ProfileModal() {
     <>
       <Header title="Legal" />
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={st.scroll}>
-        <Text style={{ color: '#FFF', fontSize: 20, fontWeight: '800', marginBottom: 14 }}>ParkStop Spotter Terms</Text>
+        <Text style={{ color: '#FFF', fontSize: 20, fontWeight: '800', marginBottom: 14 }}>ParkStop Spot Owner Terms</Text>
         <Text style={st.legalText}>By listing your property on ParkStop, you agree to provide accurate location data and ensure the safety of parked vehicles.</Text>
         {['Revenue Share: ParkStop takes a 15% platform fee.', 'Responsibilities: Ensure the spot is accessible during reserved hours.', 'Payouts: Processed every Friday for the previous week.', 'Cancellations: Repeated cancellations may lead to suspension.', 'Liability: You indemnify ParkStop against claims from property use.'].map((t, i) => (
           <Text key={i} style={st.legalItem}>{i + 1}. {t}</Text>
@@ -683,7 +683,7 @@ export default function ProfileModal() {
                 <View style={st.receiptAvatar}>
                   <Ionicons name="card" size={32} color={C.accent} />
                 </View>
-                <Text style={st.receiptTitle}>Spotter Registration</Text>
+                <Text style={st.receiptTitle}>Spot Owner Registration</Text>
                 <Text style={st.receiptSub}>Complete your payout profile to list spots</Text>
               </View>
 

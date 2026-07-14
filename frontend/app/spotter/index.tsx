@@ -241,7 +241,7 @@ export default function SpotterDashboard() {
           </Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
             <View style={SS.statusBox}>
-              <Text style={SS.statusLabel}>SPOTTER STATUS</Text>
+              <Text style={SS.statusLabel}>SPOT OWNER STATUS</Text>
               <View style={SS.statusRow}>
                 <Text style={SS.statusText}>Active</Text>
                 <View style={SS.statusDot} />
