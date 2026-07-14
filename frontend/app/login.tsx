@@ -42,15 +42,10 @@ export default function LoginScreen() {
         if (isDualUser) {
           router.replace('/role-selection');
         } else {
-          const hasAccepted = await AsyncStorage.getItem('has_accepted_terms');
-          if (hasAccepted === 'true') {
-            if (role === 'ADMIN') router.replace('/admin');
-            else if (role === 'SPOTTER') router.replace('/spotter');
-            else if (role === 'FINDER') router.replace('/finder');
-            else router.replace('/role-selection');
-          } else {
-            router.replace('/welcome');
-          }
+          if (role === 'ADMIN') router.replace('/admin');
+          else if (role === 'SPOTTER') router.replace('/spotter');
+          else if (role === 'FINDER') router.replace('/finder');
+          else router.replace('/role-selection');
         }
       }
     } catch (error: any) {
@@ -145,15 +140,10 @@ export default function LoginScreen() {
         if (isDualUser) {
           router.replace('/role-selection');
         } else {
-          const hasAccepted = await AsyncStorage.getItem('has_accepted_terms');
-          if (hasAccepted === 'true') {
-            if (role === 'ADMIN') router.replace('/admin');
-            else if (role === 'SPOTTER') router.replace('/spotter');
-            else if (role === 'FINDER') router.replace('/finder');
-            else router.replace('/role-selection');
-          } else {
-            router.replace('/welcome');
-          }
+          if (role === 'ADMIN') router.replace('/admin');
+          else if (role === 'SPOTTER') router.replace('/spotter');
+          else if (role === 'FINDER') router.replace('/finder');
+          else router.replace('/role-selection');
         }
       }
     } catch (error: any) {

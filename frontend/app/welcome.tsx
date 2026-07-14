@@ -26,7 +26,7 @@ export default function WelcomeScreen() {
       if (role === 'ADMIN') router.replace('/admin');
       else if (role === 'SPOTTER') router.replace('/spotter');
       else if (role === 'FINDER') router.replace('/finder');
-      else router.replace('/');
+      else router.replace('/register');
     } catch (e) {
       console.error('Error saving terms acceptance:', e);
     }

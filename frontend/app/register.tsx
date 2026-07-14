@@ -103,7 +103,11 @@ export default function RegisterScreen() {
         if (isDualUser) {
           router.replace('/role-selection');
         } else {
-          router.replace('/welcome');
+          const r = user.role ? user.role.toUpperCase() : '';
+          if (r === 'ADMIN') router.replace('/admin');
+          else if (r === 'SPOTTER') router.replace('/spotter');
+          else if (r === 'FINDER') router.replace('/finder');
+          else router.replace('/role-selection');
         }
       }
     } catch (error: any) {
@@ -221,7 +225,11 @@ export default function RegisterScreen() {
           if (isDualUser) {
             router.replace('/role-selection');
           } else {
-            router.replace('/welcome');
+            const r = user.role ? user.role.toUpperCase() : '';
+            if (r === 'ADMIN') router.replace('/admin');
+            else if (r === 'SPOTTER') router.replace('/spotter');
+            else if (r === 'FINDER') router.replace('/finder');
+            else router.replace('/role-selection');
           }
         }
       } catch (backendError: any) {

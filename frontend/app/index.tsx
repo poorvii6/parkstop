@@ -21,10 +21,9 @@ export default function SplashScreen() {
       await new Promise(resolve => setTimeout(resolve, 2000));
       
       try {
-        const hasLaunched = await AsyncStorage.getItem('has_launched');
-        if (hasLaunched === null) {
-          await AsyncStorage.setItem('has_launched', 'true');
-          router.replace('/register');
+        const hasAcceptedTerms = await AsyncStorage.getItem('has_accepted_terms');
+        if (hasAcceptedTerms !== 'true') {
+          router.replace('/welcome');
           return;
         }
 
