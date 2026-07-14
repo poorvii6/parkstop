@@ -288,28 +288,50 @@ class AuthController {
         user = await prisma.users.findUnique({
           where: { email: verifiedEmail }
         });
+      }
 
-        if (user) {
+      if (user) {
+        // Build the update data for existing user
+        const updateData = {};
+        
+        // Link firebase_uid if not set
+        if (user.firebase_uid !== firebaseUid) {
+          updateData.firebase_uid = firebaseUid;
+        }
+
+        // If a specific role is requested and differs from their current role, update it
+        if (role && role.toUpperCase() !== user.role) {
+          const targetRole = role.toUpperCase();
+          updateData.role = targetRole;
+          if (targetRole === 'FINDER') {
+            updateData.is_finder_registered = true;
+          } else if (targetRole === 'SPOTTER') {
+            updateData.is_spotter_registered = true;
+          }
+        }
+
+        // If there's anything to update, run the update query
+        if (Object.keys(updateData).length > 0) {
           user = await prisma.users.update({
             where: { id: user.id },
-            data: { firebase_uid: firebaseUid }
-          });
-        } else {
-          // Create user if they don't exist yet
-          const normalizedRole = role ? role.toUpperCase() : 'FINDER';
-          user = await prisma.users.create({
-            data: {
-              email: verifiedEmail,
-              full_name: verifiedName,
-              name: verifiedName,
-              phone: '',
-              role: normalizedRole,
-              firebase_uid: firebaseUid,
-              is_finder_registered: normalizedRole === 'FINDER',
-              is_spotter_registered: normalizedRole === 'SPOTTER'
-            }
+            data: updateData
           });
         }
+      } else {
+        // Create user if they don't exist yet
+        const normalizedRole = role ? role.toUpperCase() : 'FINDER';
+        user = await prisma.users.create({
+          data: {
+            email: verifiedEmail,
+            full_name: verifiedName,
+            name: verifiedName,
+            phone: '',
+            role: normalizedRole,
+            firebase_uid: firebaseUid,
+            is_finder_registered: normalizedRole === 'FINDER',
+            is_spotter_registered: normalizedRole === 'SPOTTER'
+          }
+        });
       }
 
       const stats = await User.getStats(user.id, user.role);

@@ -11,9 +11,11 @@ let cachedApiUrl: string | null = null;
 const getAPIUrlSync = () => {
   if (cachedApiUrl) return cachedApiUrl;
 
-  let apiUrl =
-    process.env.EXPO_PUBLIC_API_URL ||
-    'https://parkstop-production.up.railway.app/api/v1';
+  let apiUrl = process.env.EXPO_PUBLIC_API_URL || Platform.select({
+    android: Device.isDevice ? 'https://parkstop-production.up.railway.app/api/v1' : 'http://10.0.2.2:3000/api/v1',
+    ios: 'http://localhost:3000/api/v1',
+    default: 'https://parkstop-production.up.railway.app/api/v1',
+  })!;
 
   // In local development, dynamically rewrite localhost to the Metro host IP 
   // ONLY for emulators/simulators. For physical devices connected via USB, 
