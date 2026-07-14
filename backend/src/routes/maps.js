@@ -171,32 +171,39 @@ router.get('/route', async (req, res) => {
         const leg = route.legs?.[0] || {};
         
         // Decode encoded polyline to GeoJSON format
-        const points = route.overview_polyline?.points || '';
+        const points = typeof route.overview_polyline === 'string' 
+            ? route.overview_polyline 
+            : (route.overview_polyline?.points || '');
         const coordinates = points ? decodePolyline(points) : [];
 
         // Map Ola steps to OSRM-compatible steps
         const steps = (leg.steps || []).map(s => {
-            const instr = s.instruction || '';
+            const instr = s.instructions || s.instruction || '';
             const lowerInstr = instr.toLowerCase();
+            const lowerManeuver = (s.maneuver || '').toLowerCase();
             
             let type = 'continue';
             let modifier = 'straight';
             
-            if (lowerInstr.includes('turn') || lowerInstr.includes('take')) {
+            if (lowerManeuver.includes('left') || lowerInstr.includes('left')) {
                 type = 'turn';
-                if (lowerInstr.includes('left')) modifier = 'left';
-                else if (lowerInstr.includes('right')) modifier = 'right';
-            } else if (lowerInstr.includes('merge')) {
-                type = 'merge';
-            } else if (lowerInstr.includes('roundabout') || lowerInstr.includes('circle')) {
+                modifier = 'left';
+            } else if (lowerManeuver.includes('right') || lowerInstr.includes('right')) {
+                type = 'turn';
+                modifier = 'right';
+            } else if (lowerManeuver.includes('u-turn') || lowerManeuver.includes('uturn') || lowerInstr.includes('u-turn')) {
+                type = 'turn';
+                modifier = 'uturn';
+            } else if (lowerManeuver.includes('arrive') || lowerInstr.includes('arrive')) {
+                type = 'arrive';
+            } else if (lowerManeuver.includes('roundabout') || lowerInstr.includes('roundabout')) {
                 type = 'roundabout';
             }
             
-            if (lowerInstr.includes('sharp left')) modifier = 'sharp left';
-            else if (lowerInstr.includes('sharp right')) modifier = 'sharp right';
-            else if (lowerInstr.includes('slight left')) modifier = 'slight left';
-            else if (lowerInstr.includes('slight right')) modifier = 'slight right';
-            else if (lowerInstr.includes('u-turn') || lowerInstr.includes('uturn')) modifier = 'uturn';
+            if (lowerManeuver.includes('sharp-left') || lowerManeuver.includes('sharp_left') || lowerInstr.includes('sharp left')) modifier = 'sharp left';
+            else if (lowerManeuver.includes('sharp-right') || lowerManeuver.includes('sharp_right') || lowerInstr.includes('sharp right')) modifier = 'sharp right';
+            else if (lowerManeuver.includes('slight-left') || lowerManeuver.includes('slight_left') || lowerInstr.includes('slight left')) modifier = 'slight left';
+            else if (lowerManeuver.includes('slight-right') || lowerManeuver.includes('slight_right') || lowerInstr.includes('slight right')) modifier = 'slight right';
 
             return {
                 maneuver: {
@@ -207,6 +214,9 @@ router.get('/route', async (req, res) => {
                 name: instr
             };
         });
+
+        const durationVal = typeof leg.duration === 'number' ? leg.duration : (leg.duration?.value || 0);
+        const distanceVal = typeof leg.distance === 'number' ? leg.distance : (leg.distance?.value || 0);
 
         // Construct standard OSRM response structure for the frontend
         const osrmCompatibleData = {
@@ -221,15 +231,15 @@ router.get('/route', async (req, res) => {
                         {
                             steps: steps,
                             summary: route.summary || '',
-                            weight: leg.duration?.value || 0,
-                            duration: leg.duration?.value || 0,
-                            distance: leg.distance?.value || 0
+                            weight: durationVal,
+                            duration: durationVal,
+                            distance: distanceVal
                         }
                     ],
                     weight_name: 'routability',
-                    weight: leg.duration?.value || 0,
-                    duration: leg.duration?.value || 0,
-                    distance: leg.distance?.value || 0
+                    weight: durationVal,
+                    duration: durationVal,
+                    distance: distanceVal
                 }
             ],
             waypoints: [
