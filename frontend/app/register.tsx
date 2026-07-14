@@ -99,6 +99,7 @@ export default function RegisterScreen() {
         else Alert.alert('Welcome to ParkStop!', 'Thank you for joining our network.');
 
         const isDualUser = user.is_finder_registered && user.is_spotter_registered;
+        await AsyncStorage.setItem('is_dual_user', isDualUser ? 'true' : 'false');
         if (isDualUser) {
           router.replace('/role-selection');
         } else {
@@ -216,6 +217,7 @@ export default function RegisterScreen() {
           else Alert.alert('Welcome to ParkStop!', 'Thank you for joining our network.');
 
           const isDualUser = user.is_finder_registered && user.is_spotter_registered;
+          await AsyncStorage.setItem('is_dual_user', isDualUser ? 'true' : 'false');
           if (isDualUser) {
             router.replace('/role-selection');
           } else {

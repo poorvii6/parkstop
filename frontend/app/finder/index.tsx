@@ -1425,7 +1425,7 @@ export default function FinderDashboard() {
                       style: 'destructive',
                       onPress: async () => {
                         try { await apiClient.post('/auth/logout'); } catch(e) {}
-                        await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user_role']);
+                        await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user_role', 'is_dual_user']);
                         try {
                           const { auth } = require('../../services/firebase');
                           await auth.signOut();

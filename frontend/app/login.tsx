@@ -38,6 +38,7 @@ export default function LoginScreen() {
         await AsyncStorage.setItem('user_role', user.role);
 
         const isDualUser = user.is_finder_registered && user.is_spotter_registered;
+        await AsyncStorage.setItem('is_dual_user', isDualUser ? 'true' : 'false');
         if (isDualUser) {
           router.replace('/role-selection');
         } else {
@@ -140,6 +141,7 @@ export default function LoginScreen() {
         await AsyncStorage.setItem('user_role', user.role);
 
         const isDualUser = user.is_finder_registered && user.is_spotter_registered;
+        await AsyncStorage.setItem('is_dual_user', isDualUser ? 'true' : 'false');
         if (isDualUser) {
           router.replace('/role-selection');
         } else {

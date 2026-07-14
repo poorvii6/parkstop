@@ -30,6 +30,7 @@ export default function SplashScreen() {
 
         const token = await AsyncStorage.getItem('access_token');
         const role = await AsyncStorage.getItem('user_role');
+        const isDualUser = await AsyncStorage.getItem('is_dual_user');
         const isOffline = token === 'offline_token';
         const hasFirebaseUser = auth.currentUser !== null;
 
@@ -42,11 +43,15 @@ export default function SplashScreen() {
             return;
           }
 
-          const r = role ? role.toUpperCase() : '';
-          if (r === 'ADMIN') router.replace('/admin');
-          else if (r === 'SPOTTER') router.replace('/spotter');
-          else if (r === 'FINDER') router.replace('/finder');
-          else router.replace('/role-selection');
+          if (isDualUser === 'true') {
+            router.replace('/role-selection');
+          } else {
+            const r = role ? role.toUpperCase() : '';
+            if (r === 'ADMIN') router.replace('/admin');
+            else if (r === 'SPOTTER') router.replace('/spotter');
+            else if (r === 'FINDER') router.replace('/finder');
+            else router.replace('/role-selection');
+          }
         }
       } catch (e) {
         router.replace('/login');

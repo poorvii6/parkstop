@@ -114,7 +114,7 @@ export default function ProfileModal() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Sign Out', style: 'destructive', onPress: async () => {
         try { await apiClient.post('/auth/logout'); } catch (e) {}
-        await AsyncStorage.multiRemove(['access_token', 'user_role', 'discovered_api_url']);
+        await AsyncStorage.multiRemove(['access_token', 'user_role', 'discovered_api_url', 'is_dual_user']);
         router.replace('/login');
       }},
     ]);
@@ -155,6 +155,7 @@ export default function ProfileModal() {
           const res = await apiClient.post('/auth/switch-role', { newRole });
           if (res.data.success) {
             await AsyncStorage.setItem('user_role', res.data.data.role.toUpperCase());
+            await AsyncStorage.setItem('is_dual_user', 'true');
             router.replace(newRole === 'finder' ? '/finder' : '/spotter');
           }
         } catch (e: any) { Alert.alert('Error', e.response?.data?.message || 'Failed to switch role.'); }
@@ -198,6 +199,7 @@ export default function ProfileModal() {
 
       if (res.data.success) {
         await AsyncStorage.setItem('user_role', res.data.data.role.toUpperCase());
+        await AsyncStorage.setItem('is_dual_user', 'true');
         setShowRoleRegModal(false);
         Alert.alert('🎉 Registered', `You have registered as a ${newRole} and switched modes!`);
         router.replace(newRole === 'finder' ? '/finder' : '/spotter');

@@ -128,7 +128,7 @@ export default function WelcomeScreen() {
           <TouchableOpacity 
             onPress={async () => {
               try {
-                await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user_role', 'has_accepted_terms']);
+                await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user_role', 'has_accepted_terms', 'is_dual_user']);
                 await auth.signOut();
               } catch (err) {}
               router.replace('/login');

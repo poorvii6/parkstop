@@ -37,7 +37,7 @@ export default function AdminDashboard() {
   };
 
   const handleLogout = async () => {
-    await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user_role']);
+    await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user_role', 'is_dual_user']);
     try {
       const { auth } = require('../../services/firebase');
       await auth.signOut();
