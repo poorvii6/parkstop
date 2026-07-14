@@ -331,5 +331,21 @@ router.get('/route', async (req, res) => {
     }
 });
 
+router.get('/test-ola-search-raw', async (req, res) => {
+    try {
+        const apiKey = process.env.OLA_MAPS_API_KEY;
+        const q = req.query.q || "MG Road Bangalore";
+        const url = `https://api.olamaps.io/places/v1/textsearch?input=${encodeURIComponent(q)}&api_key=${apiKey}`;
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: { 'X-Request-Id': `req-${Date.now()}` }
+        });
+        const data = await response.json();
+        res.json(data);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 module.exports = router;
 
