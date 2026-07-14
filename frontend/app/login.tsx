@@ -90,6 +90,7 @@ export default function LoginScreen() {
           });
           
           await GoogleSignin.hasPlayServices();
+          await GoogleSignin.signOut().catch(() => {});
           const result = await GoogleSignin.signIn();
           if (__DEV__) console.log('[SOCIAL AUTH] Google Sign-In raw result:', JSON.stringify(result));
           
