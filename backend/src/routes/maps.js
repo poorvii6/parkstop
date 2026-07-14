@@ -23,7 +23,7 @@ router.get('/search', async (req, res) => {
 
         if (apiKey) {
             try {
-                let url = `https://api.olamaps.io/places/v1/textsearch?input=${encodeURIComponent(q)}&api_key=${apiKey}`;
+                let url = `https://api.olamaps.io/places/v1/autocomplete?input=${encodeURIComponent(q)}&api_key=${apiKey}`;
                 if (lat && lon) {
                     const l = parseFloat(lat);
                     const n = parseFloat(lon);
@@ -37,21 +37,21 @@ router.get('/search', async (req, res) => {
                 });
                 if (response.ok) {
                     const olaData = await response.json();
-                    const predictions = olaData.predictions || olaData.places || [];
+                    const predictions = olaData.predictions || [];
                     
-                    // Map Ola Maps search results to Nominatim format expected by the frontend
+                    // Map Ola Maps autocomplete results to Nominatim format expected by the frontend
                     const mappedData = predictions.map(item => {
                         const latVal = item.geometry?.location?.lat;
                         const lngVal = item.geometry?.location?.lng;
                         
                         return {
-                            display_name: item.description || item.formatted_address || item.name || '',
+                            display_name: item.description || item.structured_formatting?.main_text || '',
                             lat: latVal ? latVal.toString() : '0',
                             lon: lngVal ? lngVal.toString() : '0',
                             class: 'place',
                             type: 'city',
                             address: {
-                                name: item.name || '',
+                                name: item.structured_formatting?.main_text || '',
                                 city: item.structured_formatting?.secondary_text || ''
                             }
                         };
@@ -328,36 +328,6 @@ router.get('/route', async (req, res) => {
         } catch (fallbackError) {
             res.status(500).json({ success: false, message: error.message });
         }
-    }
-});
-
-router.get('/test-ola-search-raw', async (req, res) => {
-    try {
-        const apiKey = process.env.OLA_MAPS_API_KEY;
-        const q = req.query.q || "MG Road Bangalore";
-        
-        // 1. Try autocomplete
-        const autoUrl = `https://api.olamaps.io/places/v1/autocomplete?input=${encodeURIComponent(q)}&api_key=${apiKey}`;
-        const autoRes = await fetch(autoUrl);
-        const autoData = await autoRes.json();
-        
-        // 2. Try textsearch
-        const textUrl = `https://api.olamaps.io/places/v1/textsearch?input=${encodeURIComponent(q)}&api_key=${apiKey}`;
-        const textRes = await fetch(textUrl);
-        const textData = await textRes.json();
-        
-        // 3. Try geocode
-        const geoUrl = `https://api.olamaps.io/places/v1/geocode?address=${encodeURIComponent(q)}&api_key=${apiKey}`;
-        const geoRes = await fetch(geoUrl);
-        const geoData = await geoRes.json();
-
-        res.json({
-            autocomplete: autoData,
-            textsearch: textData,
-            geocode: geoData
-        });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
     }
 });
 
