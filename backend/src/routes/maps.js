@@ -81,18 +81,186 @@ router.get('/search', async (req, res) => {
     }
 });
 
-// Step 6 & 10: Routing (OSRM Proxy with Caching potential)
+// Polyline decoder to convert Google/Ola encoded polyline to GeoJSON coordinates [lng, lat]
+function decodePolyline(str, precision = 5) {
+    let index = 0,
+        lat = 0,
+        lng = 0,
+        coordinates = [],
+        shift = 0,
+        result = 0,
+        byte = null,
+        latitude_change,
+        longitude_change,
+        factor = Math.pow(10, precision);
+
+    while (index < str.length) {
+        byte = null;
+        shift = 0;
+        result = 0;
+
+        do {
+            byte = str.charCodeAt(index++) - 63;
+            result |= (byte & 0x1f) << shift;
+            shift += 5;
+        } while (byte >= 0x20);
+
+        latitude_change = ((result & 1) ? ~(result >> 1) : (result >> 1));
+
+        shift = 0;
+        result = 0;
+
+        do {
+            byte = str.charCodeAt(index++) - 63;
+            result |= (byte & 0x1f) << shift;
+            shift += 5;
+        } while (byte >= 0x20);
+
+        longitude_change = ((result & 1) ? ~(result >> 1) : (result >> 1));
+
+        lat += latitude_change;
+        lng += longitude_change;
+
+        coordinates.push([lng / factor, lat / factor]);
+    }
+
+    return coordinates;
+}
+
+// Step 6 & 10: Routing (OSRM Proxy / Ola Maps Adapter)
 router.get('/route', async (req, res) => {
     try {
         const { start, end } = req.query; // Format: "lng,lat"
         if (!start || !end) return res.status(400).json({ success: false, message: 'Start and end required' });
 
-        const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${start};${end}?overview=full&geometries=geojson&steps=true`);
-        const data = await response.json();
+        const apiKey = process.env.OLA_MAPS_API_KEY;
 
-        res.json({ success: true, data });
+        if (!apiKey) {
+            // Fallback to OSRM if OLA_MAPS_API_KEY is not set
+            const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${start};${end}?overview=full&geometries=geojson&steps=true`);
+            const data = await response.json();
+            return res.json({ success: true, data });
+        }
+
+        // Convert start and end from "lng,lat" to "lat,lng" for Ola Maps
+        const [startLng, startLat] = start.split(',');
+        const [endLng, endLat] = end.split(',');
+        const origin = `${startLat.trim()},${startLng.trim()}`;
+        const destination = `${endLat.trim()},${endLng.trim()}`;
+
+        const url = `https://api.olamaps.io/routing/v1/directions?origin=${origin}&destination=${destination}&api_key=${apiKey}`;
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'X-Request-Id': `req-${Date.now()}`
+            }
+        });
+
+        if (!response.ok) {
+            const errText = await response.text();
+            throw new Error(`Ola Maps API error: ${response.status} - ${errText}`);
+        }
+
+        const olaData = await response.json();
+        
+        if (!olaData.routes || olaData.routes.length === 0) {
+            return res.status(404).json({ success: false, message: 'No routes found from Ola Maps' });
+        }
+
+        const route = olaData.routes[0];
+        const leg = route.legs?.[0] || {};
+        
+        // Decode encoded polyline to GeoJSON format
+        const points = route.overview_polyline?.points || '';
+        const coordinates = points ? decodePolyline(points) : [];
+
+        // Map Ola steps to OSRM-compatible steps
+        const steps = (leg.steps || []).map(s => {
+            const instr = s.instruction || '';
+            const lowerInstr = instr.toLowerCase();
+            
+            let type = 'continue';
+            let modifier = 'straight';
+            
+            if (lowerInstr.includes('turn') || lowerInstr.includes('take')) {
+                type = 'turn';
+                if (lowerInstr.includes('left')) modifier = 'left';
+                else if (lowerInstr.includes('right')) modifier = 'right';
+            } else if (lowerInstr.includes('merge')) {
+                type = 'merge';
+            } else if (lowerInstr.includes('roundabout') || lowerInstr.includes('circle')) {
+                type = 'roundabout';
+            }
+            
+            if (lowerInstr.includes('sharp left')) modifier = 'sharp left';
+            else if (lowerInstr.includes('sharp right')) modifier = 'sharp right';
+            else if (lowerInstr.includes('slight left')) modifier = 'slight left';
+            else if (lowerInstr.includes('slight right')) modifier = 'slight right';
+            else if (lowerInstr.includes('u-turn') || lowerInstr.includes('uturn')) modifier = 'uturn';
+
+            return {
+                maneuver: {
+                    location: s.start_location ? [s.start_location.lng, s.start_location.lat] : [0, 0],
+                    type,
+                    modifier
+                },
+                name: instr
+            };
+        });
+
+        // Construct standard OSRM response structure for the frontend
+        const osrmCompatibleData = {
+            code: 'Ok',
+            routes: [
+                {
+                    geometry: {
+                        coordinates: coordinates,
+                        type: 'LineString'
+                    },
+                    legs: [
+                        {
+                            steps: steps,
+                            summary: route.summary || '',
+                            weight: leg.duration?.value || 0,
+                            duration: leg.duration?.value || 0,
+                            distance: leg.distance?.value || 0
+                        }
+                    ],
+                    weight_name: 'routability',
+                    weight: leg.duration?.value || 0,
+                    duration: leg.duration?.value || 0,
+                    distance: leg.distance?.value || 0
+                }
+            ],
+            waypoints: [
+                {
+                    hint: '',
+                    distance: 0,
+                    name: leg.start_address || '',
+                    location: [parseFloat(startLng), parseFloat(startLat)]
+                },
+                {
+                    hint: '',
+                    distance: 0,
+                    name: leg.end_address || '',
+                    location: [parseFloat(endLng), parseFloat(endLat)]
+                }
+            ]
+        };
+
+        res.json({ success: true, data: osrmCompatibleData });
+
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error('[API ERROR] Ola Maps Directions failed, falling back to OSRM:', error.message);
+        // Fallback to OSRM if Ola Maps fails during runtime
+        try {
+            const { start, end } = req.query;
+            const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${start};${end}?overview=full&geometries=geojson&steps=true`);
+            const data = await response.json();
+            res.json({ success: true, data });
+        } catch (fallbackError) {
+            res.status(500).json({ success: false, message: error.message });
+        }
     }
 });
 
