@@ -240,6 +240,91 @@ class BookingController {
   }
 
   /**
+   * FINDER CHECKOUT (Finder Only, bypasses checkout OTP)
+   */
+  static async finderCheckout(req, res) {
+    try {
+      if (!req.user.role || req.user.role.toLowerCase() !== 'finder') {
+        return res.status(403).json({
+          success: false,
+          message: 'Only finders can end their session'
+        });
+      }
+
+      const bookingId = req.params.id;
+      const booking = await Booking.findById(bookingId);
+
+      if (!booking) {
+        return res.status(404).json({
+          success: false,
+          message: 'Booking not found'
+        });
+      }
+
+      if (booking.user_id !== req.user.id) {
+        return res.status(403).json({
+          success: false,
+          message: 'Unauthorized to complete this booking'
+        });
+      }
+
+      // Complete the booking directly
+      const completedBooking = await Booking.complete(bookingId);
+
+      // 💰 Calculate commission/fees
+      const spot = await ParkingSpot.findById(booking.spot_id);
+      if (spot && spot.spotter_id) {
+        const commission = CommissionService.calculateCommission(
+          completedBooking.total_price, spot.location_type || 'urban'
+        );
+        const spotterEarning = commission.spotterEarning;
+        const platformFee = commission.platformFee;
+
+        // Update booking with commission split
+        await require('../config/prisma').bookings.update({
+          where: { id: parseInt(bookingId) },
+          data: {
+            platform_fee: platformFee,
+            spotter_earning: spotterEarning,
+            payment_status: completedBooking.payment_mode === 'cash' ? 'paid' : completedBooking.payment_status
+          }
+        });
+
+        if (completedBooking.payment_mode === 'cash') {
+          await require('../config/prisma').users.update({
+            where: { id: spot.spotter_id },
+            data: { balance: { decrement: platformFee } }
+          });
+        } else {
+          // Trigger online payout to Spotter via Queue
+          try {
+            const { payoutQueue } = require('../jobs/queues');
+            await payoutQueue.add('process-payout', {
+              bookingId,
+              spotterEarning,
+              spotterId: spot.spotter_id
+            });
+          } catch (queueErr) {
+            logger.error(`Failed to queue payout: ${queueErr.message}`);
+          }
+        }
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Booking completed successfully',
+        data: completedBooking
+      });
+    } catch (error) {
+      logger.error('Error during finder checkout:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to end session'
+      });
+    }
+  }
+
+  /**
    * COMPLETE BOOKING (Spotter Only)
    */
   static async completeBooking(req, res) {

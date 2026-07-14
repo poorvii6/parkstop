@@ -349,6 +349,21 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
               duration: 700,
               easing: function(t){ return t*(2-t); }
             });
+          } else if (!isNav && routeArr.length >= 2 && data.searchedPlace) {
+            // Fit bounds to show the entire route from user location to searched place
+            let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
+            routeArr.forEach(function(p) {
+              if (p[0] < minLng) minLng = p[0];
+              if (p[0] > maxLng) maxLng = p[0];
+              if (p[1] < minLat) minLat = p[1];
+              if (p[1] > maxLat) maxLat = p[1];
+            });
+            if (minLng !== Infinity) {
+              map.fitBounds([[minLng, minLat], [maxLng, maxLat]], {
+                padding: { top: 80, bottom: 220, left: 50, right: 50 },
+                duration: 1000
+              });
+            }
           }
 
           // ── Route lines ──

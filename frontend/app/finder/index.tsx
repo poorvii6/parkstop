@@ -2314,23 +2314,27 @@ export default function FinderDashboard() {
                             }
                           }
 
-                          // Fetch current checkout amount breakdown
-                          if (bookingDetails?.id) {
-                            try {
-                              const res = await apiClient.get(`/bookings/${bookingDetails.id}/checkout-amount`);
-                              if (res.data?.success) {
-                                setBookingDetails(prev => prev ? {
-                                  ...prev,
-                                  basePrice: res.data.data.base_price,
-                                  arrears: res.data.data.arrears,
-                                  finalAmount: res.data.data.total_amount
-                                } : prev);
-                              }
-                            } catch (e) {
-                              console.log('Error fetching checkout amount', e);
+                        onPress={async () => {
+                          if (!bookingDetails?.id) return;
+                          setIsLoading(true);
+                          try {
+                            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                            const res = await apiClient.put(`/bookings/${bookingDetails.id}/finder-checkout`);
+                            if (res.data?.success) {
+                              setBookingDetails(prev => prev ? {
+                                ...prev,
+                                basePrice: res.data.data.total_price,
+                                arrears: 0,
+                                finalAmount: res.data.data.total_price,
+                                ...res.data.data
+                              } : prev);
+                              navigateToStep('payment');
                             }
+                          } catch (e: any) {
+                            Alert.alert('Checkout Failed', e.response?.data?.message || 'Unable to end session.');
+                          } finally {
+                            setIsLoading(false);
                           }
-                          setStep('checkout_verification');
                         }}
                       >
                         <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>End Session</Text>

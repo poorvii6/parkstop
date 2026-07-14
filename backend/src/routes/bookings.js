@@ -124,6 +124,20 @@ router.get(
 );
 
 /**
+ * ✅ FINDER CHECKOUT (Finder only)
+ */
+router.put(
+  '/:id/finder-checkout',
+  authenticate,
+  authorize('FINDER'),
+  [
+    param('id').isInt().withMessage('Booking ID must be an integer'),
+    validate
+  ],
+  BookingController.finderCheckout
+);
+
+/**
  * ✅ UPDATE PAYMENT MODE (Finder only)
  */
 router.patch(
