@@ -335,13 +335,27 @@ router.get('/test-ola-search-raw', async (req, res) => {
     try {
         const apiKey = process.env.OLA_MAPS_API_KEY;
         const q = req.query.q || "MG Road Bangalore";
-        const url = `https://api.olamaps.io/places/v1/textsearch?input=${encodeURIComponent(q)}&api_key=${apiKey}`;
-        const response = await fetch(url, {
-            method: 'GET',
-            headers: { 'X-Request-Id': `req-${Date.now()}` }
+        
+        // 1. Try autocomplete
+        const autoUrl = `https://api.olamaps.io/places/v1/autocomplete?input=${encodeURIComponent(q)}&api_key=${apiKey}`;
+        const autoRes = await fetch(autoUrl);
+        const autoData = await autoRes.json();
+        
+        // 2. Try textsearch
+        const textUrl = `https://api.olamaps.io/places/v1/textsearch?input=${encodeURIComponent(q)}&api_key=${apiKey}`;
+        const textRes = await fetch(textUrl);
+        const textData = await textRes.json();
+        
+        // 3. Try geocode
+        const geoUrl = `https://api.olamaps.io/places/v1/geocode?address=${encodeURIComponent(q)}&api_key=${apiKey}`;
+        const geoRes = await fetch(geoUrl);
+        const geoData = await geoRes.json();
+
+        res.json({
+            autocomplete: autoData,
+            textsearch: textData,
+            geocode: geoData
         });
-        const data = await response.json();
-        res.json(data);
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
