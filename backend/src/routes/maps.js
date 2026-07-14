@@ -13,16 +13,79 @@ function getDistance(lat1, lon1, lat2, lon2) {
     return R * c;
 }
 
-// Step 7: Location Search (Nominatim Proxy)
+// Step 7: Location Search (Nominatim Proxy / Ola Maps Search)
 router.get('/search', async (req, res) => {
     try {
         const { q, lat, lon } = req.query;
         if (!q) return res.status(400).json({ success: false, message: 'Query required' });
 
-        // Search globally — no bounded viewbox so users can find any city
+        const apiKey = process.env.OLA_MAPS_API_KEY;
+
+        if (apiKey) {
+            try {
+                let url = `https://api.olamaps.io/places/v1/textsearch?input=${encodeURIComponent(q)}&api_key=${apiKey}`;
+                if (lat && lon) {
+                    const l = parseFloat(lat);
+                    const n = parseFloat(lon);
+                    if (!isNaN(l) && !isNaN(n) && l !== 0 && n !== 0) {
+                        url += `&location=${l},${n}`;
+                    }
+                }
+
+                const response = await fetch(url, {
+                    headers: { 'X-Request-Id': `req-${Date.now()}` }
+                });
+                if (response.ok) {
+                    const olaData = await response.json();
+                    const predictions = olaData.predictions || olaData.places || [];
+                    
+                    // Map Ola Maps search results to Nominatim format expected by the frontend
+                    const mappedData = predictions.map(item => {
+                        const latVal = item.geometry?.location?.lat;
+                        const lngVal = item.geometry?.location?.lng;
+                        
+                        return {
+                            display_name: item.description || item.formatted_address || item.name || '',
+                            lat: latVal ? latVal.toString() : '0',
+                            lon: lngVal ? lngVal.toString() : '0',
+                            class: 'place',
+                            type: 'city',
+                            address: {
+                                name: item.name || '',
+                                city: item.structured_formatting?.secondary_text || ''
+                            }
+                        };
+                    });
+
+                    // If coordinates are present, calculate distance and sort
+                    if (lat && lon) {
+                        const userLat = parseFloat(lat);
+                        const userLon = parseFloat(lon);
+                        if (!isNaN(userLat) && !isNaN(userLon) && userLat !== 0 && userLon !== 0) {
+                            mappedData.forEach(item => {
+                                const itemLat = parseFloat(item.lat);
+                                const itemLon = parseFloat(item.lon);
+                                if (!isNaN(itemLat) && !isNaN(itemLon) && itemLat !== 0 && itemLon !== 0) {
+                                    item.distance = getDistance(userLat, userLon, itemLat, itemLon);
+                                } else {
+                                    item.distance = Infinity;
+                                }
+                            });
+
+                            mappedData.sort((a, b) => a.distance - b.distance);
+                        }
+                    }
+
+                    return res.json({ success: true, data: mappedData.slice(0, 10) });
+                }
+            } catch (olaError) {
+                console.error('[API ERROR] Ola Maps search failed, falling back to Nominatim:', olaError.message);
+            }
+        }
+
+        // Fallback to Nominatim
         let searchUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=15&addressdetails=1`;
         
-        // Use viewbox as a bias (NOT bounded) so nearby results rank higher
         if (lat && lon) {
             const l = parseFloat(lat);
             const n = parseFloat(lon);
@@ -38,7 +101,6 @@ router.get('/search', async (req, res) => {
         });
         let data = await response.json();
 
-        // If lat/lon are provided, calculate distance and sort local results (< 100km) to the top
         if (lat && lon && Array.isArray(data)) {
             const userLat = parseFloat(lat);
             const userLon = parseFloat(lon);
@@ -53,10 +115,6 @@ router.get('/search', async (req, res) => {
                     }
                 });
 
-                // Sort:
-                // 1. Group by "local" (< 100km) vs "global" (>= 100km)
-                // 2. Local results are sorted by distance ascending (closest first)
-                // 3. Global results retain their original Nominatim relevance ranking
                 data.sort((a, b) => {
                     const aLocal = a.distance < 100;
                     const bLocal = b.distance < 100;
@@ -65,12 +123,11 @@ router.get('/search', async (req, res) => {
                     if (aLocal && bLocal) {
                         return a.distance - b.distance;
                     }
-                    return 0; // retain original order
+                    return 0;
                 });
             }
         }
 
-        // Limit to top 10 results after sorting
         if (Array.isArray(data)) {
             data = data.slice(0, 10);
         }
