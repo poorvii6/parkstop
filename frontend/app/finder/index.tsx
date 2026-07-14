@@ -687,7 +687,7 @@ export default function FinderDashboard() {
     };
   }, []);
 
-  // Load saved vehicle type from AsyncStorage
+  // Load saved vehicle type from AsyncStorage, defaulting to Car Sedan to go straight to dashboard
   useEffect(() => {
     (async () => {
       try {
@@ -697,6 +697,12 @@ export default function FinderDashboard() {
           setVehicleType(savedType);
           setVehicleSubType(savedSubType || (savedType === 'bike' ? 'Standard' : ''));
           setStep('home');
+        } else {
+          setVehicleType('car');
+          setVehicleSubType('Sedan');
+          await AsyncStorage.setItem('parkstop_vehicle_type', 'car');
+          await AsyncStorage.setItem('parkstop_vehicle_subtype', 'Sedan');
+          setStep('home');
         }
       } catch (e) {
         console.log('Failed to load saved vehicle', e);
@@ -704,25 +710,23 @@ export default function FinderDashboard() {
     })();
   }, []);
 
-  // Instant Nearby Discovery: Populate suggestions with local places on load
-  useEffect(() => {
-    const now = Date.now();
-    // Only fetch if we have no suggestions AND haven't searched AND moved significantly
-    if (userLocation && suggestions.length === 0 && searchQuery === '' && (now - lastNearbyFetch.current > 10000)) {
-      lastNearbyFetch.current = now;
-      console.log("[API] Fetching nearby spots...");
-      (async () => {
-        try {
-          const res = await apiClient.get(`/maps/search?q=parking&lat=${userLocation.lat}&lon=${userLocation.lng}`);
-          if (res.data.success) {
-            setSuggestions(res.data.data.slice(0, 5));
-          }
-        } catch (e) {
-          console.log("Initial nearby fetch failed");
-        }
-      })();
-    }
-  }, [userLocation, searchQuery]);
+  // Instant Nearby Discovery: Disabled to prevent covering the dashboard on load
+  // useEffect(() => {
+  //   const now = Date.now();
+  //   if (userLocation && suggestions.length === 0 && searchQuery === '' && (now - lastNearbyFetch.current > 10000)) {
+  //     lastNearbyFetch.current = now;
+  //     (async () => {
+  //       try {
+  //         const res = await apiClient.get(`/maps/search?q=parking&lat=${userLocation.lat}&lon=${userLocation.lng}`);
+  //         if (res.data.success) {
+  //           setSuggestions(res.data.data.slice(0, 5));
+  //         }
+  //       } catch (e) {
+  //         console.log("Initial nearby fetch failed");
+  //       }
+  //     })();
+  //   }
+  // }, [userLocation, searchQuery]);
 
   const sendChat = async () => {
     if (!chatInput.trim()) return;
@@ -975,6 +979,12 @@ export default function FinderDashboard() {
       if (pollInterval) clearInterval(pollInterval);
     };
   }, [step, bookingDetails?.id]);
+
+  useEffect(() => {
+    if (step === 'home' && searchedPlace === null && userLocation) {
+      fetchNearbySpots(userLocation.lat, userLocation.lng);
+    }
+  }, [searchedPlace, step, userLocation]);
 
   const finishParking = async () => {
     // Left for manual simulation if needed, but the auto-poll handles the actual transition now.
@@ -1393,7 +1403,7 @@ export default function FinderDashboard() {
 
       {/* STEP 3: HOME — MAP WITH NEARBY BOTTOM SHEET */}
       {step === 'home' && (
-        <View style={{ flex: 1, backgroundColor: '#0f172a' }}>
+        <View style={{ flex: 1, backgroundColor: 'transparent' }} pointerEvents="box-none">
           {/* Search Bar */}
           <View style={{ position: 'absolute', top: Platform.OS === 'ios' ? 20 : 12, left: 16, right: 16, zIndex: 100 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#1E293B', borderRadius: 20, paddingHorizontal: 16, height: 52, borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.15)', shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 15, elevation: 12 }}>
@@ -1408,7 +1418,7 @@ export default function FinderDashboard() {
                 returnKeyType="search"
               />
               {searchQuery.length > 0 && (
-                <TouchableOpacity onPress={() => { setSearchQuery(''); setSuggestions([]); }} style={{ padding: 6, marginRight: 6 }}>
+                <TouchableOpacity onPress={() => { setSearchQuery(''); setSuggestions([]); setSearchedPlace(null); }} style={{ padding: 6, marginRight: 6 }}>
                   <Text style={{ color: '#94a3b8', fontSize: 16 }}>✕</Text>
                 </TouchableOpacity>
               )}
@@ -1466,7 +1476,14 @@ export default function FinderDashboard() {
           </View>
 
           {/* Nearby Spots Bottom Sheet */}
-          <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, maxHeight: '45%', backgroundColor: '#0f172a', borderTopLeftRadius: 28, borderTopRightRadius: 28, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 20, elevation: 20, zIndex: 50 }}>
+          <View style={{ 
+            position: 'absolute', bottom: 0, left: 0, right: 0, 
+            maxHeight: '45%', backgroundColor: '#0f172a', 
+            borderTopLeftRadius: 28, borderTopRightRadius: 28, 
+            borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', 
+            shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 20, 
+            elevation: 20, zIndex: 50 
+          }}>
             <View style={{ width: 40, height: 4, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 2, alignSelf: 'center', marginTop: 12, marginBottom: 8 }} />
             <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, marginBottom: 12, justifyContent: 'space-between' }}>
               <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
@@ -1641,7 +1658,7 @@ export default function FinderDashboard() {
       {/* Google Maps Style Instruction Banner */}
 
       {/* FLOATING BACK/HOME BUTTON — rendered AFTER map so it sits on top of WebView */}
-      {['spot_booking', 'en_route', 'navigating', 'arriving', 'booking_confirm', 'active_parking'].includes(step) && (
+      {(['spot_booking', 'en_route', 'navigating', 'arriving', 'booking_confirm', 'active_parking'].includes(step) || (step === 'home' && searchedPlace !== null)) && (
         <TouchableOpacity
           style={{
             position: 'absolute',
@@ -1663,7 +1680,10 @@ export default function FinderDashboard() {
           }}
           onPress={() => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-            if (['en_route', 'navigating', 'arriving'].includes(step)) {
+            if (step === 'home' && searchedPlace !== null) {
+              setSearchedPlace(null);
+              setSearchQuery('');
+            } else if (['en_route', 'navigating', 'arriving'].includes(step)) {
               Alert.alert('Exit Navigation', 'Are you sure you want to exit navigation?', [
                 { text: 'Cancel', style: 'cancel' },
                 {
@@ -2538,9 +2558,11 @@ export default function FinderDashboard() {
         </>
       )}
 
-      <TouchableOpacity style={styles.chatFab} onPress={() => setChatOpen(true)}>
-        <Text style={styles.chatFabText}>💬</Text>
-      </TouchableOpacity>
+      {step !== 'home' && (
+        <TouchableOpacity style={styles.chatFab} onPress={() => setChatOpen(true)}>
+          <Text style={styles.chatFabText}>💬</Text>
+        </TouchableOpacity>
+      )}
 
       {/* Upfront Payment Modal removed - Payment selection is now done at checkout */}
 

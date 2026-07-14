@@ -1,15 +1,13 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Platform, Dimensions, Image, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Platform, Dimensions, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import apiClient from '../api/client';
 import { BlueprintTheme, BlueprintColors } from '../constants/BlueprintTheme';
 
 export default function RoleSelectionScreen() {
   const router = useRouter();
   const [activeRole, setActiveRole] = React.useState<string | null>(null);
-  const [loading, setLoading] = React.useState(false);
 
   const handleSelectRole = async (role: string) => {
     setActiveRole(role);
@@ -17,30 +15,14 @@ export default function RoleSelectionScreen() {
 
   const handleContinue = async () => {
     if (!activeRole) return;
-    setLoading(true);
-    try {
-      const res = await apiClient.post('/auth/switch-role', { newRole: activeRole.toLowerCase() });
-      if (res.data.success) {
-        await AsyncStorage.setItem('user_role', activeRole);
-        const hasAccepted = await AsyncStorage.getItem('has_accepted_terms');
-        if (hasAccepted === 'true') {
-          router.replace(activeRole === 'SPOTTER' ? '/spotter' : '/finder');
-        } else {
-          router.replace('/welcome');
-        }
-      } else {
-        Alert.alert('Unable to Switch', res.data.message || 'Failed to switch role.');
-      }
-    } catch (err: any) {
-      console.error('[ROLE SELECTION] Switch role failed:', err);
-      Alert.alert('Error', err.response?.data?.message || 'Failed to switch role. Please check your connection.');
-    } finally {
-      setLoading(false);
+    await AsyncStorage.setItem('user_role', activeRole);
+    if (activeRole === 'SPOTTER' || activeRole === 'FINDER') {
+      router.replace('/welcome');
     }
   };
 
   const handleLogout = async () => {
-    await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user_role', 'is_dual_user']);
+    await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user_role']);
     try {
       const { auth } = require('../services/firebase');
       await auth.signOut();
@@ -100,7 +82,7 @@ export default function RoleSelectionScreen() {
               </View>
               <View>
                 <Text style={styles.cardTitle}>Spot Owner</Text>
-                <Text style={styles.cardDesc}>Listing and managing parking spots</Text>
+                <Text style={styles.cardDesc}>Listing parking spots</Text>
               </View>
             </View>
           </TouchableOpacity>
@@ -108,15 +90,11 @@ export default function RoleSelectionScreen() {
 
         <View style={styles.footer}>
           <TouchableOpacity 
-            style={[BlueprintTheme.buttonPrimary, (!activeRole || loading) && { opacity: 0.5 }]} 
+            style={[BlueprintTheme.buttonPrimary, !activeRole && { opacity: 0.5 }]} 
             onPress={handleContinue}
-            disabled={!activeRole || loading}
+            disabled={!activeRole}
           >
-            {loading ? (
-              <ActivityIndicator color="#FFFFFF" />
-            ) : (
-              <Text style={BlueprintTheme.buttonPrimaryText}>Continue</Text>
-            )}
+            <Text style={BlueprintTheme.buttonPrimaryText}>Continue</Text>
           </TouchableOpacity>
           
           <TouchableOpacity onPress={handleLogout} style={styles.logoutBtn}>
