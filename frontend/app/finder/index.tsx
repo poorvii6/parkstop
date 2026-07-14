@@ -2323,7 +2323,6 @@ export default function FinderDashboard() {
                             }
                           }
 
-                        onPress={async () => {
                           if (!bookingDetails?.id) return;
                           setIsLoading(true);
                           try {
