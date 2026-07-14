@@ -116,6 +116,7 @@ export default function FinderDashboard() {
   const [distanceInfo, setDistanceInfo] = useState({ miles: '0', mins: '0' });
   const [currentInstruction, setCurrentInstruction] = useState({ turn: '', street: '', icon: '' });
   const routeStepsRef = useRef<any[]>([]);
+  const ignoreNextQueryChange = useRef(false);
   const [chatOpen, setChatOpen] = useState(false);
 
 
@@ -791,6 +792,9 @@ export default function FinderDashboard() {
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
     setIsSearching(true);
+    ignoreNextQueryChange.current = true;
+    setSuggestions([]);
+    Keyboard.dismiss();
 
     // Support searching by Latitude, Longitude (e.g. 37.7749, -122.4194)
     const coordRegex = /^([-+]?\d+(\.\d+)?),\s*([-+]?\d+(\.\d+)?)$/;
@@ -866,6 +870,10 @@ export default function FinderDashboard() {
   };
 
   useEffect(() => {
+    if (ignoreNextQueryChange.current) {
+      ignoreNextQueryChange.current = false;
+      return;
+    }
     if (searchQuery.length < 2) {
       setSuggestions([]);
       return;
@@ -910,6 +918,7 @@ export default function FinderDashboard() {
     const lon = parseFloat(item.lon);
     const name = item.display_name;
 
+    ignoreNextQueryChange.current = true;
     setSearchQuery(name);
     setSuggestions([]);
     Keyboard.dismiss();
