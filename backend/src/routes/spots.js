@@ -153,23 +153,6 @@ router.put(
   SpotController.updateSpot
 );
 
-/**
- * DELETE SPOT
- */
-router.delete(
-  '/:id',
-  authenticate,
-  authorize('SPOTTER', 'ADMIN'),
-  [
-    param('id')
-      .isInt()
-      .withMessage('Spot ID must be integer'),
-
-    validate
-  ],
-  SpotController.deleteSpot
-);
-
 router.delete('/dangerously-clear-everything-live', async (req, res) => {
   try {
     const prisma = require('../config/prisma');
@@ -188,5 +171,22 @@ router.delete('/dangerously-clear-everything-live', async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+/**
+ * DELETE SPOT
+ */
+router.delete(
+  '/:id',
+  authenticate,
+  authorize('SPOTTER', 'ADMIN'),
+  [
+    param('id')
+      .isInt()
+      .withMessage('Spot ID must be integer'),
+
+    validate
+  ],
+  SpotController.deleteSpot
+);
 
 module.exports = router;
