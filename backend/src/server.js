@@ -77,7 +77,8 @@ app.use(cors({
     // Mobile apps and some server-to-server requests don't send an origin
     if (!origin) return callback(null, true);
     if (allowedOrigins.indexOf(origin) === -1 && process.env.NODE_ENV === 'production') {
-      const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+      logger.warn(`[CORS Blocked] Origin: ${origin} is not in allowedOrigins (${allowedOrigins.join(', ')})`);
+      const msg = `The CORS policy for this site does not allow access from the specified Origin: ${origin}`;
       return callback(new Error(msg), false);
     }
     return callback(null, true);
