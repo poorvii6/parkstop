@@ -93,10 +93,17 @@ export default function RegisterScreen() {
       });
 
       if (response.data.success) {
-        await AsyncStorage.setItem('user_role', response.data.data.user.role);
+        const user = response.data.data.user;
+        await AsyncStorage.setItem('user_role', user.role);
         if (Platform.OS === 'web') alert('Welcome to ParkStop!');
         else Alert.alert('Welcome to ParkStop!', 'Thank you for joining our network.');
-        router.replace('/welcome');
+
+        const isDualUser = user.is_finder_registered && user.is_spotter_registered;
+        if (isDualUser) {
+          router.replace('/role-selection');
+        } else {
+          router.replace('/welcome');
+        }
       }
     } catch (error: any) {
       console.error('[SOCIAL AUTH] OAuth Error:', error);
@@ -203,10 +210,17 @@ export default function RegisterScreen() {
         });
 
         if (response.data.success) {
-          await AsyncStorage.setItem('user_role', role);
+          const user = response.data.data.user;
+          await AsyncStorage.setItem('user_role', user.role);
           if (Platform.OS === 'web') alert('Welcome to ParkStop!');
           else Alert.alert('Welcome to ParkStop!', 'Thank you for joining our network.');
-          router.replace('/welcome');
+
+          const isDualUser = user.is_finder_registered && user.is_spotter_registered;
+          if (isDualUser) {
+            router.replace('/role-selection');
+          } else {
+            router.replace('/welcome');
+          }
         }
       } catch (backendError: any) {
         console.error('[AUTH] Backend register failed, rolling back Firebase user:', backendError.response?.data || backendError.message);

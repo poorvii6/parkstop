@@ -33,16 +33,23 @@ export default function LoginScreen() {
       });
 
       if (response.data.success) {
-        await AsyncStorage.setItem('user_role', response.data.data.user.role);
-        const hasAccepted = await AsyncStorage.getItem('has_accepted_terms');
-        if (hasAccepted === 'true') {
-          const r = response.data.data.user.role.toUpperCase();
-          if (r === 'ADMIN') router.replace('/admin');
-          else if (r === 'SPOTTER') router.replace('/spotter');
-          else if (r === 'FINDER') router.replace('/finder');
-          else router.replace('/role-selection');
+        const user = response.data.data.user;
+        const role = user.role.toUpperCase();
+        await AsyncStorage.setItem('user_role', user.role);
+
+        const isDualUser = user.is_finder_registered && user.is_spotter_registered;
+        if (isDualUser) {
+          router.replace('/role-selection');
         } else {
-          router.replace('/welcome');
+          const hasAccepted = await AsyncStorage.getItem('has_accepted_terms');
+          if (hasAccepted === 'true') {
+            if (role === 'ADMIN') router.replace('/admin');
+            else if (role === 'SPOTTER') router.replace('/spotter');
+            else if (role === 'FINDER') router.replace('/finder');
+            else router.replace('/role-selection');
+          } else {
+            router.replace('/welcome');
+          }
         }
       }
     } catch (error: any) {
@@ -128,16 +135,23 @@ export default function LoginScreen() {
       });
 
       if (response.data.success) {
-        await AsyncStorage.setItem('user_role', response.data.data.user.role);
-        const hasAccepted = await AsyncStorage.getItem('has_accepted_terms');
-        if (hasAccepted === 'true') {
-          const r = response.data.data.user.role.toUpperCase();
-          if (r === 'ADMIN') router.replace('/admin');
-          else if (r === 'SPOTTER') router.replace('/spotter');
-          else if (r === 'FINDER') router.replace('/finder');
-          else router.replace('/role-selection');
+        const user = response.data.data.user;
+        const role = user.role.toUpperCase();
+        await AsyncStorage.setItem('user_role', user.role);
+
+        const isDualUser = user.is_finder_registered && user.is_spotter_registered;
+        if (isDualUser) {
+          router.replace('/role-selection');
         } else {
-          router.replace('/welcome');
+          const hasAccepted = await AsyncStorage.getItem('has_accepted_terms');
+          if (hasAccepted === 'true') {
+            if (role === 'ADMIN') router.replace('/admin');
+            else if (role === 'SPOTTER') router.replace('/spotter');
+            else if (role === 'FINDER') router.replace('/finder');
+            else router.replace('/role-selection');
+          } else {
+            router.replace('/welcome');
+          }
         }
       }
     } catch (error: any) {

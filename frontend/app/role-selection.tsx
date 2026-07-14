@@ -17,7 +17,12 @@ export default function RoleSelectionScreen() {
     if (!activeRole) return;
     await AsyncStorage.setItem('user_role', activeRole);
     if (activeRole === 'SPOTTER' || activeRole === 'FINDER') {
-      router.replace('/welcome');
+      const hasAccepted = await AsyncStorage.getItem('has_accepted_terms');
+      if (hasAccepted === 'true') {
+        router.replace(activeRole === 'SPOTTER' ? '/spotter' : '/finder');
+      } else {
+        router.replace('/welcome');
+      }
     }
   };
 

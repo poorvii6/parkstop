@@ -135,22 +135,47 @@ class AuthController {
       });
 
       if (existing) {
-        // If user already exists, but doesn't have firebase_uid set, we link them
+        // Build the update data for existing user
+        const updateData = {};
         if (!existing.firebase_uid) {
-          const updatedUser = await prisma.users.update({
+          updateData.firebase_uid = firebaseUid;
+        }
+
+        // If registering with a different role, update role and flags
+        if (normalizedRole !== existing.role) {
+          updateData.role = normalizedRole;
+          if (normalizedRole === 'FINDER') {
+            updateData.is_finder_registered = true;
+          } else if (normalizedRole === 'SPOTTER') {
+            updateData.is_spotter_registered = true;
+          }
+        }
+
+        let finalUser = existing;
+        if (Object.keys(updateData).length > 0) {
+          finalUser = await prisma.users.update({
             where: { id: existing.id },
-            data: { firebase_uid: firebaseUid }
-          });
-          return res.status(200).json({
-            success: true,
-            message: 'Firebase account linked successfully',
-            data: { ...updatedUser, name: updatedUser.full_name }
+            data: updateData,
+            select: {
+              id: true,
+              email: true,
+              full_name: true,
+              phone: true,
+              role: true,
+              created_at: true,
+              firebase_uid: true,
+              is_finder_registered: true,
+              is_spotter_registered: true
+            }
           });
         }
 
-        return res.status(201).json({
+        return res.status(200).json({
           success: true,
-          message: 'User registered successfully'
+          message: 'User registered successfully',
+          data: {
+            user: { ...finalUser, name: finalUser.full_name }
+          }
         });
       }
 
@@ -172,14 +197,18 @@ class AuthController {
           phone: true,
           role: true,
           created_at: true,
-          firebase_uid: true
+          firebase_uid: true,
+          is_finder_registered: true,
+          is_spotter_registered: true
         }
       });
 
       res.status(201).json({
         success: true,
         message: 'User registered successfully',
-        data: { ...user, name: user.full_name }
+        data: {
+          user: { ...user, name: user.full_name }
+        }
       });
 
     } catch (error) {
