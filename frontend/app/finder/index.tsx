@@ -1663,7 +1663,7 @@ export default function FinderDashboard() {
           />
 
           {/* Floating OTP Badge During Navigation/Parking */}
-          {['navigating', 'en_route', 'arriving', 'active_parking'].includes(step) && bookingDetails?.otp && !isInPip && (
+          {['navigating', 'en_route'].includes(step) && bookingDetails?.otp && !isInPip && !arrivalDetected && (
             <View style={{ position: 'absolute', top: 195, right: 16, backgroundColor: 'rgba(15,23,42,0.9)', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(99,102,241,0.3)', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 10, zIndex: 99 }}>
               <Text style={{ color: '#94a3b8', fontSize: 10, fontWeight: '800', marginBottom: 2 }}>CHECK-IN PIN</Text>
               <Text selectable={true} style={{ color: '#10b981', fontSize: 22, fontWeight: '900', letterSpacing: 4 }}>{bookingDetails.otp}</Text>
