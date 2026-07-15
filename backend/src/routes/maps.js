@@ -13,11 +13,41 @@ function getDistance(lat1, lon1, lat2, lon2) {
     return R * c;
 }
 
+// Simple in-memory cache for search results (5 min TTL)
+const searchCache = new Map();
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+function getCached(key) {
+    const hit = searchCache.get(key);
+    if (!hit) return null;
+    if (Date.now() - hit.time > CACHE_TTL_MS) {
+        searchCache.delete(key);
+        return null;
+    }
+    return hit.data;
+}
+
+function setCached(key, data) {
+    searchCache.set(key, { data, time: Date.now() });
+    if (searchCache.size > 500) {
+        const oldestKey = searchCache.keys().next().value;
+        searchCache.delete(oldestKey);
+    }
+}
+
 // Step 7: Location Search (Nominatim Proxy / Ola Maps Search)
 router.get('/search', async (req, res) => {
     try {
         const { q, lat, lon } = req.query;
         if (!q) return res.status(400).json({ success: false, message: 'Query required' });
+
+        const roundedLat = lat ? parseFloat(lat).toFixed(2) : '';
+        const roundedLon = lon ? parseFloat(lon).toFixed(2) : '';
+        const cacheKey = `${q.toLowerCase().trim()}|${roundedLat}|${roundedLon}`;
+        const cached = getCached(cacheKey);
+        if (cached) {
+            return res.json({ success: true, data: cached, cached: true });
+        }
 
         const apiKey = process.env.OLA_MAPS_API_KEY;
 
@@ -88,7 +118,9 @@ router.get('/search', async (req, res) => {
                         }
                     }
 
-                    return res.json({ success: true, data: mappedData.slice(0, 10) });
+                    const olaResult = mappedData.slice(0, 10);
+                    setCached(cacheKey, olaResult);
+                    return res.json({ success: true, data: olaResult });
             } catch (olaError) {
                 console.error('[API ERROR] Ola Maps search failed, falling back to Nominatim:', olaError.message);
             }
@@ -143,6 +175,7 @@ router.get('/search', async (req, res) => {
             data = data.slice(0, 10);
         }
 
+        setCached(cacheKey, data);
         res.json({ success: true, data });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -322,14 +355,19 @@ router.get('/route', async (req, res) => {
                 else if (lowerManeuver.includes('slight-left') || lowerManeuver.includes('slight_left') || lowerInstr.includes('slight left')) modifier = 'slight left';
                 else if (lowerManeuver.includes('slight-right') || lowerManeuver.includes('slight_right') || lowerInstr.includes('slight right')) modifier = 'slight right';
 
-                return {
-                    maneuver: {
-                        location: s.start_location ? [s.start_location.lng, s.start_location.lat] : [0, 0],
-                        type,
-                        modifier
-                    },
-                    name: instr
-                };
+            const streetName = instr
+                .replace(/^(turn|take|continue( onto)?|merge|head|proceed)\s+(sharp |slight )?(left|right|straight)?\s*(onto|on|towards|toward)?\s*/i, '')
+                .replace(/^(onto|on|towards|toward)\s+/i, '')
+                .trim();
+
+            return {
+                maneuver: {
+                    location: s.start_location ? [s.start_location.lng, s.start_location.lat] : [0, 0],
+                    type,
+                    modifier
+                },
+                name: streetName || instr
+            };
             });
 
             const durationVal = typeof leg.duration === 'number' ? leg.duration : (leg.duration?.value || 0);
