@@ -1416,7 +1416,7 @@ export default function FinderDashboard() {
   };
 
   const isBottomPanelFull = ['arriving', 'active_parking', 'payment', 'receipt'].includes(step);
-  const showRoute = ['navigating', 'en_route', 'arriving'].includes(step);
+  const showRoute = ['navigating', 'en_route', 'arriving', 'booking_confirm'].includes(step);
 
   // Removed welcome auto-transition
 
