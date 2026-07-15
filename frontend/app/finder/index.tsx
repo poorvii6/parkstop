@@ -698,11 +698,11 @@ export default function FinderDashboard() {
       ? spots.find(s => s.id === selectedSpotId)
       : searchedPlace;
 
-    const isActiveNav = ['en_route', 'navigating', 'arriving'].includes(step);
+    const isActiveNav = ['en_route', 'navigating', 'arriving', 'booking_confirm'].includes(step);
     const destId = destination ? String(('id' in destination ? (destination as any).id : '') || `${destination.lat},${destination.lng}`) : null;
     const isNewDest = destId !== lastRouteDest.current;
 
-    if (destination && userLocation && (isActiveNav || isNewDest) && (now - lastRouteFetch.current > 4000 || isNewDest)) {
+    if (destination && userLocation && isActiveNav && (now - lastRouteFetch.current > 4000 || isNewDest)) {
       lastRouteFetch.current = now;
       lastRouteDest.current = destId;
       (async () => {
