@@ -398,12 +398,22 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
           const rSrc = map.getSource('route');
           const tSrc = map.getSource('route-traveled');
           if (rSrc && tSrc) {
-            if (isNav && routeArr.length >= 2) {
-              rSrc.setData({type:'Feature',geometry:{type:'LineString',coordinates:[displayPos].concat(routeArr.slice(snapIdx+1))}});
-              tSrc.setData({type:'Feature',geometry:{type:'LineString',coordinates:routeArr.slice(0,snapIdx+1).concat([displayPos])}});
+            if (routeArr && routeArr.length >= 2) {
+              // Ensure layers are visible
+              if (map.getLayer('route-line')) map.setLayoutProperty('route-line', 'visibility', 'visible');
+              if (map.getLayer('route-traveled')) map.setLayoutProperty('route-traveled', 'visibility', 'visible');
+
+              if (isNav) {
+                rSrc.setData({type:'Feature',geometry:{type:'LineString',coordinates:[displayPos].concat(routeArr.slice(snapIdx+1))}});
+                tSrc.setData({type:'Feature',geometry:{type:'LineString',coordinates:routeArr.slice(0,snapIdx+1).concat([displayPos])}});
+              } else {
+                rSrc.setData({type:'Feature',geometry:{type:'LineString',coordinates:routeArr}});
+                tSrc.setData({type:'Feature',geometry:{type:'LineString',coordinates:[]}});
+              }
             } else {
-              rSrc.setData({type:'Feature',geometry:{type:'LineString',coordinates:routeArr}});
-              tSrc.setData({type:'Feature',geometry:{type:'LineString',coordinates:[]}});
+              // Hide layers to clear the line safely
+              if (map.getLayer('route-line')) map.setLayoutProperty('route-line', 'visibility', 'none');
+              if (map.getLayer('route-traveled')) map.setLayoutProperty('route-traveled', 'visibility', 'none');
             }
           }
 

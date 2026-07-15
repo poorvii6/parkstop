@@ -1014,6 +1014,7 @@ export default function FinderDashboard() {
           }, { duration: 1200 });
         }
         await fetchNearbySpots(parseFloat(lat), parseFloat(lon), 1000);
+        setIsSearching(false);
       } else {
         throw new Error("No results");
       }
