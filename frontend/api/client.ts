@@ -12,8 +12,8 @@ const getAPIUrlSync = () => {
   if (cachedApiUrl) return cachedApiUrl;
 
   let apiUrl = process.env.EXPO_PUBLIC_API_URL || Platform.select({
-    android: Device.isDevice ? 'https://parkstop-production.up.railway.app/api/v1' : 'http://10.0.2.2:3000/api/v1',
-    ios: 'http://localhost:3000/api/v1',
+    android: 'https://parkstop-production.up.railway.app/api/v1',
+    ios: 'https://parkstop-production.up.railway.app/api/v1',
     default: 'https://parkstop-production.up.railway.app/api/v1',
   })!;
 
