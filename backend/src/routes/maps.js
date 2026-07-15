@@ -35,12 +35,24 @@ router.get('/search', async (req, res) => {
                 const response = await fetch(url, {
                     headers: { 'X-Request-Id': `req-${Date.now()}` }
                 });
-                if (response.ok) {
-                    const olaData = await response.json();
-                    const predictions = olaData.predictions || [];
-                    
-                    // Map Ola Maps autocomplete results to Nominatim format expected by the frontend
-                    const mappedData = predictions.map(item => {
+                
+                if (!response.ok) {
+                    const errText = await response.text();
+                    if (response.status === 429) {
+                        console.warn(`[OLA MAPS RATE LIMIT] Autocomplete rate limited (429). Falling back to Nominatim. Details: ${errText}`);
+                    } else if (response.status === 500) {
+                        console.error(`[OLA MAPS SERVER ERROR] Autocomplete server error (500). Verify API key, subscription status, and project linkage on Krutrim Cloud. Falling back to Nominatim. Details: ${errText}`);
+                    } else {
+                        console.error(`[OLA MAPS API ERROR] Autocomplete status ${response.status}. Details: ${errText}`);
+                    }
+                    throw new Error(`Ola Maps Autocomplete error: ${response.status}`);
+                }
+
+                const olaData = await response.json();
+                const predictions = olaData.predictions || [];
+                
+                // Map Ola Maps autocomplete results to Nominatim format expected by the frontend
+                const mappedData = predictions.map(item => {
                         const latVal = item.geometry?.location?.lat;
                         const lngVal = item.geometry?.location?.lng;
                         
@@ -77,7 +89,6 @@ router.get('/search', async (req, res) => {
                     }
 
                     return res.json({ success: true, data: mappedData.slice(0, 10) });
-                }
             } catch (olaError) {
                 console.error('[API ERROR] Ola Maps search failed, falling back to Nominatim:', olaError.message);
             }
@@ -184,28 +195,71 @@ function decodePolyline(str, precision = 5) {
     return coordinates;
 }
 
+// Helper to parse "lng,lat" string into { lat, lng }
+function parseCoords(coordStr) {
+    if (!coordStr) return null;
+    const parts = coordStr.split(',');
+    if (parts.length !== 2) return null;
+    const lng = parseFloat(parts[0]);
+    const lat = parseFloat(parts[1]);
+    if (isNaN(lng) || isNaN(lat)) return null;
+    return { lat, lng };
+}
+
+// Helper to parse pipe-separated waypoints "lng1,lat1|lng2,lat2" into array of { lat, lng }
+function parseWaypoints(waypointsStr) {
+    if (!waypointsStr) return null;
+    const pts = waypointsStr.split('|');
+    const result = [];
+    for (const pt of pts) {
+        const coords = parseCoords(pt);
+        if (coords) {
+            result.push(coords);
+        }
+    }
+    return result;
+}
+
 // Step 6 & 10: Routing (OSRM Proxy / Ola Maps Adapter)
 router.get('/route', async (req, res) => {
     try {
-        const { start, end } = req.query; // Format: "lng,lat"
+        const { start, end, waypoints, overview, alternatives } = req.query; // Format for start/end: "lng,lat"
         if (!start || !end) return res.status(400).json({ success: false, message: 'Start and end required' });
+
+        const startCoords = parseCoords(start);
+        const endCoords = parseCoords(end);
+        if (!startCoords || !endCoords) {
+            return res.status(400).json({ success: false, message: 'Invalid start or end coordinates format. Expected "lng,lat"' });
+        }
 
         const apiKey = process.env.OLA_MAPS_API_KEY;
 
+        // Tune route detail (overview) and alternatives
+        const overviewVal = ['full', 'simplified', 'false'].includes(overview) ? overview : 'full';
+        const alternativesVal = alternatives === 'true';
+
         if (!apiKey) {
             // Fallback to OSRM if OLA_MAPS_API_KEY is not set
-            const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${start};${end}?overview=full&geometries=geojson&steps=true`);
+            const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${start};${end}?overview=${overviewVal}&alternatives=${alternativesVal}&geometries=geojson&steps=true`);
             const data = await response.json();
             return res.json({ success: true, data });
         }
 
         // Convert start and end from "lng,lat" to "lat,lng" for Ola Maps
-        const [startLng, startLat] = start.split(',');
-        const [endLng, endLat] = end.split(',');
-        const origin = `${startLat.trim()},${startLng.trim()}`;
-        const destination = `${endLat.trim()},${endLng.trim()}`;
+        const origin = `${startCoords.lat},${startCoords.lng}`;
+        const destination = `${endCoords.lat},${endCoords.lng}`;
 
-        const url = `https://api.olamaps.io/routing/v1/directions?origin=${origin}&destination=${destination}&api_key=${apiKey}`;
+        // Format waypoints for Ola Maps: pipe-separated "lat,lng"
+        let waypointsQuery = '';
+        if (waypoints) {
+            const parsedWpts = parseWaypoints(waypoints);
+            if (parsedWpts && parsedWpts.length > 0) {
+                const wptsFormatted = parsedWpts.map(w => `${w.lat},${w.lng}`).join('|');
+                waypointsQuery = `&waypoints=${encodeURIComponent(wptsFormatted)}`;
+            }
+        }
+
+        const url = `https://api.olamaps.io/routing/v1/directions?origin=${origin}&destination=${destination}&overview=${overviewVal}&alternatives=${alternativesVal}&api_key=${apiKey}${waypointsQuery}`;
         const response = await fetch(url, {
             method: 'POST',
             headers: {
@@ -215,92 +269,111 @@ router.get('/route', async (req, res) => {
 
         if (!response.ok) {
             const errText = await response.text();
+            if (response.status === 429) {
+                console.warn(`[OLA MAPS RATE LIMIT] Directions rate limited (429). Falling back to OSRM. Details: ${errText}`);
+            } else if (response.status === 500) {
+                console.error(`[OLA MAPS SERVER ERROR] Directions server error (500). Verify API key, subscription status, and project linkage on Krutrim Cloud. Falling back to OSRM. Details: ${errText}`);
+            } else {
+                console.error(`[OLA MAPS API ERROR] Directions status ${response.status}. Details: ${errText}`);
+            }
             throw new Error(`Ola Maps API error: ${response.status} - ${errText}`);
         }
 
         const olaData = await response.json();
         
         if (!olaData.routes || olaData.routes.length === 0) {
-            return res.status(404).json({ success: false, message: 'No routes found from Ola Maps' });
+            throw new Error('No routes found from Ola Maps');
         }
 
-        const route = olaData.routes[0];
-        const leg = route.legs?.[0] || {};
-        
-        // Decode encoded polyline to GeoJSON format
-        const points = route.overview_polyline?.points || '';
-        const coordinates = points ? decodePolyline(points) : [];
+        // Map all routes to OSRM-compatible format
+        const osrmRoutes = olaData.routes.map(route => {
+            const leg = route.legs?.[0] || {};
+            const points = typeof route.overview_polyline === 'string' 
+                ? route.overview_polyline 
+                : (route.overview_polyline?.points || '');
+            const coordinates = points ? decodePolyline(points) : [];
 
-        // Map Ola steps to OSRM-compatible steps
-        const steps = (leg.steps || []).map(s => {
-            const instr = s.instruction || '';
-            const lowerInstr = instr.toLowerCase();
-            
-            let type = 'continue';
-            let modifier = 'straight';
-            
-            if (lowerInstr.includes('turn') || lowerInstr.includes('take')) {
-                type = 'turn';
-                if (lowerInstr.includes('left')) modifier = 'left';
-                else if (lowerInstr.includes('right')) modifier = 'right';
-            } else if (lowerInstr.includes('merge')) {
-                type = 'merge';
-            } else if (lowerInstr.includes('roundabout') || lowerInstr.includes('circle')) {
-                type = 'roundabout';
-            }
-            
-            if (lowerInstr.includes('sharp left')) modifier = 'sharp left';
-            else if (lowerInstr.includes('sharp right')) modifier = 'sharp right';
-            else if (lowerInstr.includes('slight left')) modifier = 'slight left';
-            else if (lowerInstr.includes('slight right')) modifier = 'slight right';
-            else if (lowerInstr.includes('u-turn') || lowerInstr.includes('uturn')) modifier = 'uturn';
+            // Map Ola steps to OSRM-compatible steps
+            const steps = (leg.steps || []).map(s => {
+                const instr = s.instructions || s.instruction || '';
+                const lowerInstr = instr.toLowerCase();
+                const lowerManeuver = (s.maneuver || '').toLowerCase();
+                
+                let type = 'continue';
+                let modifier = 'straight';
+                
+                if (lowerManeuver.includes('left') || lowerInstr.includes('left')) {
+                    type = 'turn';
+                    modifier = 'left';
+                } else if (lowerManeuver.includes('right') || lowerInstr.includes('right')) {
+                    type = 'turn';
+                    modifier = 'right';
+                } else if (lowerManeuver.includes('u-turn') || lowerManeuver.includes('uturn') || lowerInstr.includes('u-turn')) {
+                    type = 'turn';
+                    modifier = 'uturn';
+                } else if (lowerManeuver.includes('arrive') || lowerInstr.includes('arrive')) {
+                    type = 'arrive';
+                } else if (lowerManeuver.includes('roundabout') || lowerInstr.includes('roundabout')) {
+                    type = 'roundabout';
+                }
+                
+                if (lowerManeuver.includes('sharp-left') || lowerManeuver.includes('sharp_left') || lowerInstr.includes('sharp left')) modifier = 'sharp left';
+                else if (lowerManeuver.includes('sharp-right') || lowerManeuver.includes('sharp_right') || lowerInstr.includes('sharp right')) modifier = 'sharp right';
+                else if (lowerManeuver.includes('slight-left') || lowerManeuver.includes('slight_left') || lowerInstr.includes('slight left')) modifier = 'slight left';
+                else if (lowerManeuver.includes('slight-right') || lowerManeuver.includes('slight_right') || lowerInstr.includes('slight right')) modifier = 'slight right';
+
+                return {
+                    maneuver: {
+                        location: s.start_location ? [s.start_location.lng, s.start_location.lat] : [0, 0],
+                        type,
+                        modifier
+                    },
+                    name: instr
+                };
+            });
+
+            const durationVal = typeof leg.duration === 'number' ? leg.duration : (leg.duration?.value || 0);
+            const distanceVal = typeof leg.distance === 'number' ? leg.distance : (leg.distance?.value || 0);
 
             return {
-                maneuver: {
-                    location: s.start_location ? [s.start_location.lng, s.start_location.lat] : [0, 0],
-                    type,
-                    modifier
+                geometry: {
+                    coordinates: coordinates,
+                    type: 'LineString'
                 },
-                name: instr
+                legs: [
+                    {
+                        steps: steps,
+                        summary: route.summary || '',
+                        weight: durationVal,
+                        duration: durationVal,
+                        distance: distanceVal
+                    }
+                ],
+                weight_name: 'routability',
+                weight: durationVal,
+                duration: durationVal,
+                distance: distanceVal
             };
         });
+
+        const primaryLeg = olaData.routes[0].legs?.[0] || {};
 
         // Construct standard OSRM response structure for the frontend
         const osrmCompatibleData = {
             code: 'Ok',
-            routes: [
-                {
-                    geometry: {
-                        coordinates: coordinates,
-                        type: 'LineString'
-                    },
-                    legs: [
-                        {
-                            steps: steps,
-                            summary: route.summary || '',
-                            weight: leg.duration?.value || 0,
-                            duration: leg.duration?.value || 0,
-                            distance: leg.distance?.value || 0
-                        }
-                    ],
-                    weight_name: 'routability',
-                    weight: leg.duration?.value || 0,
-                    duration: leg.duration?.value || 0,
-                    distance: leg.distance?.value || 0
-                }
-            ],
+            routes: osrmRoutes,
             waypoints: [
                 {
                     hint: '',
                     distance: 0,
-                    name: leg.start_address || '',
-                    location: [parseFloat(startLng), parseFloat(startLat)]
+                    name: primaryLeg.start_address || '',
+                    location: [startCoords.lng, startCoords.lat]
                 },
                 {
                     hint: '',
                     distance: 0,
-                    name: leg.end_address || '',
-                    location: [parseFloat(endLng), parseFloat(endLat)]
+                    name: primaryLeg.end_address || '',
+                    location: [endCoords.lng, endCoords.lat]
                 }
             ]
         };
@@ -311,13 +384,26 @@ router.get('/route', async (req, res) => {
         console.error('[API ERROR] Ola Maps Directions failed, falling back to OSRM:', error.message);
         // Fallback to OSRM if Ola Maps fails during runtime
         try {
-            const { start, end } = req.query;
-            const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${start};${end}?overview=full&geometries=geojson&steps=true`);
+            const { start, end, overview, alternatives } = req.query;
+            const overviewVal = ['full', 'simplified', 'false'].includes(overview) ? overview : 'full';
+            const alternativesVal = alternatives === 'true';
+
+            const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${start};${end}?overview=${overviewVal}&alternatives=${alternativesVal}&geometries=geojson&steps=true`);
             const data = await response.json();
             res.json({ success: true, data });
         } catch (fallbackError) {
             res.status(500).json({ success: false, message: error.message });
         }
+    }
+});
+
+// Get Ola Maps configuration for the frontend
+router.get('/config', (req, res) => {
+    try {
+        const apiKey = process.env.OLA_MAPS_API_KEY || '';
+        res.json({ success: true, apiKey });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
     }
 });
 

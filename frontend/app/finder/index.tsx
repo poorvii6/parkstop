@@ -405,11 +405,13 @@ export default function FinderDashboard() {
 
   useEffect(() => {
     let locationSub: Location.LocationSubscription | null = null;
+    let simInterval: any = null;
 
-    if (step === 'en_route' && selectedSpotId) {
-      const spot = spots.find(s => s.id === selectedSpotId);
-      if (!spot) return;
+    const destination = selectedSpotId
+      ? spots.find(s => s.id === selectedSpotId)
+      : searchedPlace;
 
+    if (step === 'en_route' && destination) {
       if (userLocation) {
         setSimulatedLocation(userLocation);
       }
@@ -447,7 +449,7 @@ export default function FinderDashboard() {
             });
 
             // Distance to destination via road factor (~1.3x straight-line in cities)
-            const straightKm = getDistanceKm(coords.lat, coords.lng, spot.lat, spot.lng);
+            const straightKm = getDistanceKm(coords.lat, coords.lng, destination.lat, destination.lng);
             const roadKm = straightKm * 1.3;
             const avgSpeedKmh = speedKmh > 8 ? speedKmh : 25; // Assume 25 km/h in city
             const etaMins = Math.max(1, Math.ceil((roadKm / avgSpeedKmh) * 60));
@@ -523,11 +525,115 @@ export default function FinderDashboard() {
         }
       };
 
-      startRealTracking();
+      const routeStart = routeCoords[0];
+      const isFar = userLocation && routeStart
+        ? getDistanceKm(userLocation.lat, userLocation.lng, routeStart.latitude, routeStart.longitude) > 2.0
+        : true;
+
+      if (isFar && routeCoords.length > 0) {
+        console.log("[NAV] User is far from route. Starting route simulation...");
+        let index = 0;
+        setSimulatedLocation({ lat: routeCoords[0].latitude, lng: routeCoords[0].longitude });
+
+        simInterval = setInterval(() => {
+          if (index < routeCoords.length - 1) {
+            index++;
+            const current = routeCoords[index];
+            const prev = routeCoords[index - 1];
+
+            const coords = { lat: current.latitude, lng: current.longitude };
+            setSimulatedLocation(coords);
+
+            // Calculate bearing/heading
+            let headingVal = 0;
+            if (prev) {
+              const dy = current.latitude - prev.latitude;
+              const dx = Math.cos(prev.latitude * Math.PI / 180) * (current.longitude - prev.longitude);
+              headingVal = (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
+            }
+
+            setNavigationData({
+              speed: 12, // Simulate ~43 km/h
+              heading: headingVal
+            });
+
+            // Distance to destination
+            const straightKm = getDistanceKm(coords.lat, coords.lng, destination.lat, destination.lng);
+            const roadKm = straightKm * 1.3;
+            const etaMins = Math.max(1, Math.ceil((roadKm / 43) * 60));
+
+            setDistanceInfo({
+              miles: roadKm.toFixed(1),
+              mins: etaMins.toString()
+            });
+
+            // Update instructions
+            const stepsArr = [...routeStepsRef.current];
+            if (stepsArr.length > 0) {
+              const activeStep = stepsArr[0];
+              const maneuverLoc = activeStep?.maneuver?.location;
+
+              let distToManeuver = Infinity;
+              if (maneuverLoc) {
+                distToManeuver = getDistanceKm(coords.lat, coords.lng, maneuverLoc[1], maneuverLoc[0]) * 1000;
+              }
+
+              if (distToManeuver < 30 && stepsArr.length > 1) {
+                stepsArr.shift();
+                routeStepsRef.current = stepsArr;
+              }
+
+              if (activeStep?.maneuver) {
+                const type = activeStep.maneuver.type;
+                const modifier = activeStep.maneuver.modifier || '';
+                const name = activeStep.name || '';
+                let action = 'Continue straight';
+                let icon = '⬆️';
+
+                if (type === 'turn' || type === 'end of road' || type === 'fork') {
+                  if (modifier.includes('sharp right')) { action = 'Sharp right'; icon = '↪️'; }
+                  else if (modifier.includes('slight right')) { action = 'Slight right'; icon = '↗️'; }
+                  else if (modifier.includes('right')) { action = 'Turn right'; icon = '➡️'; }
+                  else if (modifier.includes('sharp left')) { action = 'Sharp left'; icon = '↩️'; }
+                  else if (modifier.includes('slight left')) { action = 'Slight left'; icon = '↖️'; }
+                  else if (modifier.includes('left')) { action = 'Turn left'; icon = '⬅️'; }
+                  else if (modifier.includes('uturn')) { action = 'U-turn'; icon = '↩️'; }
+                } else if (type === 'roundabout' || type === 'rotary') {
+                  action = 'Enter roundabout'; icon = '🔄';
+                } else if (type === 'merge') {
+                  action = 'Merge'; icon = '↗️';
+                } else if (type === 'arrive') {
+                  action = 'You have arrived'; icon = '📍';
+                }
+
+                const distText = distToManeuver < 1000
+                  ? `In ${Math.round(distToManeuver)} m`
+                  : `In ${(distToManeuver / 1000).toFixed(1)} km`;
+                const streetText = name ? `${distText} • ${name}` : distText;
+
+                setCurrentInstruction({ turn: action, street: streetText, icon });
+              }
+            }
+          } else {
+            // Arrived
+            setArrivalDetected(true);
+            setIsFollowing(false);
+            if (simInterval) {
+              clearInterval(simInterval);
+              simInterval = null;
+            }
+          }
+        }, 1000);
+      } else {
+        startRealTracking();
+      }
 
       return () => {
         if (locationSub) {
           try { locationSub.remove(); } catch (e) {}
+        }
+        if (simInterval) {
+          clearInterval(simInterval);
         }
       };
     } else {
@@ -535,14 +641,57 @@ export default function FinderDashboard() {
       setSimulatedLocation(null);
       setDistanceInfo({ miles: '0', mins: '0' });
     }
-  }, [step, selectedSpotId]);
+  }, [step, selectedSpotId, searchedPlace]);
 
-  // Navigation Simulation disabled in favor of real-time GPS tracking
-  useEffect(() => {
-    if (['en_route', 'navigating', 'arriving'].includes(step) && routeCoords.length > 0) {
-      console.log("[NAV] Navigation mode active. Waiting for GPS signal...");
+  const handleOffRouteReroute = async (lat: number, lng: number) => {
+    const destination = selectedSpotId
+      ? spots.find(s => s.id === selectedSpotId)
+      : searchedPlace;
+    if (!destination) return;
+
+    console.log(`[REROUTE] User went off-route. Recalculating route from ${lat},${lng} to destination...`);
+    try {
+      const res = await apiClient.get(`/maps/route?start=${lng},${lat}&end=${destination.lng},${destination.lat}`);
+      if (res.data.success) {
+        const route = res.data.data.routes[0];
+        console.log(`[REROUTE] New route found! ${route.geometry.coordinates.length} points.`);
+        setRouteCoords(route.geometry.coordinates.map((p: any) => ({ latitude: p[1], longitude: p[0] })));
+        setDistanceInfo({ miles: (route.distance / 1609.34).toFixed(1), mins: Math.ceil(route.duration / 60).toString() });
+        if (route.legs?.[0]?.steps) {
+          routeStepsRef.current = route.legs[0].steps;
+          const firstStep = route.legs[0].steps[0];
+          if (firstStep?.maneuver) {
+            const type = firstStep.maneuver.type;
+            const modifier = firstStep.maneuver.modifier || '';
+            const name = firstStep.name || '';
+            let action = 'Continue straight';
+            let icon = '⬆️';
+            if (type === 'turn' || type === 'end of road' || type === 'fork') {
+              if (modifier.includes('sharp right')) { action = 'Sharp right'; icon = '↪️'; }
+              else if (modifier.includes('slight right')) { action = 'Slight right'; icon = '↗️'; }
+              else if (modifier.includes('right')) { action = 'Turn right'; icon = '➡️'; }
+              else if (modifier.includes('sharp left')) { action = 'Sharp left'; icon = '↩️'; }
+              else if (modifier.includes('slight left')) { action = 'Slight left'; icon = '↖️'; }
+              else if (modifier.includes('left')) { action = 'Turn left'; icon = '⬅️'; }
+              else if (modifier.includes('uturn')) { action = 'U-turn'; icon = '↩️'; }
+            } else if (type === 'roundabout' || type === 'rotary') {
+              action = 'Enter roundabout'; icon = '🔄';
+            } else if (type === 'merge') {
+              action = 'Merge'; icon = '↗️';
+            } else if (type === 'arrive') {
+              action = 'You have arrived'; icon = '📍';
+            } else if (type === 'depart') {
+              action = 'Head out'; icon = '⬆️';
+            }
+            setCurrentInstruction({ turn: action, street: name, icon });
+          }
+        }
+      }
+    } catch (e) {
+      console.log("[REROUTE] Rerouting failed", e);
     }
-  }, [step, routeCoords]);
+  };
+
   useEffect(() => {
     const now = Date.now();
     const destination = selectedSpotId
@@ -565,7 +714,35 @@ export default function FinderDashboard() {
             console.log(`[API] Route found! ${route.geometry.coordinates.length} points.`);
             setRouteCoords(route.geometry.coordinates.map((p: any) => ({ latitude: p[1], longitude: p[0] })));
             setDistanceInfo({ miles: (route.distance / 1609.34).toFixed(1), mins: Math.ceil(route.duration / 60).toString() });
-            if (route.legs?.[0]?.steps) routeStepsRef.current = route.legs[0].steps;
+            if (route.legs?.[0]?.steps) {
+              routeStepsRef.current = route.legs[0].steps;
+              const firstStep = route.legs[0].steps[0];
+              if (firstStep?.maneuver) {
+                const type = firstStep.maneuver.type;
+                const modifier = firstStep.maneuver.modifier || '';
+                const name = firstStep.name || '';
+                let action = 'Continue straight';
+                let icon = '⬆️';
+                if (type === 'turn' || type === 'end of road' || type === 'fork') {
+                  if (modifier.includes('sharp right')) { action = 'Sharp right'; icon = '↪️'; }
+                  else if (modifier.includes('slight right')) { action = 'Slight right'; icon = '↗️'; }
+                  else if (modifier.includes('right')) { action = 'Turn right'; icon = '➡️'; }
+                  else if (modifier.includes('sharp left')) { action = 'Sharp left'; icon = '↩️'; }
+                  else if (modifier.includes('slight left')) { action = 'Slight left'; icon = '↖️'; }
+                  else if (modifier.includes('left')) { action = 'Turn left'; icon = '⬅️'; }
+                  else if (modifier.includes('uturn')) { action = 'U-turn'; icon = '↩️'; }
+                } else if (type === 'roundabout' || type === 'rotary') {
+                  action = 'Enter roundabout'; icon = '🔄';
+                } else if (type === 'merge') {
+                  action = 'Merge'; icon = '↗️';
+                } else if (type === 'arrive') {
+                  action = 'You have arrived'; icon = '📍';
+                } else if (type === 'depart') {
+                  action = 'Head out'; icon = '⬆️';
+                }
+                setCurrentInstruction({ turn: action, street: name, icon });
+              }
+            }
           }
         } catch (e) {
           console.log("Route fetch throttled/failed");
@@ -1238,7 +1415,7 @@ export default function FinderDashboard() {
   };
 
   const isBottomPanelFull = ['arriving', 'active_parking', 'payment', 'receipt'].includes(step);
-  const showRoute = ['navigating', 'en_route', 'booking_confirm', 'home'].includes(step);
+  const showRoute = ['navigating', 'en_route', 'arriving', 'booking_confirm', 'home'].includes(step);
 
   // Removed welcome auto-transition
 
@@ -1651,6 +1828,7 @@ export default function FinderDashboard() {
                 });
               }
             }}
+            onOffRoute={handleOffRouteReroute}
             hideControls={['spot_booking'].includes(step)}
           />
 

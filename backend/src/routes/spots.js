@@ -18,6 +18,20 @@ router.get(
 );
 
 /**
+ * TOGGLE ALL SPOTS STATUS (Spotter only)
+ */
+router.put(
+  '/toggle-all',
+  authenticate,
+  authorize('SPOTTER'),
+  [
+    body('online').isBoolean().withMessage('online must be a boolean'),
+    validate
+  ],
+  SpotController.toggleAllSpots
+);
+
+/**
  * CREATE PARKING SPOT (Spotter only)
  */
 router.post(

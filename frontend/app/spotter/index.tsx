@@ -240,13 +240,55 @@ export default function SpotterDashboard() {
             <Text style={SS.logoAccent}>P</Text>arkStop
           </Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-            <View style={SS.statusBox}>
-              <Text style={SS.statusLabel}>SPOT OWNER STATUS</Text>
-              <View style={SS.statusRow}>
-                <Text style={SS.statusText}>Active</Text>
-                <View style={SS.statusDot} />
+            <TouchableOpacity 
+              disabled={togglingStatus}
+              onPress={() => {
+                Alert.alert(
+                  dashboardData.global_online ? 'Go Offline?' : 'Go Online?',
+                  dashboardData.global_online 
+                    ? 'This will deactivate all your spots. Finders won\'t be able to book them.'
+                    : 'This will activate all your spots for bookings.',
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Yes', onPress: () => toggleGlobalStatus(!!dashboardData.global_online) }
+                  ]
+                );
+              }}
+              style={{
+                backgroundColor: 'rgba(255,255,255,0.03)',
+                borderWidth: 1,
+                borderColor: 'rgba(255,255,255,0.08)',
+                borderRadius: 16,
+                paddingHorizontal: 12,
+                paddingVertical: 8,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 8
+              }}
+            >
+              <View style={{ gap: 2 }}>
+                <Text style={{ color: SC.textMuted, fontSize: 8, fontWeight: '800', letterSpacing: 0.5 }}>STATUS</Text>
+                <Text style={{ color: '#FFF', fontSize: 12, fontWeight: '900' }}>
+                  {togglingStatus ? 'Updating...' : (dashboardData.global_online ? 'ONLINE' : 'OFFLINE')}
+                </Text>
               </View>
-            </View>
+              {togglingStatus ? (
+                <ActivityIndicator size="small" color={SC.accent} />
+              ) : (
+                <View 
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: 5,
+                    backgroundColor: dashboardData.global_online ? '#10b981' : '#f43f5e',
+                    shadowColor: dashboardData.global_online ? '#10b981' : '#f43f5e',
+                    shadowOpacity: 0.8,
+                    shadowRadius: 4,
+                    elevation: 4
+                  }}
+                />
+              )}
+            </TouchableOpacity>
             <TouchableOpacity onPress={() => router.push('/modal')} style={SS.profileBtn}>
               <Ionicons name="person" size={18} color={SC.info} />
             </TouchableOpacity>
@@ -325,21 +367,40 @@ export default function SpotterDashboard() {
           )}
         </View>
 
-        {/* TODAY'S SUMMARY */}
-        <View style={{ flexDirection: 'row', backgroundColor: SC.bgCard, borderRadius: RAD.lg, padding: 16, marginBottom: SP.xl, borderWidth: 1, borderColor: SC.border, justifyContent: 'space-around' }}>
-          <View style={{ alignItems: 'center' }}>
-            <Text style={{ color: SC.textMuted, fontSize: 12, fontWeight: '700', marginBottom: 4 }}>EARNINGS</Text>
-            <Text style={{ color: SC.accent, fontSize: 20, fontWeight: '900' }}>₹{dashboardData.earnings.toFixed(0)}</Text>
+        {/* STATS GRID */}
+        <View style={{ flexDirection: 'row', gap: 12, marginBottom: 12 }}>
+          {/* Earnings Card */}
+          <View style={{ flex: 1, backgroundColor: SC.bgCard, borderRadius: RAD.lg, padding: 16, borderWidth: 1, borderColor: SC.border, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10 }}>
+            <Ionicons name="cash-outline" size={20} color={SC.accent} style={{ marginBottom: 8 }} />
+            <Text style={{ color: SC.textMuted, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 }}>TOTAL EARNED</Text>
+            <Text style={{ color: '#FFF', fontSize: 20, fontWeight: '900', marginTop: 4 }}>₹{dashboardData.earnings.toFixed(0)}</Text>
+            <Text style={{ color: SC.textMuted, fontSize: 10, marginTop: 2 }}>All-time income</Text>
           </View>
-          <View style={{ width: 1, backgroundColor: SC.border }} />
-          <View style={{ alignItems: 'center' }}>
-            <Text style={{ color: SC.textMuted, fontSize: 12, fontWeight: '700', marginBottom: 4 }}>ACTIVE CARS</Text>
-            <Text style={{ color: SC.info, fontSize: 20, fontWeight: '900' }}>{activeBookings}</Text>
+
+          {/* Occupancy Card */}
+          <View style={{ flex: 1, backgroundColor: SC.bgCard, borderRadius: RAD.lg, padding: 16, borderWidth: 1, borderColor: SC.border, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10 }}>
+            <Ionicons name="pie-chart-outline" size={20} color={SC.info} style={{ marginBottom: 8 }} />
+            <Text style={{ color: SC.textMuted, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 }}>OCCUPANCY</Text>
+            <Text style={{ color: '#FFF', fontSize: 20, fontWeight: '900', marginTop: 4 }}>{dashboardData.occupancy_rate || 0}%</Text>
+            <Text style={{ color: SC.textMuted, fontSize: 10, marginTop: 2 }}>{occupiedSlots} of {totalSlots} active</Text>
           </View>
-          <View style={{ width: 1, backgroundColor: SC.border }} />
-          <View style={{ alignItems: 'center' }}>
-            <Text style={{ color: SC.textMuted, fontSize: 12, fontWeight: '700', marginBottom: 4 }}>OPEN SLOTS</Text>
-            <Text style={{ color: totalAvailable > 0 ? SC.success : SC.error, fontSize: 20, fontWeight: '900' }}>{totalAvailable}</Text>
+        </View>
+
+        <View style={{ flexDirection: 'row', gap: 12, marginBottom: SP.xl }}>
+          {/* Avg Duration Card */}
+          <View style={{ flex: 1, backgroundColor: SC.bgCard, borderRadius: RAD.lg, padding: 16, borderWidth: 1, borderColor: SC.border, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10 }}>
+            <Ionicons name="time-outline" size={20} color={SC.success} style={{ marginBottom: 8 }} />
+            <Text style={{ color: SC.textMuted, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 }}>AVG DURATION</Text>
+            <Text style={{ color: '#FFF', fontSize: 20, fontWeight: '900', marginTop: 4 }}>{(dashboardData.avg_duration || 0).toFixed(1)} hrs</Text>
+            <Text style={{ color: SC.textMuted, fontSize: 10, marginTop: 2 }}>Per booking avg</Text>
+          </View>
+
+          {/* Demand Surge Card */}
+          <View style={{ flex: 1, backgroundColor: SC.bgCard, borderRadius: RAD.lg, padding: 16, borderWidth: 1, borderColor: SC.border, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10 }}>
+            <Ionicons name="flash-outline" size={20} color={SC.warning} style={{ marginBottom: 8 }} />
+            <Text style={{ color: SC.textMuted, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 }}>SURGE FACTOR</Text>
+            <Text style={{ color: '#FFF', fontSize: 20, fontWeight: '900', marginTop: 4 }}>{dashboardData.surge_factor || 1.0}x</Text>
+            <Text style={{ color: SC.textMuted, fontSize: 10, marginTop: 2 }}>Demand pricing</Text>
           </View>
         </View>
 
@@ -376,7 +437,7 @@ export default function SpotterDashboard() {
                       {isArrival ? ' Arrived' : isDeparture ? ' Completed' : ' Reserved'}
                     </Text>
                     <Text style={{ color: SC.textMuted, ...TF.bodySm, marginTop: 2 }}>
-                      {traffic.parking_spots?.title || 'Spot'} · ₹{Number(traffic.total_price || 0).toFixed(0)}
+                      {traffic.parking_spots?.title || 'Spot'} · {traffic.slot_name || 'No slot'} · ₹{Number(traffic.total_price || 0).toFixed(0)}
                     </Text>
                   </View>
                   <View style={[s.statusChip, { backgroundColor: iconBg }]}>
@@ -418,7 +479,7 @@ export default function SpotterDashboard() {
             />
           </View>
           <Text style={{ color: SC.textMuted, ...TF.bodySm, marginTop: 6, marginLeft: 8 }}>
-            {occupiedSlots} of {totalSlots} slots occupied
+            {occupiedSlots} of {totalSlots} slots occupied ({totalAvailable} open slots)
           </Text>
         </View>
 
@@ -463,6 +524,46 @@ export default function SpotterDashboard() {
                 </View>
               </View>
             ))
+          )}
+        </View>
+
+        {/* PAYOUT HISTORY */}
+        <View style={{ marginBottom: SP.xxl }}>
+          <View style={SS.sectionHeader}>
+            <Text style={SS.sectionTitle}>Recent Payouts</Text>
+          </View>
+          {(!dashboardData.payout_history || dashboardData.payout_history.length === 0) ? (
+            <View style={[SS.card, { alignItems: 'center', paddingVertical: 24 }]}>
+              <Ionicons name="card-outline" size={32} color={SC.textMuted} />
+              <Text style={SS.emptyText}>No payout history</Text>
+            </View>
+          ) : (
+            dashboardData.payout_history.map((payout: any, i: number) => {
+              const isCompleted = payout.status === 'completed' || payout.status === 'success';
+              const isFailed = payout.status === 'failed' || payout.status === 'failed_needs_retry';
+              const badgeBg = isCompleted ? 'rgba(16,185,129,0.1)' : isFailed ? 'rgba(244,63,94,0.1)' : 'rgba(245,158,11,0.1)';
+              const badgeText = isCompleted ? '#10b981' : isFailed ? '#f43f5e' : '#f59e0b';
+
+              return (
+                <View key={i} style={[SS.card, { flexDirection: 'row', alignItems: 'center', marginBottom: 10, paddingVertical: 14 }]}>
+                  <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.03)', justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+                    <Ionicons name="receipt-outline" size={18} color={SC.textSecondary} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: '#FFF', fontWeight: '800', fontSize: 13 }}>UPI Transfer ({payout.mode || 'UPI'})</Text>
+                    <Text style={{ color: SC.textMuted, fontSize: 11, marginTop: 2 }}>
+                      {new Date(payout.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                    </Text>
+                  </View>
+                  <View style={{ alignItems: 'flex-end' }}>
+                    <Text style={{ color: '#FFF', fontWeight: '900', fontSize: 15, textAlign: 'right' }}>₹{Number(payout.amount).toFixed(2)}</Text>
+                    <View style={{ backgroundColor: badgeBg, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8, marginTop: 4 }}>
+                      <Text style={{ color: badgeText, fontSize: 9, fontWeight: '800' }}>{payout.status.toUpperCase()}</Text>
+                    </View>
+                  </View>
+                </View>
+              );
+            })
           )}
         </View>
       </ScrollView>

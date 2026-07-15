@@ -297,6 +297,41 @@ class SpotController {
       res.status(500).json({ success: false, message: 'Error fetching slot status' });
     }
   }
+
+  /**
+   * TOGGLE ALL SPOTS (SPOTTER ONLY)
+   */
+  static async toggleAllSpots(req, res) {
+    try {
+      if (!req.user.role || req.user.role.toLowerCase() !== 'spotter') {
+        return res.status(403).json({
+          success: false,
+          message: 'Only spotters can toggle spot status'
+        });
+      }
+
+      const { online } = req.body;
+      const is_active = !!online;
+
+      await require('../config/prisma').parking_spots.updateMany({
+        where: { spotter_id: req.user.id },
+        data: { is_active, updated_at: new Date() }
+      });
+
+      logger.info(`Spotter ${req.user.id} toggled all spots to ${is_active ? 'online' : 'offline'}`);
+
+      return res.json({
+        success: true,
+        message: `All spots toggled to ${is_active ? 'online' : 'offline'} successfully`
+      });
+    } catch (error) {
+      logger.error('Toggle all spots error:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Error toggling spots'
+      });
+    }
+  }
 }
 
 module.exports = SpotController;

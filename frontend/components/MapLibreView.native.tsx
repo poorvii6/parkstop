@@ -25,6 +25,7 @@ export interface MapProps {
   onMapInteraction?: () => void;
   onRecenter?: () => void;
   onMarkerPress?: (id: string) => void;
+  onOffRoute?: (lat: number, lng: number) => void;
   distanceInfo?: any;
   nextInstruction?: string;
   isMuted?: boolean;
@@ -47,6 +48,7 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
     onMapInteraction,
     onRecenter,
     onMarkerPress,
+    onOffRoute,
     hideControls = false,
     searchedPlace,
     onExit,
@@ -158,6 +160,14 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
       <div id="map"></div>
       <div id="eta-overlay"></div>
       <script>
+        window.onerror = function(message, source, lineno, colno, error) {
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            type: 'error',
+            message: message + ' (line ' + lineno + ':' + colno + ')'
+          }));
+          return true;
+        };
+
         let map = null;
         let mapLoaded = false;
         let lastData = null;
@@ -250,27 +260,25 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
             map.addSource('route-traveled', { type:'geojson', data:{type:'Feature',geometry:{type:'LineString',coordinates:[]}} });
             map.addLayer({ id:'route-traveled', type:'line', source:'route-traveled',
               layout:{'line-join':'round','line-cap':'round'},
-              paint:{'line-color':'#9aa0a6','line-width':6,'line-opacity':0.45}
+              paint:{'line-color':'#9aa0a6','line-width':8,'line-opacity':0.6}
             });
 
-            // Remaining route layers
+            // Remaining route (blue)
             map.addSource('route', { type:'geojson', data:{type:'Feature',geometry:{type:'LineString',coordinates:[]}} });
-            map.addLayer({ id:'route-shadow', type:'line', source:'route',
-              layout:{'line-join':'round','line-cap':'round'},
-              paint:{'line-color':'#1a73e8','line-width':14,'line-opacity':0.12,'line-blur':6}
-            });
-            map.addLayer({ id:'route-glow', type:'line', source:'route',
-              layout:{'line-join':'round','line-cap':'round'},
-              paint:{'line-color':'#4285F4','line-width':10,'line-opacity':0.28}
-            });
             map.addLayer({ id:'route-line', type:'line', source:'route',
               layout:{'line-join':'round','line-cap':'round'},
-              paint:{'line-color':'#4285F4','line-width':6,'line-opacity':1}
+              paint:{'line-color':'#1a73e8','line-width':8,'line-opacity':1}
             });
 
             // Bind Touch events
             map.on('touchstart', function(){ window.ReactNativeWebView.postMessage(JSON.stringify({type:'interaction'})); });
             map.on('click', function(e){ window.ReactNativeWebView.postMessage(JSON.stringify({type:'press',coords:[e.lngLat.lng,e.lngLat.lat]})); });
+            map.on('error', function(e){
+              window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'error',
+                message: e.error ? e.error.message : 'MapLibre GL error'
+              }));
+            });
 
             mapLoaded = true;
             if (lastData) {
@@ -304,6 +312,8 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
           const routeArr = data.routeCoords || [];
           const userPos = data.userLocation; // [lng, lat]
 
+          console.warn("[WEBVIEW DATA] isNav: " + isNav + ", routeCoords count: " + routeArr.length + ", userPos: " + JSON.stringify(userPos));
+
           // Snap to route during nav
           let displayPos = userPos;
           let snapIdx = 0;
@@ -311,6 +321,23 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
             const s = snapToRoute(userPos, routeArr);
             displayPos = s.point;
             snapIdx = s.index;
+
+            // Off-route check: calculate distance deviation in meters
+            const dx = (userPos[0] - displayPos[0]) * 111320 * Math.cos(displayPos[1] * Math.PI / 180);
+            const dy = (userPos[1] - displayPos[1]) * 110540;
+            const distMeters = Math.sqrt(dx * dx + dy * dy);
+
+            if (distMeters > 60) {
+              const now = Date.now();
+              if (!window.lastRerouteTime || now - window.lastRerouteTime > 10000) {
+                window.lastRerouteTime = now;
+                window.ReactNativeWebView.postMessage(JSON.stringify({
+                  type: 'off_route',
+                  lat: userPos[1],
+                  lng: userPos[0]
+                }));
+              }
+            }
           }
 
           // ── Toggle markers: show arrow during nav, dot otherwise ──
@@ -332,7 +359,8 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
           // ── ETA overlay ──
           if (isNav && data.distanceInfo) {
             etaEl.style.display = 'block';
-            etaEl.textContent = data.distanceInfo.km + ' km  ·  ' + data.distanceInfo.mins + ' min';
+            const dist = data.distanceInfo.miles || data.distanceInfo.km || '0';
+            etaEl.textContent = dist + ' km  ·  ' + data.distanceInfo.mins + ' min';
           } else {
             etaEl.style.display = 'none';
           }
@@ -349,7 +377,7 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
               duration: 700,
               easing: function(t){ return t*(2-t); }
             });
-          } else if (!isNav && routeArr.length >= 2 && data.searchedPlace) {
+          } else if (!isNav && routeArr.length >= 2 && (data.searchedPlace || data.destination)) {
             // Fit bounds to show the entire route from user location to searched place
             let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
             routeArr.forEach(function(p) {
@@ -500,6 +528,8 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
             if (data.type === 'press') onMapPress?.(data.coords);
             if (data.type === 'interaction') onMapInteraction?.();
             if (data.type === 'markerPress') onMarkerPress?.(data.id);
+            if (data.type === 'off_route') onOffRoute?.(data.lat, data.lng);
+            if (data.type === 'error') console.warn("[WEBVIEW MAP ERROR]", data.message);
           } catch (e) {}
         }}
       />
