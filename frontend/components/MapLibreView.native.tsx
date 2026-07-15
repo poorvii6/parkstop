@@ -227,8 +227,7 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
         destEl.innerHTML = '<svg width="40" height="56" viewBox="0 0 40 56" xmlns="http://www.w3.org/2000/svg">' +
                            '<defs><filter id="dshadow" x="-20%" y="-10%" width="140%" height="130%"><feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#000" flood-opacity="0.35"/></filter></defs>' +
                            '<path d="M20 0C8.95 0 0 8.95 0 20c0 14 20 36 20 36s20-22 20-36C40 8.95 31.05 0 20 0z" fill="#EA4335" filter="url(#dshadow)"/>' +
-                           '<circle cx="20" cy="19" r="12" fill="#fff"/>' +
-                           '<text x="20" y="24" text-anchor="middle" font-size="16" font-weight="900" fill="#EA4335" font-family="Arial, sans-serif">P</text>' +
+                           '<circle cx="20" cy="19" r="4" fill="#fff"/>' +
                            '</svg>';
 
         const etaEl = document.getElementById('eta-overlay');
