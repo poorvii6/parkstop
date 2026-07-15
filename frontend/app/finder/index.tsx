@@ -969,6 +969,7 @@ export default function FinderDashboard() {
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
     setIsSearching(true);
+    setIsFollowing(false);
     ignoreNextQueryChange.current = true;
     setSuggestions([]);
     Keyboard.dismiss();

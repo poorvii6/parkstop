@@ -392,6 +392,18 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
                 duration: 1000
               });
             }
+          } else if (!isNav && routeArr.length < 2 && (data.searchedPlace || data.destination)) {
+            // Center directly on searched place or destination (like Google Maps search)
+            const targetCenter = data.searchedPlace || data.destination;
+            if (targetCenter && targetCenter[0] !== 0 && targetCenter[1] !== 0) {
+              map.easeTo({
+                center: targetCenter,
+                zoom: 15,
+                pitch: 0,
+                bearing: 0,
+                duration: 1000
+              });
+            }
           }
 
           // ── Route lines ──
