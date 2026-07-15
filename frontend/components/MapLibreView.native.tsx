@@ -145,14 +145,18 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
         #eta-overlay {
           position: fixed; bottom: 120px; left: 50%;
           transform: translateX(-50%);
-          background: rgba(26,115,232,0.95);
-          color: #fff; padding: 10px 20px;
-          border-radius: 24px; font-weight: 900;
-          font-size: 16px; font-family: -apple-system, sans-serif;
-          box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+          background: #0f172a;
+          border: 1px solid rgba(255,255,255,0.08);
+          color: #fff; padding: 10px 24px;
+          border-radius: 20px; font-family: -apple-system, sans-serif;
+          box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5), 0 8px 10px -6px rgba(0,0,0,0.5);
           display: none; z-index: 999;
           white-space: nowrap;
-          backdrop-filter: blur(8px);
+          align-items: center;
+          justify-content: center;
+          text-align: center;
+          flex-direction: column;
+          gap: 2px;
         }
       </style>
     </head>
@@ -358,9 +362,32 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
 
           // ── ETA overlay ──
           if (isNav && data.distanceInfo) {
-            etaEl.style.display = 'block';
+            etaEl.style.display = 'flex';
+            const minsVal = parseInt(data.distanceInfo.mins) || 0;
             const dist = data.distanceInfo.miles || data.distanceInfo.km || '0';
-            etaEl.textContent = dist + ' km  ·  ' + data.distanceInfo.mins + ' min';
+            
+            // Format Duration: e.g. 1 hr 43 min
+            let durationText = '';
+            if (minsVal >= 60) {
+              const hrs = Math.floor(minsVal / 60);
+              const remainingMins = minsVal % 60;
+              durationText = hrs + ' hr' + (hrs > 1 ? 's' : '') + (remainingMins > 0 ? ' ' + remainingMins + ' min' : '');
+            } else {
+              durationText = minsVal + ' min';
+            }
+            
+            // Calculate Arrival Time
+            const arrivalDate = new Date(Date.now() + minsVal * 60000);
+            let hours = arrivalDate.getHours();
+            const minutes = arrivalDate.getMinutes();
+            const ampm = hours >= 12 ? 'PM' : 'AM';
+            hours = hours % 12;
+            hours = hours ? hours : 12;
+            const minutesStr = minutes < 10 ? '0' + minutes : minutes;
+            const arrivalTimeText = hours + ':' + minutesStr + ' ' + ampm;
+            
+            etaEl.innerHTML = '<div style="color:#10b981; font-weight:850; font-size:17px; letter-spacing:-0.3px;">' + durationText + '</div>' +
+                              '<div style="color:#94a3b8; font-size:12px; font-weight:700; margin-top:2px;">' + arrivalTimeText + '  •  ' + dist + ' km</div>';
           } else {
             etaEl.style.display = 'none';
           }
