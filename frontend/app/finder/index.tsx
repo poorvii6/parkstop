@@ -139,7 +139,6 @@ export default function FinderDashboard() {
   }]);
   const [chatInput, setChatInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
-  const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [navigationData, setNavigationData] = useState({ speed: 0, heading: 0 });
   const [suggestions, setSuggestions] = useState<any[]>([]);
@@ -550,11 +549,11 @@ export default function FinderDashboard() {
       ? spots.find(s => s.id === selectedSpotId)
       : searchedPlace;
 
-    const isActiveNav = ['en_route', 'navigating', 'arriving', 'booking_confirm'].includes(step);
+    const isActiveNav = ['en_route', 'navigating', 'arriving'].includes(step);
     const destId = destination ? String(('id' in destination ? (destination as any).id : '') || `${destination.lat},${destination.lng}`) : null;
     const isNewDest = destId !== lastRouteDest.current;
 
-    if (destination && userLocation && isActiveNav && (now - lastRouteFetch.current > 4000 || isNewDest)) {
+    if (destination && userLocation && (isActiveNav || isNewDest) && (now - lastRouteFetch.current > 4000 || isNewDest)) {
       lastRouteFetch.current = now;
       lastRouteDest.current = destId;
       (async () => {
@@ -572,11 +571,6 @@ export default function FinderDashboard() {
           console.log("Route fetch throttled/failed");
         }
       })();
-    } else if (!isActiveNav) {
-      if (routeCoords.length > 0) {
-        setRouteCoords([]);
-        setDistanceInfo({ miles: '0', mins: '0' });
-      }
     } else if (!destination) {
       setRouteCoords([]);
     }
@@ -1244,7 +1238,7 @@ export default function FinderDashboard() {
   };
 
   const isBottomPanelFull = ['arriving', 'active_parking', 'payment', 'receipt'].includes(step);
-  const showRoute = ['navigating', 'en_route', 'booking_confirm', 'arriving'].includes(step);
+  const showRoute = ['navigating', 'en_route', 'booking_confirm', 'home'].includes(step);
 
   // Removed welcome auto-transition
 
@@ -1430,8 +1424,6 @@ export default function FinderDashboard() {
                 value={searchQuery}
                 onChangeText={setSearchQuery}
                 onSubmitEditing={handleSearch}
-                onFocus={() => setIsSearchFocused(true)}
-                onBlur={() => setIsSearchFocused(false)}
                 returnKeyType="search"
               />
               {searchQuery.length > 0 && (
@@ -1469,7 +1461,7 @@ export default function FinderDashboard() {
             </View>
 
             {/* Search Suggestions */}
-            {isSearchFocused && suggestions.length > 0 && (
+            {suggestions.length > 0 && (
               <View style={{ backgroundColor: '#0f172a', borderRadius: 20, paddingVertical: 8, marginTop: 8, maxHeight: 300, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 20, elevation: 20 }}>
                 <ScrollView style={{ maxHeight: 280 }} keyboardShouldPersistTaps="handled">
                   {suggestions.map((item, idx) => (
@@ -1663,8 +1655,8 @@ export default function FinderDashboard() {
           />
 
           {/* Floating OTP Badge During Navigation/Parking */}
-          {['navigating', 'en_route'].includes(step) && bookingDetails?.otp && !isInPip && !arrivalDetected && (
-            <View style={{ position: 'absolute', top: 195, right: 16, backgroundColor: 'rgba(15,23,42,0.9)', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(99,102,241,0.3)', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 10, zIndex: 99 }}>
+          {['navigating', 'en_route', 'arriving', 'active_parking'].includes(step) && bookingDetails?.otp && !isInPip && (
+            <View style={{ position: 'absolute', top: 160, right: 16, backgroundColor: 'rgba(15,23,42,0.9)', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(99,102,241,0.3)', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 10, zIndex: 99 }}>
               <Text style={{ color: '#94a3b8', fontSize: 10, fontWeight: '800', marginBottom: 2 }}>CHECK-IN PIN</Text>
               <Text selectable={true} style={{ color: '#10b981', fontSize: 22, fontWeight: '900', letterSpacing: 4 }}>{bookingDetails.otp}</Text>
             </View>
@@ -1675,7 +1667,7 @@ export default function FinderDashboard() {
       {/* Google Maps Style Instruction Banner */}
 
       {/* FLOATING BACK/HOME BUTTON — rendered AFTER map so it sits on top of WebView */}
-      {['spot_booking', 'en_route', 'navigating', 'arriving', 'booking_confirm', 'active_parking'].includes(step) && (
+      {(['spot_booking', 'en_route', 'navigating', 'arriving', 'booking_confirm', 'active_parking'].includes(step) || (step === 'home' && searchedPlace !== null)) && (
         <TouchableOpacity
           style={{
             position: 'absolute',
@@ -1737,7 +1729,7 @@ export default function FinderDashboard() {
           <Ionicons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
       )}
-      {['navigating', 'en_route', 'arriving'].includes(step) && !isInPip && (
+      {['navigating', 'en_route', 'arriving'].includes(step) && !isInPip && !arrivalDetected && (
         <View style={{ position: 'absolute', top: 50, left: 16, right: 16, backgroundColor: 'rgba(26,115,232,0.97)', borderRadius: 24, padding: 18, flexDirection: 'row', alignItems: 'center', shadowColor: '#1a73e8', shadowOpacity: 0.5, shadowRadius: 20, zIndex: 1000 }}>
           <View style={{ width: 56, height: 56, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginRight: 14 }}>
             <Text style={{ fontSize: 32 }}>{currentInstruction.icon || '⬆️'}</Text>
@@ -2086,62 +2078,122 @@ export default function FinderDashboard() {
           {step === 'en_route' && !isInPip && (
             <>
 
-              {arrivalDetected && (
-                <View style={styles.enRouteOverlay} pointerEvents="box-none">
-                  <View style={styles.enRouteBanner}>
-                    <View style={{ flex: 1, alignItems: 'center' }}>
-                      <Text style={{ fontSize: 36, marginBottom: 4 }}>🎉</Text>
-                      <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', textAlign: 'center' }}>You have reached your destination!</Text>
-                      <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 13, marginTop: 6, textAlign: 'center' }}>Park in Slot {selectedSlot} and show your check-in PIN to the spot owner.</Text>
-                    </View>
-                    <TouchableOpacity style={[styles.continueBtn, { backgroundColor: '#10b981', marginTop: 12, paddingVertical: 14, paddingHorizontal: 28, borderRadius: 16 }]} onPress={() => setStep('arriving')}>
-                      <Text style={[styles.continueBtnText, { fontSize: 16 }]}>Check In</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              )}
-
               <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#0f172a', borderTopLeftRadius: 32, borderTopRightRadius: 32, paddingBottom: 40, paddingTop: 20, shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 30, elevation: 30, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' }}>
                 <View style={{ width: 48, height: 5, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 3, alignSelf: 'center', marginBottom: 20 }} />
                 
-                <View style={{ height: 4, backgroundColor: 'rgba(255,255,255,0.05)', marginHorizontal: 32, borderRadius: 2, marginBottom: 24, overflow: 'hidden' }}>
-                  <View style={{ height: '100%', backgroundColor: '#6366f1', width: '70%', borderRadius: 2 }} />
-                </View>
-
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-evenly', paddingHorizontal: 20 }}>
-                  <View style={{ alignItems: 'center' }}>
-                    <Text style={{ color: '#fff', fontSize: 28, fontWeight: '900' }}>{distanceInfo.miles}</Text>
-                    <Text style={{ color: '#64748b', fontSize: 12, fontWeight: '800', textTransform: 'uppercase', marginTop: 2 }}>km</Text>
-                  </View>
-                  <View style={{ width: 1, height: 40, backgroundColor: 'rgba(255,255,255,0.05)' }} />
-                  <View style={{ alignItems: 'center' }}>
-                    <Text style={{ color: '#10b981', fontSize: 28, fontWeight: '900' }}>{distanceInfo.mins}</Text>
-                    <Text style={{ color: '#64748b', fontSize: 12, fontWeight: '800', textTransform: 'uppercase', marginTop: 2 }}>min</Text>
-                  </View>
-                  <View style={{ width: 1, height: 40, backgroundColor: 'rgba(255,255,255,0.05)' }} />
-                  <TouchableOpacity 
-                    activeOpacity={0.8}
-                    style={{ backgroundColor: '#f43f5e', paddingHorizontal: 24, paddingVertical: 14, borderRadius: 16, shadowColor: '#f43f5e', shadowOpacity: 0.2, shadowRadius: 10 }} 
-                    onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                      Alert.alert('Exit Navigation', 'Are you sure you want to stop navigating?', [
-                        { text: 'Cancel', style: 'cancel' },
-                        {
-                          text: 'Yes, Exit', onPress: () => {
-                            setStep('home');
-                            setSelectedSpotId(null);
-                            setRouteCoords([]);
-                            setSimulatedLocation(null);
-                            setArrivalDetected(false);
-                            if (userLocation) fetchNearbySpots(userLocation.lat, userLocation.lng);
+                {arrivalDetected ? (
+                  <View style={{ paddingHorizontal: 24, alignItems: 'center' }}>
+                    <Text style={{ fontSize: 32, marginBottom: 8 }}>🎉</Text>
+                    <Text style={{ color: '#fff', fontSize: 20, fontWeight: '900', textAlign: 'center', marginBottom: 6 }}>You have reached your destination!</Text>
+                    <Text style={{ color: '#94a3b8', fontSize: 13, fontWeight: '500', textAlign: 'center', marginBottom: 20, lineHeight: 18 }}>
+                      Park in Slot <Text style={{ color: '#6366f1', fontWeight: '900' }}>{selectedSlot?.split('_').pop() || selectedSlot || 'A8'}</Text> and show your check-in PIN to the spot owner.
+                    </Text>
+                    <View style={{ flexDirection: 'row', gap: 12, width: '100%' }}>
+                      <TouchableOpacity 
+                        activeOpacity={0.8}
+                        style={{ 
+                          flex: 1,
+                          backgroundColor: '#10b981', 
+                          paddingVertical: 16, 
+                          borderRadius: 18, 
+                          alignItems: 'center',
+                          shadowColor: '#10b981',
+                          shadowOpacity: 0.3,
+                          shadowRadius: 10,
+                          elevation: 5
+                        }} 
+                        onPress={() => {
+                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                          setStep('arriving');
+                        }}
+                      >
+                        <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Check In</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity 
+                        activeOpacity={0.8}
+                        style={{ 
+                          backgroundColor: 'rgba(255,255,255,0.05)', 
+                          paddingHorizontal: 20,
+                          borderRadius: 18, 
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          borderWidth: 1,
+                          borderColor: 'rgba(255,255,255,0.08)'
+                        }} 
+                        onPress={() => {
+                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                          setStep('home');
+                          setSelectedSpotId(null);
+                          setRouteCoords([]);
+                          setSimulatedLocation(null);
+                          setArrivalDetected(false);
+                          setCurrentInstruction({ turn: '', street: '', icon: '' });
+                          if (userLocation) {
+                            fetchNearbySpots(userLocation.lat, userLocation.lng);
+                            if (mapRef.current) {
+                              mapRef.current.animateCamera({
+                                center: { latitude: userLocation.lat, longitude: userLocation.lng },
+                                zoom: 15
+                              }, { duration: 1000 });
+                            }
                           }
-                        }
-                      ]);
-                    }}
-                  >
-                    <Text style={{ color: '#fff', fontWeight: '900', fontSize: 16 }}>Exit</Text>
-                  </TouchableOpacity>
-                </View>
+                        }}
+                      >
+                        <Ionicons name="close" size={24} color="#fff" />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ) : (
+                  <>
+                    <View style={{ height: 4, backgroundColor: 'rgba(255,255,255,0.05)', marginHorizontal: 32, borderRadius: 2, marginBottom: 24, overflow: 'hidden' }}>
+                      <View style={{ height: '100%', backgroundColor: '#6366f1', width: '70%', borderRadius: 2 }} />
+                    </View>
+
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-evenly', paddingHorizontal: 20 }}>
+                      <View style={{ alignItems: 'center' }}>
+                        <Text style={{ color: '#fff', fontSize: 28, fontWeight: '900' }}>{distanceInfo.miles}</Text>
+                        <Text style={{ color: '#64748b', fontSize: 12, fontWeight: '800', textTransform: 'uppercase', marginTop: 2 }}>km</Text>
+                      </View>
+                      <View style={{ width: 1, height: 40, backgroundColor: 'rgba(255,255,255,0.05)' }} />
+                      <View style={{ alignItems: 'center' }}>
+                        <Text style={{ color: '#10b981', fontSize: 28, fontWeight: '900' }}>{distanceInfo.mins}</Text>
+                        <Text style={{ color: '#64748b', fontSize: 12, fontWeight: '800', textTransform: 'uppercase', marginTop: 2 }}>min</Text>
+                      </View>
+                      <View style={{ width: 1, height: 40, backgroundColor: 'rgba(255,255,255,0.05)' }} />
+                      <TouchableOpacity 
+                        activeOpacity={0.8}
+                        style={{ backgroundColor: '#f43f5e', paddingHorizontal: 24, paddingVertical: 14, borderRadius: 16, shadowColor: '#f43f5e', shadowOpacity: 0.2, shadowRadius: 10 }} 
+                        onPress={() => {
+                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                          Alert.alert('Exit Navigation', 'Are you sure you want to stop navigating?', [
+                            { text: 'Cancel', style: 'cancel' },
+                            {
+                              text: 'Yes, Exit', onPress: () => {
+                                setStep('home');
+                                setSelectedSpotId(null);
+                                setRouteCoords([]);
+                                setSimulatedLocation(null);
+                                setArrivalDetected(false);
+                                setCurrentInstruction({ turn: '', street: '', icon: '' });
+                                if (userLocation) {
+                                  fetchNearbySpots(userLocation.lat, userLocation.lng);
+                                  if (mapRef.current) {
+                                    mapRef.current.animateCamera({
+                                      center: { latitude: userLocation.lat, longitude: userLocation.lng },
+                                      zoom: 15
+                                    }, { duration: 1000 });
+                                  }
+                                }
+                              }
+                            }
+                          ]);
+                        }}
+                      >
+                        <Ionicons name="close" size={24} color="#fff" />
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                )}
               </View>
 
 
