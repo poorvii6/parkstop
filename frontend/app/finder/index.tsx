@@ -139,6 +139,7 @@ export default function FinderDashboard() {
   }]);
   const [chatInput, setChatInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [navigationData, setNavigationData] = useState({ speed: 0, heading: 0 });
   const [suggestions, setSuggestions] = useState<any[]>([]);
@@ -2338,7 +2339,7 @@ export default function FinderDashboard() {
                                 finalAmount: res.data.data.total_price,
                                 ...res.data.data
                               } : prev);
-                              navigateToStep('payment');
+                              setStep('payment');
                             }
                           } catch (e: any) {
                             Alert.alert('Checkout Failed', e.response?.data?.message || 'Unable to end session.');
