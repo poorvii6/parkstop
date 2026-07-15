@@ -1655,8 +1655,8 @@ export default function FinderDashboard() {
           />
 
           {/* Floating OTP Badge During Navigation/Parking */}
-          {['navigating', 'en_route', 'arriving', 'active_parking'].includes(step) && bookingDetails?.otp && !isInPip && (
-            <View style={{ position: 'absolute', top: 160, right: 16, backgroundColor: 'rgba(15,23,42,0.9)', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(99,102,241,0.3)', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 10, zIndex: 99 }}>
+          {['navigating', 'en_route'].includes(step) && bookingDetails?.otp && !isInPip && !arrivalDetected && (
+            <View style={{ position: 'absolute', bottom: 135, left: 16, backgroundColor: 'rgba(15,23,42,0.9)', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(99,102,241,0.3)', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 10, zIndex: 99 }}>
               <Text style={{ color: '#94a3b8', fontSize: 10, fontWeight: '800', marginBottom: 2 }}>CHECK-IN PIN</Text>
               <Text selectable={true} style={{ color: '#10b981', fontSize: 22, fontWeight: '900', letterSpacing: 4 }}>{bookingDetails.otp}</Text>
             </View>
@@ -1667,7 +1667,7 @@ export default function FinderDashboard() {
       {/* Google Maps Style Instruction Banner */}
 
       {/* FLOATING BACK/HOME BUTTON — rendered AFTER map so it sits on top of WebView */}
-      {(['spot_booking', 'en_route', 'navigating', 'arriving', 'booking_confirm', 'active_parking'].includes(step) || (step === 'home' && searchedPlace !== null)) && (
+      {['spot_booking', 'en_route', 'navigating', 'arriving', 'booking_confirm', 'active_parking'].includes(step) && (
         <TouchableOpacity
           style={{
             position: 'absolute',
@@ -2088,6 +2088,10 @@ export default function FinderDashboard() {
                     <Text style={{ color: '#94a3b8', fontSize: 13, fontWeight: '500', textAlign: 'center', marginBottom: 20, lineHeight: 18 }}>
                       Park in Slot <Text style={{ color: '#6366f1', fontWeight: '900' }}>{selectedSlot?.split('_').pop() || selectedSlot || 'A8'}</Text> and show your check-in PIN to the spot owner.
                     </Text>
+                    <View style={{ backgroundColor: 'rgba(16,185,129,0.08)', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(16,185,129,0.15)', marginBottom: 20, alignItems: 'center' }}>
+                      <Text style={{ fontSize: 9, color: '#10b981', fontWeight: '800', marginBottom: 2, textTransform: 'uppercase' }}>Check-in PIN</Text>
+                      <Text selectable={true} style={{ fontSize: 24, fontWeight: '900', color: '#fff', letterSpacing: 4 }}>{bookingDetails?.otp}</Text>
+                    </View>
                     <View style={{ flexDirection: 'row', gap: 12, width: '100%' }}>
                       <TouchableOpacity 
                         activeOpacity={0.8}
