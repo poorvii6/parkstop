@@ -1,7 +1,7 @@
 const config = require('../config/env');
 const logger = require('../utils/logger');
 const admin = require('../config/firebase');
-const prisma = require('../config/prisma');
+const { resolveUserFromFirebase } = require('../services/authUserService');
 
 /**
  * 🔒 Authenticate user (Firebase ID Token Only)
@@ -32,23 +32,8 @@ const authenticate = async (req, res, next) => {
     }
 
     if (decodedFirebase) {
-      // Find the local Postgres user by firebase_uid
-      let user = await prisma.users.findUnique({
-        where: { firebase_uid: decodedFirebase.uid }
-      });
-
-      // Fallback: If firebase_uid is not set but email matches, link them
-      if (!user && decodedFirebase.email) {
-        user = await prisma.users.findUnique({
-          where: { email: decodedFirebase.email }
-        });
-        if (user) {
-          user = await prisma.users.update({
-            where: { id: user.id },
-            data: { firebase_uid: decodedFirebase.uid }
-          });
-        }
-      }
+      // Resolve local user (uid match, or link by VERIFIED email only)
+      const user = await resolveUserFromFirebase(decodedFirebase);
 
       if (!user) {
         return res.status(401).json({
@@ -127,22 +112,7 @@ const optionalAuth = async (req, res, next) => {
       }
 
       if (decodedFirebase) {
-        let user = await prisma.users.findUnique({
-          where: { firebase_uid: decodedFirebase.uid }
-        });
-
-        if (!user && decodedFirebase.email) {
-          user = await prisma.users.findUnique({
-            where: { email: decodedFirebase.email }
-          });
-          if (user) {
-            user = await prisma.users.update({
-              where: { id: user.id },
-              data: { firebase_uid: decodedFirebase.uid }
-            });
-          }
-        }
-
+        const user = await resolveUserFromFirebase(decodedFirebase);
         if (user) {
           req.user = {
             id: user.id,
