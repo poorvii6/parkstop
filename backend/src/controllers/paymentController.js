@@ -1,6 +1,7 @@
 const PaymentService = require('../services/paymentService');
 const logger = require('../utils/logger');
 const Booking = require('../models/Booking');
+const prisma = require('../config/prisma');
 
 class PaymentController {
 
@@ -30,14 +31,14 @@ class PaymentController {
       }
 
       // Fetch user to check for arrears
-      const user = await require('../config/prisma').users.findUnique({
+      const user = await prisma.users.findUnique({
         where: { id: req.user.id }
       });
       const arrears = user.balance < 0 ? Math.abs(Number(user.balance)) : 0;
       const finalAmountToCharge = Number(booking.total_price) + arrears;
 
       // Find the spot and the spotter
-      const spot = await require('../config/prisma').parking_spots.findUnique({
+      const spot = await prisma.parking_spots.findUnique({
         where: { id: booking.spot_id },
         include: { users: true }
       });
@@ -105,7 +106,7 @@ class PaymentController {
    */
   static async getPaymentMethods(req, res) {
     try {
-      const methods = await require('../config/prisma').payment_methods.findMany({
+      const methods = await prisma.payment_methods.findMany({
         where: { user_id: req.user.id },
         orderBy: { created_at: 'desc' }
       });
@@ -127,12 +128,12 @@ class PaymentController {
       const { id } = req.params;
       
       // Transaction to ensure atomicity
-      await require('../config/prisma').$transaction([
-        require('../config/prisma').payment_methods.updateMany({
+      await prisma.$transaction([
+        prisma.payment_methods.updateMany({
           where: { user_id: req.user.id },
           data: { is_default: false }
         }),
-        require('../config/prisma').payment_methods.update({
+        prisma.payment_methods.update({
           where: { id: parseInt(id), user_id: req.user.id },
           data: { is_default: true }
         })
@@ -150,7 +151,7 @@ class PaymentController {
    */
   static async getPaymentHistory(req, res) {
     try {
-      const history = await require('../config/prisma').bookings.findMany({
+      const history = await prisma.bookings.findMany({
         where: { user_id: req.user.id, status: 'completed' },
         include: { parking_spots: true },
         orderBy: { actual_end_time: 'desc' },
@@ -183,8 +184,6 @@ class PaymentController {
       if (!methodId || !amount) {
         return res.status(400).json({ success: false, message: 'Method and amount required' });
       }
-
-      const prisma = require('../config/prisma');
 
       // Use a transaction to prevent race conditions
       const result = await prisma.$transaction(async (tx) => {
@@ -334,7 +333,7 @@ class PaymentController {
         return res.status(400).json({ success: false, message: 'Booking ID and PaymentIntent ID are required' });
       }
 
-      const booking = await require('../config/prisma').bookings.update({
+      const booking = await prisma.bookings.update({
         where: { id: parseInt(bookingId) },
         data: {
           payment_id: paymentIntentId,
@@ -376,7 +375,7 @@ class PaymentController {
    */
   static async createClearDuesOrder(req, res) {
     try {
-      const user = await require('../config/prisma').users.findUnique({
+      const user = await prisma.users.findUnique({
         where: { id: req.user.id }
       });
       if (!user) return res.status(404).json({ success: false, message: 'User not found' });
@@ -417,7 +416,7 @@ class PaymentController {
       if (!isValid) return res.status(400).json({ success: false, message: 'Invalid payment signature' });
 
       // Reset balance to 0
-      await require('../config/prisma').users.update({
+      await prisma.users.update({
         where: { id: req.user.id },
         data: { balance: 0 }
       });
@@ -470,7 +469,7 @@ class PaymentController {
         return res.status(400).json({ success: false, message: 'Payment verification failed' });
       }
 
-      await require('../config/prisma').users.update({
+      await prisma.users.update({
         where: { id: req.user.id },
         data: { balance: { increment: parseFloat(amount) } }
       });
