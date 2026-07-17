@@ -20,6 +20,7 @@ import apiClient from '../../api/client';
 import { startBackgroundLocation, stopBackgroundLocation, onBackgroundLocation } from '../../services/backgroundLocation';
 import { cacheRouteCorridor, clearOfflinePack } from '../../services/offlineTileCache';
 import { Spot, PricingBreakdown, AppStep } from '../../types/finder';
+import SkeletonCard from '../../components/SkeletonCard';
 
 const { width } = Dimensions.get('window');
 
@@ -34,42 +35,6 @@ const getSocketUrl = () => {
 };
 
 const SOCKET_URL = getSocketUrl();
-
-function SkeletonCard({ width, height, style }: { width?: any, height?: any, style?: any }) {
-  const fadeAnim = useRef(new Animated.Value(0.4)).current;
-
-  useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(fadeAnim, {
-          toValue: 0.8,
-          duration: 1000,
-          useNativeDriver: true,
-        }),
-        Animated.timing(fadeAnim, {
-          toValue: 0.4,
-          duration: 1000,
-          useNativeDriver: true,
-        }),
-      ])
-    ).start();
-  }, [fadeAnim]);
-
-  return (
-    <Animated.View
-      style={[
-        {
-          width: width || '100%',
-          height: height || 80,
-          backgroundColor: 'rgba(255, 255, 255, 0.08)',
-          borderRadius: 16,
-          opacity: fadeAnim,
-        },
-        style,
-      ]}
-    />
-  );
-}
 
 export default function FinderDashboard() {
   const router = useRouter();
