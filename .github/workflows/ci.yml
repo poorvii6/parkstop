@@ -14,6 +14,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       NODE_ENV: test
+      # Pure unit tests mock Prisma and never connect, but `prisma validate`/`generate`
+      # require the env var to be present. This dummy URL is never dialed.
+      DATABASE_URL: postgresql://dummy:dummy@localhost:5432/dummy
     steps:
       - uses: actions/checkout@v4
 
@@ -100,8 +103,12 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
+      # Uses `npm install` (not `npm ci`) on purpose: the frontend mixes an
+      # Expo SDK 54 app with an SDK 55 CLI (@expo/cli@^55), so a strict lockfile
+      # never resolves consistently across npm versions. `npm install` reconciles.
+      # TODO: align the Expo tooling to a single SDK, then switch back to `npm ci`.
       - name: Install dependencies
-        run: cd frontend && npm ci
+        run: cd frontend && npm install
 
       - name: TypeScript type check
         run: cd frontend && npx tsc --noEmit || true
