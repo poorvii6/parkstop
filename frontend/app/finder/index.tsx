@@ -19,6 +19,7 @@ import { BlueprintTheme, BlueprintColors } from '../../constants/BlueprintTheme'
 import apiClient from '../../api/client';
 import { startBackgroundLocation, stopBackgroundLocation, onBackgroundLocation } from '../../services/backgroundLocation';
 import { cacheRouteCorridor, clearOfflinePack } from '../../services/offlineTileCache';
+import { Spot, PricingBreakdown, AppStep } from '../../types/finder';
 
 const { width } = Dimensions.get('window');
 
@@ -33,30 +34,6 @@ const getSocketUrl = () => {
 };
 
 const SOCKET_URL = getSocketUrl();
-
-type Spot = {
-  id: string;
-  title: string;
-  lat: number;
-  lng: number;
-  price: number;
-  available: boolean;
-  location_type?: string;
-  available_slots?: number;
-  distance?: number;
-  images?: string[];
-};
-
-type PricingBreakdown = {
-  id?: string;
-  time: number;
-  location: number;
-  demand: number;
-  finalPrice: number;
-  multiplier: number;
-};
-
-type AppStep = 'vehicle_select' | 'home' | 'spot_booking' | 'booking_confirm' | 'navigating' | 'en_route' | 'arriving' | 'active_parking' | 'checkout_verification' | 'payment' | 'receipt';
 
 function SkeletonCard({ width, height, style }: { width?: any, height?: any, style?: any }) {
   const fadeAnim = useRef(new Animated.Value(0.4)).current;
