@@ -7,9 +7,13 @@
     "node": ">=20"
   },
   "scripts": {
-    "start": "npx prisma db push --accept-data-loss && node src/server.js",
-    "dev": "nodemon src/server.js",
-    "migrate": "node database/migrations/run.js",
+    "start": "npx prisma migrate deploy && node src/server.js",
+    "dev": "npx prisma db push && nodemon src/server.js",
+    "dev:push": "npx prisma db push --accept-data-loss && nodemon src/server.js",
+    "migrate:create": "npx prisma migrate dev",
+    "migrate:deploy": "npx prisma migrate deploy",
+    "migrate:status": "npx prisma migrate status",
+    "migrate:legacy": "node database/migrations/run.js",
     "seed": "node database/seeds/run.js",
     "test": "jest --testPathPatterns=tests/unit --runInBand --forceExit",
     "test:e2e": "node tests/e2e/runner.js"

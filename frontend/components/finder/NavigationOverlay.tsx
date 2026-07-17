@@ -5,7 +5,7 @@ import { BlueprintColors } from '../../constants/BlueprintTheme';
 interface NavigationOverlayProps {
   arrivalDetected: boolean;
   currentInstruction: { turn: string, street: string, icon: string };
-  distanceInfo: { miles: string, mins: string };
+  distanceInfo: { km: string, mins: string, progress?: number };
   onCheckIn: () => void;
   onExit: () => void;
 }
@@ -23,13 +23,13 @@ export const NavigationOverlay: React.FC<NavigationOverlayProps> = ({
         <View style={styles.enRouteBanner}>
           {arrivalDetected ? (
             <>
-              <Text style={{ fontSize: 32, marginRight: 15 }}>📍</Text>
+              <Text style={{ fontSize: 32, marginRight: 15 }}>{'\u{1F4CD}'}</Text>
               <View style={{ flex: 1 }}>
                 <Text style={styles.arrivedTitle}>You have arrived!</Text>
                 <Text style={styles.arrivedSub}>Destination is on your right.</Text>
               </View>
               <TouchableOpacity style={styles.continueBtn} onPress={onCheckIn}>
-                <Text style={styles.continueBtnText}>Check In →</Text>
+                <Text style={styles.continueBtnText}>Check In {'→'}</Text>
               </TouchableOpacity>
             </>
           ) : (
@@ -52,16 +52,16 @@ export const NavigationOverlay: React.FC<NavigationOverlayProps> = ({
 
       <View style={styles.bottomNavDashboard}>
         <View style={styles.etaProgressBar}>
-          <View style={[styles.etaProgressFill, { width: '70%' }]} />
+          <View style={[styles.etaProgressFill, { width: `${Math.min(100, Math.max(0, distanceInfo.progress ?? 0))}%` }]} />
         </View>
         <View style={styles.bottomNavStats}>
           <View style={styles.bottomStatItem}>
-            <Text style={styles.bottomStatValue}>{distanceInfo.miles}</Text>
-            <Text style={styles.bottomStatLabel}>miles</Text>
+            <Text style={styles.bottomStatValue}>{distanceInfo.km}</Text>
+            <Text style={styles.bottomStatLabel}>km</Text>
           </View>
           <View style={styles.bottomStatDivider} />
           <View style={styles.bottomStatItem}>
-            <Text style={styles.bottomStatValue}>{distanceInfo.mins}:45</Text>
+            <Text style={styles.bottomStatValue}>{distanceInfo.mins} min</Text>
             <Text style={styles.bottomStatLabel}>ETA</Text>
           </View>
           <View style={styles.bottomStatDivider} />

@@ -1,20 +1,33 @@
 /**
- * MapLibreView.native.tsx — Google Maps-Quality Navigation Engine
- * 
- * FIXED: Arrow now moves with user by using TWO separate markers
- * (dot for idle, arrow for nav) and toggling visibility instead of
- * replacing innerHTML every frame. Arrow rotates via setRotation().
- * ETA/distance shown on map overlay.
+ * MapLibreView.native.tsx — Native MapLibre GL (Phase 3)
+ *
+ * Replaces the WebView-based map with @maplibre/maplibre-react-native
+ * for native rendering, 60fps animations, and offline tile support.
+ *
+ * Falls back to WebView version if native module fails to load.
  */
 
-import React, { useEffect, useRef, useMemo, useState, useImperativeHandle } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text } from 'react-native';
+import React, { useEffect, useRef, useState, useImperativeHandle, useCallback, useMemo } from 'react';
+import { View, StyleSheet, TouchableOpacity, Text, Platform, Animated as RNAnimated } from 'react-native';
 import { WebView } from 'react-native-webview';
+
+// Try to load native MapLibre
+let MapLibreGL: any = null;
+let NATIVE_AVAILABLE = false;
+try {
+  MapLibreGL = require('@maplibre/maplibre-react-native');
+  if (MapLibreGL?.default) MapLibreGL = MapLibreGL.default;
+  MapLibreGL.setAccessToken(null);
+  NATIVE_AVAILABLE = true;
+} catch (e) {
+  console.warn('[MapLibre] Native module not available — map features will be limited');
+}
 
 export interface MapProps {
   userLocation?: { lat: number; lng: number };
   markers?: Array<{ id: string; lat: number; lng: number; price: number; available: boolean; title?: string }>;
   routeCoords?: Array<{ latitude: number; longitude: number }>;
+  altRoutes?: Array<{ coords: Array<{ latitude: number; longitude: number }>; duration: number; distance: number }>;
   searchedPlace?: { lat: number; lng: number; title: string } | null;
   destination?: { lat: number; lng: number } | null;
   isActiveNavigation?: boolean;
@@ -25,6 +38,8 @@ export interface MapProps {
   onMapInteraction?: () => void;
   onRecenter?: () => void;
   onMarkerPress?: (id: string) => void;
+  onOffRoute?: (lat: number, lng: number) => void;
+  onSelectAltRoute?: (index: number) => void;
   distanceInfo?: any;
   nextInstruction?: string;
   isMuted?: boolean;
@@ -32,9 +47,320 @@ export interface MapProps {
   style?: any;
   hideControls?: boolean;
   onExit?: () => void;
+  trafficSegments?: Array<{ coords: Array<[number, number]>; congestion: 'low' | 'moderate' | 'heavy' | 'severe' }>;
+  speedLimit?: number | null;
+  mapStyleUrl?: string;
+  mapApiKey?: string;
 }
 
-const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
+// ── Helpers ──────────────────────────────────────────────────────
+function isNightTime() {
+  const h = new Date().getHours();
+  return h >= 19 || h < 6;
+}
+
+function lerpAngle(a: number, b: number, t: number) {
+  const d = ((b - a + 540) % 360) - 180;
+  return a + d * t;
+}
+
+function snapToRoute(pos: [number, number], route: [number, number][]) {
+  if (!route || route.length < 2) return { point: pos, index: 0 };
+  let best: [number, number] | null = null, bestD = Infinity, bestI = 0;
+  for (let i = 0; i < route.length - 1; i++) {
+    const p = projPoint(pos, route[i], route[i + 1]);
+    const d = dsq(pos, p);
+    if (d < bestD) { bestD = d; best = p; bestI = i; }
+  }
+  return { point: best || pos, index: bestI };
+}
+
+function projPoint(p: [number, number], a: [number, number], b: [number, number]): [number, number] {
+  const dx = b[0] - a[0], dy = b[1] - a[1], len = dx * dx + dy * dy;
+  if (!len) return a;
+  const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len));
+  return [a[0] + t * dx, a[1] + t * dy];
+}
+
+function dsq(a: [number, number], b: [number, number]) {
+  return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2;
+}
+
+const TRAFFIC_COLORS: Record<string, string> = {
+  low: '#34a853', moderate: '#fbbc04', heavy: '#ea8600', severe: '#ea4335'
+};
+
+const CARTO_DAY = 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json';
+const CARTO_NIGHT = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
+
+// ── WebView Fallback (used in Expo Go / when native module unavailable) ──
+const WebViewFallback = React.forwardRef((props: MapProps, ref: any) => {
+  const webRef = useRef<any>(null);
+  const [isSatellite, setIsSatellite] = useState(false);
+  const initialLoc = props.userLocation || { lat: 12.97, lng: 77.59 };
+
+  useImperativeHandle(ref, () => ({
+    animateCamera: (cfg: any) => {
+      const c = cfg?.center;
+      if (!c || !webRef.current) return;
+      const msg = JSON.stringify({ type: 'flyTo', lat: c.latitude, lng: c.longitude, zoom: cfg.zoom || 16, bearing: cfg.bearing || 0, pitch: cfg.pitch || 0 });
+      webRef.current.injectJavaScript(`window.postMessage(${JSON.stringify(msg)}, '*'); true;`);
+    }
+  }));
+
+  // Send data updates to the WebView
+  useEffect(() => {
+    if (!webRef.current) return;
+    const routeArr = (props.routeCoords || []).map(c => [c.longitude, c.latitude]);
+    const altsArr = (props.altRoutes || []).map(a => a.coords.map(c => [c.longitude, c.latitude]));
+    const searchedPin = props.searchedPlace ? { lat: props.searchedPlace.lat, lng: props.searchedPlace.lng } : null;
+    let destPin = null;
+    if (props.isActiveNavigation && routeArr.length > 0) {
+      const last = routeArr[routeArr.length - 1];
+      destPin = { lng: last[0], lat: last[1] };
+    } else if (props.destination) {
+      destPin = { lat: props.destination.lat, lng: props.destination.lng };
+    } else if (searchedPin) {
+      destPin = searchedPin;
+    }
+    const payload = {
+      type: 'update',
+      user: props.userLocation ? { lat: props.userLocation.lat, lng: props.userLocation.lng } : null,
+      heading: props.heading || 0,
+      speed: props.speed || 0,
+      isNav: !!props.isActiveNavigation,
+      isFollowing: !!props.isFollowing,
+      markers: (props.markers || []).map(m => ({ id: m.id, lat: m.lat, lng: m.lng, price: m.price, available: m.available })),
+      route: routeArr,
+      alts: altsArr,
+      dest: destPin,
+      searched: searchedPin,
+      speedLimit: props.speedLimit || null,
+    };
+    const js = 'try{window.__updateMap(' + JSON.stringify(payload) + ');}catch(e){} true;';
+    webRef.current.injectJavaScript(js);
+  }, [props.userLocation, props.markers, props.routeCoords, props.altRoutes, props.destination, props.searchedPlace, props.isActiveNavigation, props.isFollowing, props.heading, props.speed, props.speedLimit]);
+
+  const html = `<!DOCTYPE html><html><head>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css"/>
+<script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+<style>
+body,html{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#0a0e17}
+#map{position:absolute;top:0;bottom:0;left:0;right:0}
+.spot-marker{background:#4285F4;color:#fff;padding:5px 10px;border-radius:16px;border:2px solid rgba(255,255,255,0.85);font-size:12px;font-weight:800;box-shadow:0 3px 8px rgba(0,0,0,0.5);white-space:nowrap;cursor:pointer;font-family:-apple-system,BlinkMacSystemFont,sans-serif}
+.spot-marker.unavailable{background:#ea4335}
+.spot-marker.active{border-color:#fff;transform:scale(1.15)}
+.dest-pin{width:36px;height:50px;position:relative}
+.dest-pin::before{content:'';width:30px;height:30px;background:#EA4335;border-radius:50%;position:absolute;top:0;left:3px;box-shadow:0 3px 8px rgba(0,0,0,0.4)}
+.dest-pin::after{content:'';width:6px;height:6px;background:#fff;border-radius:50%;position:absolute;top:12px;left:15px}
+.user-dot{width:22px;height:22px;background:#4285F4;border:3px solid #fff;border-radius:50%;box-shadow:0 0 0 8px rgba(66,133,244,0.2),0 3px 8px rgba(0,0,0,0.3)}
+.user-arrow{width:0;height:0;border-left:14px solid transparent;border-right:14px solid transparent;border-bottom:34px solid #4285F4;filter:drop-shadow(0 3px 4px rgba(0,0,0,0.4))}
+</style></head><body>
+<div id="map"></div>
+<script>
+var map=new maplibregl.Map({
+  container:'map',
+  style:'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json',
+  center:[${initialLoc.lng},${initialLoc.lat}],
+  zoom:15,
+  attributionControl:false
+});
+var userMarker=null,destMarker=null,searchedMarker=null;
+var spotMarkers={};
+var routeAdded=false,altsAdded=0;
+var lastState={};
+
+function setUserLocation(lat,lng,isNav){
+  if(!userMarker){
+    var el=document.createElement('div');
+    el.className=isNav?'user-arrow':'user-dot';
+    userMarker=new maplibregl.Marker({element:el,rotationAlignment:'map'}).setLngLat([lng,lat]).addTo(map);
+  } else {
+    userMarker.setLngLat([lng,lat]);
+    userMarker.getElement().className=isNav?'user-arrow':'user-dot';
+  }
+}
+
+function setDestPin(lat,lng){
+  if(!destMarker){
+    var el=document.createElement('div');
+    el.className='dest-pin';
+    destMarker=new maplibregl.Marker({element:el,anchor:'bottom'}).setLngLat([lng,lat]).addTo(map);
+  } else {
+    destMarker.setLngLat([lng,lat]);
+  }
+}
+
+function removeDestPin(){
+  if(destMarker){ destMarker.remove(); destMarker=null; }
+}
+
+function setSpotMarkers(markers,activeDest){
+  var seen={};
+  markers.forEach(function(m){
+    seen[m.id]=true;
+    var isActive=activeDest && Math.abs(activeDest.lat-m.lat)<0.001 && Math.abs(activeDest.lng-m.lng)<0.001;
+    if(spotMarkers[m.id]){
+      spotMarkers[m.id].setLngLat([m.lng,m.lat]);
+      var e=spotMarkers[m.id].getElement();
+      e.className='spot-marker'+(m.available?'':' unavailable')+(isActive?' active':'');
+      e.innerHTML='🅿️ ₹'+m.price;
+    } else {
+      var el=document.createElement('div');
+      el.className='spot-marker'+(m.available?'':' unavailable')+(isActive?' active':'');
+      el.innerHTML='🅿️ ₹'+m.price;
+      el.onclick=function(id){ return function(){ window.ReactNativeWebView.postMessage(JSON.stringify({type:'markerPress',id:id})); }; }(m.id);
+      spotMarkers[m.id]=new maplibregl.Marker({element:el,anchor:'bottom'}).setLngLat([m.lng,m.lat]).addTo(map);
+    }
+  });
+  Object.keys(spotMarkers).forEach(function(k){ if(!seen[k]){ spotMarkers[k].remove(); delete spotMarkers[k]; } });
+}
+
+function setRoute(coords){
+  if(!map.isStyleLoaded()){ setTimeout(function(){setRoute(coords);},200); return; }
+  var geo={type:'Feature',geometry:{type:'LineString',coordinates:coords}};
+  if(map.getSource('route')){
+    map.getSource('route').setData(geo);
+  } else {
+    map.addSource('route',{type:'geojson',data:geo});
+    map.addLayer({id:'route-casing',type:'line',source:'route',layout:{'line-join':'round','line-cap':'round'},paint:{'line-color':'#0d47a1','line-width':12,'line-opacity':0.5}});
+    map.addLayer({id:'route-line',type:'line',source:'route',layout:{'line-join':'round','line-cap':'round'},paint:{'line-color':'#4285F4','line-width':7,'line-opacity':1}});
+  }
+  // Fit bounds if not navigating and route just added
+  if(coords.length>=2 && !lastState.isNav && !lastState.hadRoute){
+    var bounds=coords.reduce(function(b,c){ return b.extend(c); },new maplibregl.LngLatBounds(coords[0],coords[0]));
+    map.fitBounds(bounds,{padding:{top:120,bottom:220,left:60,right:60},duration:1000,maxZoom:16});
+  }
+  lastState.hadRoute=true;
+}
+
+function clearRoute(){
+  if(map.getLayer('route-line')) map.removeLayer('route-line');
+  if(map.getLayer('route-casing')) map.removeLayer('route-casing');
+  if(map.getSource('route')) map.removeSource('route');
+  lastState.hadRoute=false;
+}
+
+function setAlts(alts){
+  // Remove old
+  for(var i=0;i<altsAdded;i++){
+    if(map.getLayer('alt-'+i)) map.removeLayer('alt-'+i);
+    if(map.getSource('alt-'+i)) map.removeSource('alt-'+i);
+  }
+  altsAdded=alts.length;
+  alts.forEach(function(coords,i){
+    if(coords.length<2)return;
+    map.addSource('alt-'+i,{type:'geojson',data:{type:'Feature',geometry:{type:'LineString',coordinates:coords}}});
+    map.addLayer({id:'alt-'+i,type:'line',source:'alt-'+i,layout:{'line-join':'round','line-cap':'round'},paint:{'line-color':'#78909c','line-width':6,'line-opacity':0.55}},'route-casing');
+  });
+}
+
+window.__updateMap=function(data){
+  try {
+    if(data.user){
+      setUserLocation(data.user.lat,data.user.lng,data.isNav);
+      if(data.isNav && userMarker){
+        userMarker.setRotation(data.heading||0);
+      }
+      if(data.isFollowing){
+        map.easeTo({
+          center:[data.user.lng,data.user.lat],
+          zoom:data.isNav?17.5:15,
+          pitch:data.isNav?55:0,
+          bearing:data.isNav?(data.heading||0):0,
+          duration:700
+        });
+      }
+    }
+    if(data.dest){ setDestPin(data.dest.lat,data.dest.lng); } else { removeDestPin(); }
+    setSpotMarkers(data.markers||[],data.dest);
+    if(data.route && data.route.length>=2){
+      lastState.isNav=data.isNav;
+      setRoute(data.route);
+    } else {
+      clearRoute();
+    }
+    setAlts(data.alts||[]);
+    lastState.isNav=data.isNav;
+  } catch(e){ console.error(e); }
+};
+
+// Also listen for postMessage
+window.addEventListener('message',function(e){
+  try {
+    var msg=typeof e.data==='string'?JSON.parse(e.data):e.data;
+    if(msg.type==='flyTo'){
+      map.flyTo({center:[msg.lng,msg.lat],zoom:msg.zoom,bearing:msg.bearing,pitch:msg.pitch,duration:1200});
+    }
+  } catch(err){}
+});
+
+map.on('click',function(e){
+  window.ReactNativeWebView.postMessage(JSON.stringify({type:'mapPress',lng:e.lngLat.lng,lat:e.lngLat.lat}));
+});
+map.on('touchstart',function(){
+  window.ReactNativeWebView.postMessage(JSON.stringify({type:'interaction'}));
+});
+map.on('load',function(){
+  window.ReactNativeWebView.postMessage(JSON.stringify({type:'ready'}));
+});
+</script></body></html>`;
+
+  const handleMessage = (event: any) => {
+    try {
+      const msg = JSON.parse(event.nativeEvent.data);
+      if (msg.type === 'markerPress') props.onMarkerPress?.(msg.id);
+      else if (msg.type === 'mapPress') props.onMapPress?.([msg.lng, msg.lat]);
+      else if (msg.type === 'interaction') props.onMapInteraction?.();
+    } catch {}
+  };
+
+  return (
+    <View style={[styles.container, props.style]}>
+      <WebView
+        ref={webRef}
+        source={{ html }}
+        style={styles.map}
+        javaScriptEnabled
+        domStorageEnabled
+        originWhitelist={['*']}
+        onMessage={handleMessage}
+        scrollEnabled={false}
+        bounces={false}
+        androidLayerType="hardware"
+        mixedContentMode="always"
+      />
+      {/* Overlays: compass, speed limit, ETA, controls */}
+      {props.isActiveNavigation && props.speedLimit ? (
+        <View style={styles.speedLimitBadge}>
+          <Text style={styles.speedLimitValue}>{props.speedLimit}</Text>
+          <Text style={styles.speedLimitLabel}>LIMIT</Text>
+        </View>
+      ) : null}
+      {!props.hideControls && (
+        <View style={styles.controls}>
+          <TouchableOpacity style={[styles.fab, styles.recenterFab]} onPress={props.onRecenter}>
+            <Text style={styles.fabIcon}>🎯</Text>
+          </TouchableOpacity>
+          {props.isActiveNavigation && (
+            <TouchableOpacity style={[styles.fab, styles.exitFab]} onPress={props.onExit}>
+              <Text style={styles.exitIcon}>✕</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+    </View>
+  );
+});
+
+// ── Main Component ───────────────────────────────────────────────
+const MapLibreView: React.FC<MapProps> = React.forwardRef((props: MapProps, ref: any) => {
+  // If native module didn't load, use the full WebView-based fallback
+  if (!NATIVE_AVAILABLE) {
+    return <WebViewFallback {...props} ref={ref} />;
+  }
+
   const {
     userLocation,
     markers = [],
@@ -42,469 +368,372 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
     destination,
     isActiveNavigation = false,
     heading = 0,
+    speed = 0,
     isFollowing = true,
     onMapPress,
     onMapInteraction,
     onRecenter,
     onMarkerPress,
+    onOffRoute,
     hideControls = false,
     searchedPlace,
     onExit,
     distanceInfo,
   } = props;
 
-  const webViewRef = useRef<WebView>(null);
+  const cameraRef = useRef<any>(null);
+  const mapRef = useRef<any>(null);
   const [isSatellite, setIsSatellite] = useState(false);
+  const [mapReady, setMapReady] = useState(false);
+  const bearRef = useRef(0);
 
+  // Animated position for smooth 60fps marker movement (#15)
+  const animLng = useRef(new RNAnimated.Value(userLocation?.lng || 0)).current;
+  const animLat = useRef(new RNAnimated.Value(userLocation?.lat || 0)).current;
+  const [displayPos, setDisplayPos] = useState<[number, number]>([userLocation?.lng || 0, userLocation?.lat || 0]);
+  const lastGpsTime = useRef(Date.now());
+
+  // Interpolate position between GPS ticks
+  useEffect(() => {
+    if (!userLocation) return;
+    const now = Date.now();
+    const dt = Math.min(now - lastGpsTime.current, 2000);
+    lastGpsTime.current = now;
+
+    const routeArr: [number, number][] = routeCoords.map(c => [c.longitude, c.latitude]);
+    let targetPos: [number, number] = [userLocation.lng, userLocation.lat];
+
+    // Snap to route during navigation
+    if (isActiveNavigation && routeArr.length >= 2) {
+      const snapped = snapToRoute(targetPos, routeArr);
+      targetPos = snapped.point;
+
+      // Off-route check
+      const dx = (userLocation.lng - snapped.point[0]) * 111320 * Math.cos(snapped.point[1] * Math.PI / 180);
+      const dy = (userLocation.lat - snapped.point[1]) * 110540;
+      const distMeters = Math.sqrt(dx * dx + dy * dy);
+      if (distMeters > 60) {
+        onOffRoute?.(userLocation.lat, userLocation.lng);
+      }
+    }
+
+    // Smooth animation to target (60fps interpolation)
+    RNAnimated.parallel([
+      RNAnimated.timing(animLng, { toValue: targetPos[0], duration: 700, useNativeDriver: false }),
+      RNAnimated.timing(animLat, { toValue: targetPos[1], duration: 700, useNativeDriver: false }),
+    ]).start();
+
+    setDisplayPos(targetPos);
+  }, [userLocation, isActiveNavigation, routeCoords]);
+
+  // Camera follow
+  useEffect(() => {
+    if (!cameraRef.current || !isFollowing || !userLocation) return;
+
+    bearRef.current = isActiveNavigation
+      ? lerpAngle(bearRef.current, heading, 0.18)
+      : 0;
+
+    // Speed-adaptive zoom
+    let zoom = 16;
+    let pitch = 0;
+    if (isActiveNavigation) {
+      const speedKmh = (speed || 0) * 3.6;
+      if (speedKmh > 80) { zoom = 15.5; pitch = 50; }
+      else if (speedKmh > 60) { zoom = 16; pitch = 52; }
+      else if (speedKmh > 40) { zoom = 16.8; pitch = 53; }
+      else if (speedKmh > 20) { zoom = 17.5; pitch = 55; }
+      else { zoom = 18.5; pitch = 55; }
+    }
+
+    cameraRef.current.setCamera({
+      centerCoordinate: displayPos,
+      zoomLevel: zoom,
+      pitch,
+      heading: bearRef.current,
+      animationDuration: 700,
+    });
+  }, [displayPos, isFollowing, isActiveNavigation, heading, speed]);
+
+  // Fit bounds when route shown but not navigating
+  useEffect(() => {
+    if (!cameraRef.current || isActiveNavigation || routeCoords.length < 2) return;
+    if (!isFollowing && (searchedPlace || destination)) {
+      const coords = routeCoords.map(c => [c.longitude, c.latitude] as [number, number]);
+      let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
+      coords.forEach(p => {
+        if (p[0] < minLng) minLng = p[0];
+        if (p[0] > maxLng) maxLng = p[0];
+        if (p[1] < minLat) minLat = p[1];
+        if (p[1] > maxLat) maxLat = p[1];
+      });
+      if (minLng !== Infinity) {
+        cameraRef.current.fitBounds(
+          [maxLng, maxLat], [minLng, minLat],
+          [80, 220, 50, 50], 1000
+        );
+      }
+    }
+  }, [routeCoords, isActiveNavigation, searchedPlace, destination]);
+
+  // Style URL
+  const styleUrl = useMemo(() => {
+    if (isSatellite) return 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+    const night = isNightTime();
+    if (props.mapStyleUrl) {
+      return night
+        ? props.mapStyleUrl.replace('default-light-standard', 'default-dark-standard')
+        : props.mapStyleUrl;
+    }
+    return night ? CARTO_NIGHT : CARTO_DAY;
+  }, [isSatellite, props.mapStyleUrl]);
+
+  // Transform request for Ola Maps tiles
+  const transformRequest = useCallback((url: string, resourceType: string) => {
+    if (props.mapApiKey && (resourceType === 'Tile' || resourceType === 'Source' || resourceType === 'Sprite' || resourceType === 'Glyphs')) {
+      const sep = url.includes('?') ? '&' : '?';
+      return { url: url + sep + 'api_key=' + props.mapApiKey };
+    }
+    return { url };
+  }, [props.mapApiKey]);
+
+  // GeoJSON for route
+  const routeGeoJSON = useMemo(() => {
+    const coords = routeCoords.map(c => [c.longitude, c.latitude]);
+    if (isActiveNavigation && coords.length >= 2) {
+      const snapped = snapToRoute(displayPos, coords as [number, number][]);
+      return {
+        type: 'Feature' as const,
+        geometry: { type: 'LineString' as const, coordinates: [displayPos, ...coords.slice(snapped.index + 1)] }
+      };
+    }
+    return {
+      type: 'Feature' as const,
+      geometry: { type: 'LineString' as const, coordinates: coords }
+    };
+  }, [routeCoords, displayPos, isActiveNavigation]);
+
+  const traveledGeoJSON = useMemo(() => {
+    if (!isActiveNavigation || routeCoords.length < 2) {
+      return { type: 'Feature' as const, geometry: { type: 'LineString' as const, coordinates: [] as number[][] } };
+    }
+    const coords = routeCoords.map(c => [c.longitude, c.latitude]);
+    const snapped = snapToRoute(displayPos, coords as [number, number][]);
+    return {
+      type: 'Feature' as const,
+      geometry: { type: 'LineString' as const, coordinates: [...coords.slice(0, snapped.index + 1), displayPos] }
+    };
+  }, [routeCoords, displayPos, isActiveNavigation]);
+
+  // Imperative handle for animateCamera
   useImperativeHandle(ref, () => ({
     animateCamera: (config: any) => {
-      const { center, zoom, bearing, pitch } = config;
-      const script = `
-        if (window.map) {
-          window.map.easeTo({
-            center: [${center.longitude}, ${center.latitude}],
-            zoom: ${zoom || 16},
-            bearing: ${bearing || 0},
-            pitch: ${pitch || 0},
-            duration: 1000
-          });
-        }
-        true;
-      `;
-      webViewRef.current?.injectJavaScript(script);
+      if (!cameraRef.current) return;
+      cameraRef.current.setCamera({
+        centerCoordinate: [config.center.longitude, config.center.latitude],
+        zoomLevel: config.zoom || 16,
+        heading: config.bearing || 0,
+        pitch: config.pitch || 0,
+        animationDuration: 1000,
+      });
     }
   }));
 
-  const mapHtml = useMemo(() => `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="utf-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-      <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@5.1.0/dist/maplibre-gl.js"></script>
-      <link href="https://cdn.jsdelivr.net/npm/maplibre-gl@5.1.0/dist/maplibre-gl.css" rel="stylesheet" />
-      <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { overflow: hidden; }
-        #map { position: absolute; top: 0; bottom: 0; width: 100%; background: #0a0e17; }
-        .maplibregl-ctrl-logo, .maplibregl-ctrl-attrib, .maplibregl-ctrl,
-        .mapboxgl-ctrl-logo, .mapboxgl-ctrl-attrib { display: none !important; }
-
-        /* Blue dot (non-nav) */
-        .user-dot-wrap {
-          width: 22px; height: 22px; position: relative;
-        }
-        .user-dot-core {
-          width: 22px; height: 22px;
-          background: radial-gradient(circle at 40% 35%, #6ea6ff, #4285F4);
-          border: 3px solid #fff;
-          border-radius: 50%;
-          box-shadow: 0 0 0 8px rgba(66,133,244,0.18), 0 2px 8px rgba(0,0,0,0.3);
-        }
-        .user-dot-ring {
-          position: absolute; top: 50%; left: 50%;
-          width: 50px; height: 50px;
-          transform: translate(-50%, -50%);
-          border-radius: 50%;
-          background: radial-gradient(circle, rgba(66,133,244,0.15) 0%, rgba(66,133,244,0) 70%);
-          animation: pulse 2.5s ease-in-out infinite;
-          pointer-events: none;
-        }
-        @keyframes pulse {
-          0%, 100% { transform: translate(-50%,-50%) scale(1); opacity: 0.8; }
-          50% { transform: translate(-50%,-50%) scale(1.4); opacity: 0.3; }
-        }
-
-        /* Spot markers */
-        .spot-marker {
-          cursor: pointer; transition: transform 0.15s;
-          box-shadow: 0 3px 10px rgba(0,0,0,0.5);
-          user-select: none; -webkit-user-select: none;
-        }
-        .spot-marker:active { transform: scale(1.15); }
-        .active-marker {
-          animation: markerPulse 1.5s infinite;
-          border-color: #4285F4 !important;
-        }
-        @keyframes markerPulse {
-          0% { box-shadow: 0 0 0 0 rgba(66,133,244,0.7); }
-          70% { box-shadow: 0 0 0 14px rgba(66,133,244,0); }
-          100% { box-shadow: 0 0 0 0 rgba(66,133,244,0); }
-        }
-
-        /* Destination pin */
-        .dest-pin {
-          width: 36px; height: 50px;
-          transform-origin: bottom center;
-          display: none;
-        }
-
-        /* ETA overlay on map */
-        #eta-overlay {
-          position: fixed; bottom: 120px; left: 50%;
-          transform: translateX(-50%);
-          background: rgba(26,115,232,0.95);
-          color: #fff; padding: 10px 20px;
-          border-radius: 24px; font-weight: 900;
-          font-size: 16px; font-family: -apple-system, sans-serif;
-          box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-          display: none; z-index: 999;
-          white-space: nowrap;
-          backdrop-filter: blur(8px);
-        }
-      </style>
-    </head>
-    <body>
-      <div id="map"></div>
-      <div id="eta-overlay"></div>
-      <script>
-        let map = null;
-        let mapLoaded = false;
-        let lastData = null;
-        let dotMarker = null;
-        let arrowMarker = null;
-        let destMarker = null;
-        let spotMarkers = {};
-        let prevIds = new Set();
-        let arrowVisible = false;
-        let destVis = false;
-
-        // ── Bearing interpolation ──
-        let _bear = 0;
-        function lerpAngle(a, b, t) {
-          let d = ((b - a + 540) % 360) - 180;
-          return a + d * t;
-        }
-
-        // ── Snap-to-route ──
-        function snapToRoute(pos, route) {
-          if (!route || route.length < 2) return { point: pos, index: 0 };
-          let best = null, bestD = Infinity, bestI = 0;
-          for (let i = 0; i < route.length - 1; i++) {
-            const p = proj(pos, route[i], route[i+1]);
-            const d = dsq(pos, p);
-            if (d < bestD) { bestD = d; best = p; bestI = i; }
-          }
-          return { point: best || pos, index: bestI };
-        }
-        function proj(p, a, b) {
-          const dx = b[0]-a[0], dy = b[1]-a[1], len = dx*dx+dy*dy;
-          if (!len) return a;
-          let t = Math.max(0, Math.min(1, ((p[0]-a[0])*dx+(p[1]-a[1])*dy)/len));
-          return [a[0]+t*dx, a[1]+t*dy];
-        }
-        function dsq(a,b) { return (a[0]-b[0])**2+(a[1]-b[1])**2; }
-
-        // Create marker elements
-        const dotEl = document.createElement('div');
-        dotEl.className = 'user-dot-wrap';
-        dotEl.innerHTML = '<div class="user-dot-ring"></div><div class="user-dot-core"></div>';
-
-        const arrowEl = document.createElement('div');
-        arrowEl.style.cssText = 'width:44px;height:44px;';
-        arrowEl.innerHTML = '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">'
-          + '<defs><filter id="as" x="-20%" y="-20%" width="140%" height="130%"><feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.4"/></filter></defs>'
-          + '<polygon points="50,5 18,85 50,68 82,85" fill="#4285F4" stroke="#fff" stroke-width="4" stroke-linejoin="round" filter="url(#as)"/>'
-          + '</svg>';
-
-        const destEl = document.createElement('div');
-        destEl.className = 'dest-pin';
-        destEl.style.cssText = 'width: 40px; height: 56px; display: none;';
-        destEl.innerHTML = '<svg width="40" height="56" viewBox="0 0 40 56" xmlns="http://www.w3.org/2000/svg">' +
-                           '<defs><filter id="dshadow" x="-20%" y="-10%" width="140%" height="130%"><feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#000" flood-opacity="0.35"/></filter></defs>' +
-                           '<path d="M20 0C8.95 0 0 8.95 0 20c0 14 20 36 20 36s20-22 20-36C40 8.95 31.05 0 20 0z" fill="#EA4335" filter="url(#dshadow)"/>' +
-                           '<circle cx="20" cy="19" r="12" fill="#fff"/>' +
-                           '<text x="20" y="24" text-anchor="middle" font-size="16" font-weight="900" fill="#EA4335" font-family="Arial, sans-serif">P</text>' +
-                           '</svg>';
-
-        const etaEl = document.getElementById('eta-overlay');
-
-        function initMap(data) {
-          map = window.map = new maplibregl.Map({
-            container: 'map',
-            style: 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json',
-            center: data.userLocation,
-            zoom: data.isActiveNavigation ? 18.5 : 16,
-            pitch: data.isActiveNavigation ? 55 : 0,
-            bearing: data.isActiveNavigation ? (data.heading || 0) : 0,
-            antialias: true,
-            attributionControl: false,
-            fadeDuration: 0
-          });
-
-          map.on('load', () => {
-            // Instantiate markers on map load
-            dotMarker = new maplibregl.Marker({ element: dotEl, anchor: 'center' })
-              .setLngLat(data.userLocation).addTo(map);
-
-            arrowMarker = new maplibregl.Marker({ element: arrowEl, anchor: 'center', rotationAlignment: 'map' })
-              .setLngLat(data.userLocation);
-
-            destMarker = new maplibregl.Marker({ element: destEl, anchor: 'bottom' });
-
-            // Satellite
-            map.addSource('satellite', { type:'raster', tiles:['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'], tileSize:256, maxzoom:19 });
-            map.addLayer({ id:'satellite-layer', type:'raster', source:'satellite', layout:{visibility:'none'} });
-
-            // Traveled route (gray)
-            map.addSource('route-traveled', { type:'geojson', data:{type:'Feature',geometry:{type:'LineString',coordinates:[]}} });
-            map.addLayer({ id:'route-traveled', type:'line', source:'route-traveled',
-              layout:{'line-join':'round','line-cap':'round'},
-              paint:{'line-color':'#9aa0a6','line-width':6,'line-opacity':0.45}
-            });
-
-            // Remaining route layers
-            map.addSource('route', { type:'geojson', data:{type:'Feature',geometry:{type:'LineString',coordinates:[]}} });
-            map.addLayer({ id:'route-shadow', type:'line', source:'route',
-              layout:{'line-join':'round','line-cap':'round'},
-              paint:{'line-color':'#1a73e8','line-width':14,'line-opacity':0.12,'line-blur':6}
-            });
-            map.addLayer({ id:'route-glow', type:'line', source:'route',
-              layout:{'line-join':'round','line-cap':'round'},
-              paint:{'line-color':'#4285F4','line-width':10,'line-opacity':0.28}
-            });
-            map.addLayer({ id:'route-line', type:'line', source:'route',
-              layout:{'line-join':'round','line-cap':'round'},
-              paint:{'line-color':'#4285F4','line-width':6,'line-opacity':1}
-            });
-
-            // Bind Touch events
-            map.on('touchstart', function(){ window.ReactNativeWebView.postMessage(JSON.stringify({type:'interaction'})); });
-            map.on('click', function(e){ window.ReactNativeWebView.postMessage(JSON.stringify({type:'press',coords:[e.lngLat.lng,e.lngLat.lat]})); });
-
-            mapLoaded = true;
-            if (lastData) {
-              window.updateMap(lastData);
-            }
-          });
-        }
-
-        // ══════════════════════
-        // MAIN UPDATE FUNCTION
-        // ══════════════════════
-        window.updateMap = function(data) {
-          if (!data || !data.userLocation) return;
-          lastData = data;
-
-          if (!map) {
-            initMap(data);
-            return;
-          }
-
-          if (!mapLoaded) return;
-
-          // Satellite
-          if (data.isSatellite !== undefined && map.getLayer('satellite-layer')) {
-            const v = data.isSatellite ? 'visible' : 'none';
-            if (map.getLayoutProperty('satellite-layer','visibility') !== v)
-              map.setLayoutProperty('satellite-layer','visibility', v);
-          }
-
-          const isNav = data.isActiveNavigation;
-          const routeArr = data.routeCoords || [];
-          const userPos = data.userLocation; // [lng, lat]
-
-          // Snap to route during nav
-          let displayPos = userPos;
-          let snapIdx = 0;
-          if (isNav && routeArr.length >= 2) {
-            const s = snapToRoute(userPos, routeArr);
-            displayPos = s.point;
-            snapIdx = s.index;
-          }
-
-          // ── Toggle markers: show arrow during nav, dot otherwise ──
-          if (isNav) {
-            // Hide dot, show arrow
-            dotEl.style.display = 'none';
-            if (!arrowVisible && arrowMarker) { arrowMarker.addTo(map); arrowVisible = true; }
-            if (arrowMarker) {
-              arrowMarker.setLngLat(displayPos);
-              arrowMarker.setRotation(data.heading || 0);
-            }
-          } else {
-            // Hide arrow, show dot
-            dotEl.style.display = '';
-            if (dotMarker) dotMarker.setLngLat(displayPos);
-            if (arrowVisible && arrowMarker) { arrowMarker.remove(); arrowVisible = false; }
-          }
-
-          // ── ETA overlay ──
-          if (isNav && data.distanceInfo) {
-            etaEl.style.display = 'block';
-            etaEl.textContent = data.distanceInfo.km + ' km  ·  ' + data.distanceInfo.mins + ' min';
-          } else {
-            etaEl.style.display = 'none';
-          }
-
-          // ── Camera follow ──
-          if (data.isFollowing) {
-            const tb = data.heading || 0;
-            _bear = lerpAngle(_bear, tb, 0.18);
-            map.easeTo({
-              center: displayPos,
-              bearing: isNav ? _bear : 0,
-              pitch: isNav ? 55 : 0,
-              zoom: isNav ? 18.5 : 16,
-              duration: 700,
-              easing: function(t){ return t*(2-t); }
-            });
-          } else if (!isNav && routeArr.length >= 2 && data.searchedPlace) {
-            // Fit bounds to show the entire route from user location to searched place
-            let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
-            routeArr.forEach(function(p) {
-              if (p[0] < minLng) minLng = p[0];
-              if (p[0] > maxLng) maxLng = p[0];
-              if (p[1] < minLat) minLat = p[1];
-              if (p[1] > maxLat) maxLat = p[1];
-            });
-            if (minLng !== Infinity) {
-              map.fitBounds([[minLng, minLat], [maxLng, maxLat]], {
-                padding: { top: 80, bottom: 220, left: 50, right: 50 },
-                duration: 1000
-              });
-            }
-          }
-
-          // ── Route lines ──
-          const rSrc = map.getSource('route');
-          const tSrc = map.getSource('route-traveled');
-          if (rSrc && tSrc) {
-            if (isNav && routeArr.length >= 2) {
-              rSrc.setData({type:'Feature',geometry:{type:'LineString',coordinates:[displayPos].concat(routeArr.slice(snapIdx+1))}});
-              tSrc.setData({type:'Feature',geometry:{type:'LineString',coordinates:routeArr.slice(0,snapIdx+1).concat([displayPos])}});
-            } else {
-              rSrc.setData({type:'Feature',geometry:{type:'LineString',coordinates:routeArr}});
-              tSrc.setData({type:'Feature',geometry:{type:'LineString',coordinates:[]}});
-            }
-          }
-
-          // ── Destination Pin ──
-          var showDest = false;
-          var finalDest = null;
-          
-          if (isNav && routeArr.length > 0) {
-            finalDest = routeArr[routeArr.length - 1];
-            showDest = true;
-          } else if (data.searchedPlace) {
-            finalDest = data.searchedPlace;
-            showDest = true;
-          } else if (data.destination && isNav) {
-            finalDest = data.destination;
-            // Only show red pin if it's NOT a parking spot marker
-            var overlapsSpot = (data.markers || []).some(function(m) {
-              return Math.abs(m.lat - finalDest[1]) < 0.0001 && Math.abs(m.lng - finalDest[0]) < 0.0001;
-            });
-            if (!overlapsSpot) showDest = true;
-          }
-
-          if (showDest && finalDest && 
-              typeof finalDest[0] === 'number' && 
-              typeof finalDest[1] === 'number' && 
-              !isNaN(finalDest[0]) && 
-              !isNaN(finalDest[1]) && 
-              (finalDest[0] !== 0 || finalDest[1] !== 0)) {
-            if (destMarker) {
-              var currentLngLat = destMarker.getLngLat();
-              var isNewPos = !destVis || !currentLngLat || 
-                             Math.abs(currentLngLat.lng - finalDest[0]) > 0.00001 || 
-                             Math.abs(currentLngLat.lat - finalDest[1]) > 0.00001;
-
-              if (isNewPos) {
-                destEl.style.display = 'none';
-                destMarker.setLngLat(finalDest);
-                if (!destVis) {
-                  destMarker.addTo(map);
-                  destVis = true;
-                }
-                
-                // Double-rAF: wait for MapLibre to apply the transform in the DOM before showing
-                requestAnimationFrame(function() {
-                  requestAnimationFrame(function() {
-                    if (destVis) {
-                      destEl.style.display = 'block';
-                    }
-                  });
-                });
-              } else {
-                destEl.style.display = 'block';
-              }
-            }
-          } else {
-            destEl.style.display = 'none';
-            if (destVis && destMarker) { destMarker.remove(); destVis = false; }
-          }
-
-          // ── Spot markers ──
-          var newIds = new Set((data.markers||[]).map(function(m){return m.id;}));
-          prevIds.forEach(function(id) {
-            if (!newIds.has(id) && spotMarkers[id]) { spotMarkers[id].remove(); delete spotMarkers[id]; }
-          });
-          (data.markers||[]).forEach(function(m) {
-            var isDest = data.destination && Array.isArray(data.destination)
-              && Math.abs(data.destination[1]-m.lat)<0.001 && Math.abs(data.destination[0]-m.lng)<0.001;
-            if (!spotMarkers[m.id]) {
-              var el = document.createElement('div');
-              el.className = 'spot-marker';
-              el.style.cssText = 'background:'+(m.available?'#4285F4':'#ea4335')+';color:#fff;padding:5px 10px;border-radius:16px;font-size:12px;font-weight:800;border:2px solid rgba(255,255,255,0.85);white-space:nowrap;';
-              el.textContent = '🅿️ ₹' + m.price;
-              el.onclick = function(){ window.ReactNativeWebView.postMessage(JSON.stringify({type:'markerPress',id:m.id})); };
-              spotMarkers[m.id] = new maplibregl.Marker({element:el, anchor:'bottom'}).setLngLat([m.lng,m.lat]).addTo(map);
-            }
-            var el2 = spotMarkers[m.id].getElement();
-            if (isDest) el2.classList.add('active-marker'); else el2.classList.remove('active-marker');
-          });
-          prevIds = newIds;
-        };
-      </script>
-    </body>
-    </html>
-  `, []);
-
-  const lastInjectedDataRef = useRef<string>('');
-
-  // Push state to WebView on every prop change
-  useEffect(() => {
-    if (!userLocation) return;
-    const data = {
-      userLocation: [userLocation.lng, userLocation.lat],
-      routeCoords: routeCoords.map(c => [c.longitude, c.latitude]),
-      destination: destination ? [destination.lng, destination.lat] : null,
-      markers,
-      heading,
-      isActiveNavigation,
-      isFollowing,
-      isSatellite,
-      searchedPlace: searchedPlace ? [searchedPlace.lng, searchedPlace.lat] : null,
-      distanceInfo: distanceInfo || null,
-    };
-    const stringified = JSON.stringify(data);
-    if (stringified !== lastInjectedDataRef.current) {
-      lastInjectedDataRef.current = stringified;
-      webViewRef.current?.injectJavaScript(`if(window.updateMap) window.updateMap(${stringified});true;`);
+  // ETA display
+  const etaDisplay = useMemo(() => {
+    if (!isActiveNavigation || !distanceInfo) return null;
+    const minsVal = parseInt(distanceInfo.mins) || 0;
+    let durationText = '';
+    if (minsVal >= 60) {
+      const hrs = Math.floor(minsVal / 60);
+      const rem = minsVal % 60;
+      durationText = `${hrs} hr${hrs > 1 ? 's' : ''}${rem > 0 ? ` ${rem} min` : ''}`;
+    } else {
+      durationText = `${minsVal} min`;
     }
-  }, [userLocation, routeCoords, heading, isActiveNavigation, isFollowing, markers, destination, searchedPlace, isSatellite, distanceInfo]);
+    const arrival = new Date(Date.now() + minsVal * 60000);
+    let h = arrival.getHours();
+    const m = arrival.getMinutes();
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12 || 12;
+    const arrivalText = `${h}:${m < 10 ? '0' : ''}${m} ${ampm}`;
+    return { durationText, arrivalText, dist: distanceInfo.km };
+  }, [isActiveNavigation, distanceInfo]);
+
+  // Overspeed check
+  const isOverspeed = props.speedLimit && props.speedLimit > 0 && (speed || 0) * 3.6 > props.speedLimit + 5;
+
+  if (!userLocation) return <View style={styles.container}><View style={[styles.map, { backgroundColor: '#0a0e17' }]} /></View>;
 
   return (
     <View style={styles.container}>
-      <WebView
-        ref={webViewRef}
-        source={{ html: mapHtml }}
+      <MapLibreGL.MapView
+        ref={mapRef}
         style={styles.map}
-        scrollEnabled={false}
-        javaScriptEnabled={true}
-        domStorageEnabled={true}
-        onMessage={(event) => {
-          try {
-            const data = JSON.parse(event.nativeEvent.data);
-            if (data.type === 'press') onMapPress?.(data.coords);
-            if (data.type === 'interaction') onMapInteraction?.();
-            if (data.type === 'markerPress') onMarkerPress?.(data.id);
-          } catch (e) {}
+        styleURL={styleUrl}
+        logoEnabled={false}
+        attributionEnabled={false}
+        compassEnabled={false}
+        onPress={(e: any) => {
+          const coords = e.geometry?.coordinates;
+          if (coords) onMapPress?.([coords[0], coords[1]]);
         }}
-      />
+        onTouchStart={() => onMapInteraction?.()}
+        requestDisallowInterceptTouchEvent={false}
+      >
+        <MapLibreGL.Camera
+          ref={cameraRef}
+          defaultSettings={{
+            centerCoordinate: [userLocation.lng, userLocation.lat],
+            zoomLevel: 16,
+          }}
+        />
 
-      {/* Floating Controls */}
+        {/* ── Traveled route (gray) ── */}
+        {traveledGeoJSON.geometry.coordinates.length >= 2 && (
+          <MapLibreGL.ShapeSource id="route-traveled" shape={traveledGeoJSON}>
+            <MapLibreGL.LineLayer
+              id="route-traveled-line"
+              style={{ lineColor: '#9aa0a6', lineWidth: 8, lineOpacity: 0.6, lineCap: 'round', lineJoin: 'round' }}
+            />
+          </MapLibreGL.ShapeSource>
+        )}
+
+        {/* ── Remaining route (blue with casing) ── */}
+        {routeGeoJSON.geometry.coordinates.length >= 2 && (
+          <MapLibreGL.ShapeSource id="route" shape={routeGeoJSON}>
+            <MapLibreGL.LineLayer
+              id="route-casing"
+              style={{ lineColor: '#0d47a1', lineWidth: 12, lineOpacity: 0.35, lineCap: 'round', lineJoin: 'round' }}
+            />
+            <MapLibreGL.LineLayer
+              id="route-line"
+              style={{
+                lineColor: '#4285F4',
+                lineWidth: 7,
+                lineOpacity: (isActiveNavigation && (props.trafficSegments?.length || 0) > 0) ? 0.15 : 1,
+                lineCap: 'round', lineJoin: 'round'
+              }}
+            />
+          </MapLibreGL.ShapeSource>
+        )}
+
+        {/* ── Traffic-colored segments ── */}
+        {isActiveNavigation && (props.trafficSegments || []).map((seg, i) => (
+          seg.coords.length >= 2 ? (
+            <MapLibreGL.ShapeSource
+              key={`traffic-${i}`}
+              id={`traffic-seg-${i}`}
+              shape={{ type: 'Feature', geometry: { type: 'LineString', coordinates: seg.coords } }}
+            >
+              <MapLibreGL.LineLayer
+                id={`traffic-seg-line-${i}`}
+                style={{ lineColor: TRAFFIC_COLORS[seg.congestion] || '#4285F4', lineWidth: 7, lineOpacity: 1, lineCap: 'round', lineJoin: 'round' }}
+              />
+            </MapLibreGL.ShapeSource>
+          ) : null
+        ))}
+
+        {/* ── Alternative routes ── */}
+        {!isActiveNavigation && (props.altRoutes || []).map((alt, i) => (
+          <MapLibreGL.ShapeSource
+            key={`alt-${i}`}
+            id={`alt-route-${i}`}
+            shape={{
+              type: 'Feature',
+              geometry: { type: 'LineString', coordinates: alt.coords.map(c => [c.longitude, c.latitude]) }
+            }}
+            onPress={() => props.onSelectAltRoute?.(i)}
+          >
+            <MapLibreGL.LineLayer
+              id={`alt-route-line-${i}`}
+              style={{ lineColor: '#78909c', lineWidth: 6, lineOpacity: 0.5, lineCap: 'round', lineJoin: 'round' }}
+            />
+          </MapLibreGL.ShapeSource>
+        ))}
+
+        {/* ── Destination pin ── */}
+        {(() => {
+          let dest: [number, number] | null = null;
+          if (isActiveNavigation && routeCoords.length > 0) {
+            const last = routeCoords[routeCoords.length - 1];
+            dest = [last.longitude, last.latitude];
+          } else if (searchedPlace) {
+            dest = [searchedPlace.lng, searchedPlace.lat];
+          }
+          if (!dest || (dest[0] === 0 && dest[1] === 0)) return null;
+          return (
+            <MapLibreGL.MarkerView coordinate={dest} anchor={{ x: 0.5, y: 1 }}>
+              <View style={styles.destPin}>
+                <View style={styles.destPinHead} />
+                <View style={styles.destPinDot} />
+              </View>
+            </MapLibreGL.MarkerView>
+          );
+        })()}
+
+        {/* ── Spot markers ── */}
+        {markers.map(m => (
+          <MapLibreGL.MarkerView key={m.id} coordinate={[m.lng, m.lat]} anchor={{ x: 0.5, y: 1 }}>
+            <TouchableOpacity
+              activeOpacity={0.8}
+              onPress={() => onMarkerPress?.(m.id)}
+              style={[
+                styles.spotMarker,
+                { backgroundColor: m.available ? '#4285F4' : '#ea4335' },
+                destination && Math.abs((destination.lat || 0) - m.lat) < 0.001 && Math.abs((destination.lng || 0) - m.lng) < 0.001
+                  ? styles.activeSpotMarker : null
+              ]}
+            >
+              <Text style={styles.spotMarkerText}>🅿️ ₹{m.price}</Text>
+            </TouchableOpacity>
+          </MapLibreGL.MarkerView>
+        ))}
+
+        {/* ── User location marker ── */}
+        <MapLibreGL.MarkerView coordinate={displayPos} anchor={{ x: 0.5, y: 0.5 }}>
+          {isActiveNavigation ? (
+            <View style={[styles.arrowWrap, { transform: [{ rotate: `${bearRef.current}deg` }] }]}>
+              <View style={styles.arrowBody} />
+            </View>
+          ) : (
+            <View style={styles.dotWrap}>
+              <View style={styles.dotRing} />
+              <View style={styles.dotCore} />
+            </View>
+          )}
+        </MapLibreGL.MarkerView>
+      </MapLibreGL.MapView>
+
+      {/* ── Compass overlay ── */}
+      {isActiveNavigation && (
+        <TouchableOpacity
+          style={styles.compass}
+          onPress={() => {
+            cameraRef.current?.setCamera({ heading: 0, pitch: 0, animationDuration: 400 });
+          }}
+        >
+          <Text style={[styles.compassN, { transform: [{ rotate: `${-(bearRef.current)}deg` }] }]}>N</Text>
+        </TouchableOpacity>
+      )}
+
+      {/* ── Speed limit badge ── */}
+      {isActiveNavigation && props.speedLimit && props.speedLimit > 0 && (
+        <View style={[styles.speedLimitBadge, isOverspeed ? styles.speedLimitOverspeed : null]}>
+          <Text style={[styles.speedLimitValue, isOverspeed ? { color: '#ea4335' } : null]}>{props.speedLimit}</Text>
+          <Text style={styles.speedLimitLabel}>LIMIT</Text>
+        </View>
+      )}
+
+      {/* ── ETA overlay ── */}
+      {etaDisplay && (
+        <View style={styles.etaOverlay}>
+          <Text style={styles.etaDuration}>{etaDisplay.durationText}</Text>
+          <Text style={styles.etaDetail}>{etaDisplay.arrivalText}  •  {etaDisplay.dist} km</Text>
+        </View>
+      )}
+
+      {/* ── Floating controls ── */}
       {!hideControls && (
         <View style={styles.controls}>
           <TouchableOpacity style={styles.fab} onPress={() => setIsSatellite(s => !s)}>
@@ -527,34 +756,87 @@ const MapLibreView = React.forwardRef<any, MapProps>((props, ref) => {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   map: { flex: 1, backgroundColor: '#0a0e17' },
+  // User dot
+  dotWrap: { width: 30, height: 30, alignItems: 'center', justifyContent: 'center' },
+  dotCore: {
+    width: 22, height: 22, borderRadius: 11,
+    backgroundColor: '#4285F4', borderWidth: 3, borderColor: '#fff',
+    shadowColor: '#4285F4', shadowOpacity: 0.4, shadowRadius: 8, elevation: 6,
+  },
+  dotRing: {
+    position: 'absolute', width: 50, height: 50, borderRadius: 25,
+    backgroundColor: 'rgba(66,133,244,0.15)',
+  },
+  // Arrow
+  arrowWrap: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  arrowBody: {
+    width: 0, height: 0,
+    borderLeftWidth: 14, borderRightWidth: 14, borderBottomWidth: 34,
+    borderLeftColor: 'transparent', borderRightColor: 'transparent',
+    borderBottomColor: '#4285F4',
+    shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 4, elevation: 8,
+  },
+  // Destination pin
+  destPin: { width: 36, height: 50, alignItems: 'center' },
+  destPinHead: {
+    width: 30, height: 30, borderRadius: 15, backgroundColor: '#EA4335',
+    shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 4, elevation: 6,
+  },
+  destPinDot: {
+    width: 6, height: 6, borderRadius: 3, backgroundColor: '#fff',
+    position: 'absolute', top: 12,
+  },
+  // Spot markers
+  spotMarker: {
+    paddingHorizontal: 10, paddingVertical: 5, borderRadius: 16,
+    borderWidth: 2, borderColor: 'rgba(255,255,255,0.85)',
+    shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 6, elevation: 8,
+  },
+  activeSpotMarker: { borderColor: '#4285F4' },
+  spotMarkerText: { color: '#fff', fontSize: 12, fontWeight: '800' },
+  // Compass
+  compass: {
+    position: 'absolute', top: 80, left: 16,
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: 'rgba(30,41,59,0.95)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 8, elevation: 10,
+  },
+  compassN: { color: '#EA4335', fontSize: 16, fontWeight: '900' },
+  // Speed limit
+  speedLimitBadge: {
+    position: 'absolute', top: 80, right: 16,
+    width: 52, height: 52, borderRadius: 26,
+    backgroundColor: '#fff', borderWidth: 3, borderColor: '#333',
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 8, elevation: 10,
+  },
+  speedLimitOverspeed: { borderColor: '#ea4335', backgroundColor: '#fef2f2' },
+  speedLimitValue: { fontSize: 18, fontWeight: '900', color: '#333' },
+  speedLimitLabel: { fontSize: 6, fontWeight: '700', color: '#666', marginTop: -2 },
+  // ETA
+  etaOverlay: {
+    position: 'absolute', bottom: 120, alignSelf: 'center',
+    backgroundColor: '#0f172a', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)',
+    paddingVertical: 10, paddingHorizontal: 24, borderRadius: 20,
+    shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 12, elevation: 15,
+    alignItems: 'center',
+  },
+  etaDuration: { color: '#10b981', fontWeight: '850', fontSize: 17, letterSpacing: -0.3 },
+  etaDetail: { color: '#94a3b8', fontSize: 12, fontWeight: '700', marginTop: 2 },
+  // Controls
   controls: {
-    position: 'absolute',
-    bottom: 40,
-    right: 16,
-    gap: 12,
-    zIndex: 9999,
+    position: 'absolute', bottom: 40, right: 16, gap: 12, zIndex: 9999,
   },
   fab: {
-    width: 52, height: 52,
-    backgroundColor: 'rgba(30,41,59,0.95)',
-    borderRadius: 26,
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.4,
-    shadowRadius: 6,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
+    width: 52, height: 52, backgroundColor: 'rgba(30,41,59,0.95)',
+    borderRadius: 26, justifyContent: 'center', alignItems: 'center',
+    elevation: 8, shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 6,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)',
   },
-  recenterFab: {
-    backgroundColor: '#4285F4',
-  },
-  exitFab: {
-    backgroundColor: '#ea4335',
-    borderColor: 'rgba(255,255,255,0.3)',
-  },
+  recenterFab: { backgroundColor: '#4285F4' },
+  exitFab: { backgroundColor: '#ea4335', borderColor: 'rgba(255,255,255,0.3)' },
   fabIcon: { fontSize: 22 },
   exitIcon: { fontSize: 20, color: '#fff', fontWeight: 'bold' as const },
 });

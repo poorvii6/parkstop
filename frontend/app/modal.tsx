@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, TextInput, Switch, Alert, Platform, Modal, KeyboardAvoidingView } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, TextInput, Switch, Alert, Platform, Modal, KeyboardAvoidingView, BackHandler } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons, FontAwesome5 } from '@expo/vector-icons';
@@ -78,9 +78,21 @@ export default function ProfileModal() {
     finally { setLoading(false); }
   };
 
+  useEffect(() => {
+    const backAction = () => {
+      if (screen !== 'profile') {
+        setScreen('profile');
+        return true;
+      }
+      return false;
+    };
+
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
+    return () => backHandler.remove();
+  }, [screen]);
+
   const handleBack = () => {
-    const isFinder = (profile?.role || '').toUpperCase() === 'FINDER';
-    if (screen === 'profile' || isFinder) {
+    if (screen === 'profile') {
       if (router.canDismiss()) {
         router.dismiss();
       } else {
@@ -315,12 +327,6 @@ export default function ProfileModal() {
         </View>
 
         {/* Actions */}
-        {role !== 'SPOTTER' && (
-          <TouchableOpacity style={st.switchBtn} onPress={handleSwitchRole}>
-            <Ionicons name="swap-horizontal" size={20} color={C.info} />
-            <Text style={st.switchText}>Switch to {role === 'SPOTTER' ? 'Finder' : 'Spot Owner'}</Text>
-          </TouchableOpacity>
-        )}
 
         <TouchableOpacity style={st.signOutBtn} onPress={handleSignOut}>
           <Ionicons name="log-out-outline" size={20} color={C.error} />

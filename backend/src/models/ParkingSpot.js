@@ -325,13 +325,58 @@ class ParkingSpot {
       }
     });
 
+    // 1. Occupancy Rate Calculation
+    const totalSlotsSum = activeSpots.reduce((acc, s) => acc + (s.total_slots || 0), 0);
+    const availableSlotsSum = activeSpots.reduce((acc, s) => acc + (s.available_slots || 0), 0);
+    const occupiedSlotsSum = Math.max(0, totalSlotsSum - availableSlotsSum);
+    const occupancyRate = totalSlotsSum > 0 ? Number(((occupiedSlotsSum / totalSlotsSum) * 100).toFixed(0)) : 0;
+
+    // 2. Average Booking Duration Calculation (completed bookings)
+    const avgDurationAgg = await prisma.bookings.aggregate({
+      where: {
+        parking_spots: {
+          spotter_id: parseInt(userId)
+        },
+        status: 'completed'
+      },
+      _avg: {
+        hours: true
+      }
+    });
+    const avgDuration = avgDurationAgg._avg.hours ? Number(Number(avgDurationAgg._avg.hours).toFixed(1)) : 0.0;
+
+    // 3. Global Online/Offline Status
+    const allSpots = await prisma.parking_spots.findMany({
+      where: { spotter_id: parseInt(userId) },
+      select: { is_active: true }
+    });
+    const globalOnline = allSpots.length > 0 && allSpots.some(s => s.is_active);
+
+    // 4. Payouts History
+    const payoutHistory = await prisma.payouts.findMany({
+      where: { user_id: parseInt(userId) },
+      orderBy: { created_at: 'desc' },
+      take: 5,
+      select: {
+        id: true,
+        amount: true,
+        status: true,
+        created_at: true,
+        mode: true
+      }
+    });
+
     return {
       active_spots: activeSpotsCount,
       earnings: Number(earnings._sum.spotter_earning || 0),
       revenue_trend: trend,
       surge_factor: Number(avgSurge.toFixed(1)),
       inventory: activeSpots,
-      recent_traffic: recentTraffic
+      recent_traffic: recentTraffic,
+      occupancy_rate: occupancyRate,
+      avg_duration: avgDuration,
+      global_online: globalOnline,
+      payout_history: payoutHistory
     };
   }
 

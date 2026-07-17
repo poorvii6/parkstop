@@ -69,24 +69,52 @@ const config = {
 
 // Validate critical configuration
 function validateEnv() {
-  const requiredEnvVars = [
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  // FATAL: App will not start without these
+  const required = [
     'DATABASE_URL',
     'JWT_SECRET',
     'RAZORPAY_KEY_ID',
-    'RAZORPAY_KEY_SECRET'
+    'RAZORPAY_KEY_SECRET',
+  ];
+
+  // FATAL in production only, warning in development
+  const requiredInProduction = [
+    'FIREBASE_SERVICE_ACCOUNT_JSON',
+  ];
+
+  // WARNING: App starts but features will be degraded
+  const recommended = [
+    { name: 'CLOUDINARY_CLOUD_NAME', feature: 'Image uploads' },
+    { name: 'CLOUDINARY_API_KEY', feature: 'Image uploads' },
+    { name: 'CLOUDINARY_API_SECRET', feature: 'Image uploads' },
+    { name: 'OLA_MAPS_API_KEY', feature: 'Maps search/routing (falls back to Nominatim/OSRM)' },
+    { name: 'STRIPE_SECRET_KEY', feature: 'Stripe payments' },
+    { name: 'RAZORPAY_ACCOUNT_NUMBER', feature: 'Razorpay payouts' },
   ];
 
   const missing = [];
 
-  for (const envVar of requiredEnvVars) {
+  for (const envVar of required) {
     if (!process.env[envVar]) {
       missing.push(envVar);
     }
   }
 
+  for (const envVar of requiredInProduction) {
+    if (!process.env[envVar]) {
+      if (isProduction) {
+        missing.push(envVar);
+      } else {
+        console.warn(`⚠️  ${envVar} is not set — required in production`);
+      }
+    }
+  }
+
   if (missing.length > 0) {
     throw new Error(
-      `Missing environment variables: ${missing.join(', ')}\n` +
+      `Missing required environment variables: ${missing.join(', ')}\n` +
       `Copy .env.example to .env and fill in the values`
     );
   }
@@ -94,6 +122,13 @@ function validateEnv() {
   // Validate JWT secret length
   if (process.env.JWT_SECRET.length < 32) {
     throw new Error('JWT_SECRET must be at least 32 characters long');
+  }
+
+  // Warn about missing recommended vars
+  for (const { name, feature } of recommended) {
+    if (!process.env[name]) {
+      console.warn(`⚠️  ${name} is not set — ${feature} will be unavailable`);
+    }
   }
 
   console.log('✅ Environment variables validated');

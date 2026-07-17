@@ -19,38 +19,37 @@ export default function SplashScreen() {
     const checkAuth = async () => {
       // Shorter delay for premium feel
       await new Promise(resolve => setTimeout(resolve, 2000));
-      
+
       try {
+        // 1. Check if terms have been accepted
         const hasAcceptedTerms = await AsyncStorage.getItem('has_accepted_terms');
         if (hasAcceptedTerms !== 'true') {
           router.replace('/welcome');
           return;
         }
 
+        // 2. Check if user is authenticated
         const token = await AsyncStorage.getItem('access_token');
-        const role = await AsyncStorage.getItem('user_role');
-        const isDualUser = await AsyncStorage.getItem('is_dual_user');
         const isOffline = token === 'offline_token';
         const hasFirebaseUser = auth.currentUser !== null;
 
         if (!hasFirebaseUser && !isOffline) {
           router.replace('/login');
-        } else {
-          const hasAcceptedTerms = await AsyncStorage.getItem('has_accepted_terms');
-          if (hasAcceptedTerms !== 'true') {
-            router.replace('/welcome');
-            return;
-          }
+          return;
+        }
 
-          if (isDualUser === 'true') {
-            router.replace('/role-selection');
-          } else {
-            const r = role ? role.toUpperCase() : '';
-            if (r === 'ADMIN') router.replace('/admin');
-            else if (r === 'SPOTTER') router.replace('/spotter');
-            else if (r === 'FINDER') router.replace('/finder');
-            else router.replace('/role-selection');
-          }
+        // 3. Route authenticated user to the right dashboard
+        const role = await AsyncStorage.getItem('user_role');
+        const isDualUser = await AsyncStorage.getItem('is_dual_user');
+
+        if (isDualUser === 'true') {
+          router.replace('/role-selection');
+        } else {
+          const r = role ? role.toUpperCase() : '';
+          if (r === 'ADMIN') router.replace('/admin');
+          else if (r === 'SPOTTER') router.replace('/spotter');
+          else if (r === 'FINDER') router.replace('/finder');
+          else router.replace('/role-selection');
         }
       } catch (e) {
         router.replace('/login');

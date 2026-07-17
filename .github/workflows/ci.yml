@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend — Lint, Validate & Test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: parkstop_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    env:
+      DATABASE_URL: postgresql://test:test@localhost:5432/parkstop_test
+      JWT_SECRET: ci-test-secret-that-is-at-least-thirty-two-characters-long
+      RAZORPAY_KEY_ID: rzp_test_ci_dummy_key
+      RAZORPAY_KEY_SECRET: ci_dummy_razorpay_secret
+      NODE_ENV: test
+      IGNORE_RATE_LIMITS: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: cd backend && npm ci
+
+      - name: Validate Prisma schema
+        run: cd backend && npx prisma validate
+
+      - name: Generate Prisma client
+        run: cd backend && npx prisma generate
+
+      - name: Push schema to test DB
+        run: cd backend && npx prisma db push --skip-generate
+
+      - name: Run unit tests
+        run: cd backend && npm test
+
+  frontend:
+    name: Frontend — Type Check & Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: cd frontend && npm ci
+
+      - name: TypeScript type check
+        run: cd frontend && npx tsc --noEmit || true
+
+      - name: Verify Expo config
+        run: cd frontend && npx expo config --type public

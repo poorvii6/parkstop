@@ -31,3 +31,4 @@ firebase-service-account.json
 *-service-account.json
 secrets/
 
+test_db.js

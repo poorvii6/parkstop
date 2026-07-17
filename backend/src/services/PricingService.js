@@ -40,17 +40,25 @@ class PricingService {
       let multiplier = 1.0;
 
       /**
-       * ⏱ TIME MULTIPLIER (Disabled for Uber-style strictly demand-based pricing)
+       * ⏱ TIME MULTIPLIER
+       * Controlled by ENABLE_TIME_PRICING env var (default: off)
        */
-      const timeMultiplier = 1.0;
+      const timeMultiplier = process.env.ENABLE_TIME_PRICING === 'true'
+        ? this.getTimeMultiplier(bookingTime)
+        : 1.0;
+      multiplier *= timeMultiplier;
 
       /**
-       * 📍 LOCATION MULTIPLIER (Disabled)
+       * 📍 LOCATION MULTIPLIER
+       * Controlled by ENABLE_LOCATION_PRICING env var (default: off)
        */
-      const locationMultiplier = 1.0;
+      const locationMultiplier = process.env.ENABLE_LOCATION_PRICING === 'true'
+        ? this.getLocationMultiplier(location)
+        : 1.0;
+      multiplier *= locationMultiplier;
 
       /**
-       * 🔥 DEMAND MULTIPLIER
+       * 🔥 DEMAND MULTIPLIER (always active)
        */
       let demandMultiplier = 1.0;
       if (spotId) {

@@ -1,50 +1,115 @@
-# Welcome to your Expo app 👋
+# ParkStop — Frontend (Mobile & Web)
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Cross-platform app for the ParkStop parking marketplace, built with React Native and Expo.
+Runs on **iOS, Android, and web** from a single codebase.
 
-## Get started
+**Stack:** React Native 0.81, React 19, Expo SDK 54, expo-router (file-based routing),
+TypeScript, MapLibre GL + Google Maps, Firebase (auth & push), Stripe + Razorpay SDKs,
+Socket.IO client.
 
-1. Install dependencies
+---
 
-   ```bash
-   npm install
-   ```
+## Prerequisites
 
-2. Start the app
+- **Node.js 20+**
+- The **ParkStop backend** running and reachable (see `../backend/README.md`)
+- For device testing: the **Expo Go** app, or a development build
+- For native builds: Xcode (iOS) and/or Android Studio
 
-   ```bash
-   npx expo start
-   ```
+---
 
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Setup
 
 ```bash
-npm run reset-project
+cd frontend
+
+# 1. Install dependencies
+npm install
+
+# 2. Configure environment
+cp .env.example .env
+#    Fill in the values. At minimum set EXPO_PUBLIC_API_URL to your backend
+#    (e.g. http://localhost:3000/api/v1) plus the Firebase web config.
+
+# 3. Start the dev server
+npm run dev        # = npx expo start
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+From the Expo dev server you can open the app in:
 
-## Learn more
+- **Expo Go** (scan the QR code) — quickest, limited native modules
+- an **Android emulator** (`npm run android`)
+- an **iOS simulator** (`npm run ios`)
+- the **web browser** (`npm run web`)
 
-To learn more about developing your project with Expo, look at the following resources:
+> Some features (background location, native Stripe, MapLibre) require a **development build**
+> rather than Expo Go. See the [Expo development builds guide](https://docs.expo.dev/develop/development-builds/introduction/).
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+---
 
-## Join the community
+## Environment variables
 
-Join our community of developers creating universal apps.
+Frontend env vars **must** be prefixed with `EXPO_PUBLIC_` to be readable in the app. The
+template in [`.env.example`](.env.example) documents each one. Key variables:
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+- `EXPO_PUBLIC_API_URL` — **[REQUIRED]** the backend base URL (`.../api/v1`)
+- `EXPO_PUBLIC_FIREBASE_*` — **[REQUIRED]** Firebase web config for auth
+- `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` — for Google sign-in
+- `EXPO_PUBLIC_STRIPE_KEY` — Stripe publishable key
+
+---
+
+## Scripts
+
+| Command           | What it does                          |
+| ----------------- | ------------------------------------- |
+| `npm run dev`     | Start the Expo dev server             |
+| `npm run android` | Open on an Android emulator/device    |
+| `npm run ios`     | Open on an iOS simulator/device       |
+| `npm run web`     | Run in the browser                    |
+| `npm run build`   | Export the web build                  |
+
+---
+
+## Project structure
+
+```
+frontend/
+├── app/                     # Screens — file-based routes (expo-router)
+│   ├── _layout.tsx          # Root layout / navigation
+│   ├── index.tsx            # Entry / splash
+│   ├── welcome.tsx          # Onboarding
+│   ├── login.tsx            # Auth
+│   ├── register.tsx
+│   ├── role-selection.tsx   # Choose Finder / Spotter
+│   ├── finder/              # Finder (driver) experience — map, booking, checkout
+│   ├── spotter/             # Spotter (owner) experience — spots, verify, payouts, support
+│   └── admin/               # Admin views
+├── components/              # Reusable UI (maps, search, themed primitives)
+├── services/                # API client, Firebase, notifications, location, offline cache
+├── hooks/                   # Custom hooks (location tracking, theming, color scheme)
+├── constants/               # Theme & design tokens
+└── assets/                  # Images, icons, fonts
+```
+
+Routing is **file-based**: files under `app/` become routes automatically. Folders like
+`finder/` and `spotter/` group each role's screens.
+
+---
+
+## Talking to the backend
+
+- **REST** requests go through the shared Axios client (`services/`), using
+  `EXPO_PUBLIC_API_URL` and attaching the Firebase ID token as a `Bearer` header.
+- **Realtime** uses the Socket.IO client, connecting to the same host with the `/api/v1`
+  suffix stripped, for live booking and location events.
+
+---
+
+## Troubleshooting
+
+- **Network request failed / can't reach API** — on a physical device, `localhost` points at
+  the phone, not your computer. Use your machine's LAN IP (or an ngrok/tunnel URL) in
+  `EXPO_PUBLIC_API_URL`.
+- **Env changes not picked up** — restart the Expo dev server after editing `.env`.
+- **Native module missing in Expo Go** — build a development build instead.

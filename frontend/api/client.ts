@@ -12,8 +12,8 @@ const getAPIUrlSync = () => {
   if (cachedApiUrl) return cachedApiUrl;
 
   let apiUrl = process.env.EXPO_PUBLIC_API_URL || Platform.select({
-    android: Device.isDevice ? 'https://parkstop-production.up.railway.app/api/v1' : 'http://10.0.2.2:3000/api/v1',
-    ios: 'http://localhost:3000/api/v1',
+    android: 'https://parkstop-production.up.railway.app/api/v1',
+    ios: 'https://parkstop-production.up.railway.app/api/v1',
     default: 'https://parkstop-production.up.railway.app/api/v1',
   })!;
 
@@ -90,16 +90,27 @@ apiClient.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// RESPONSE INTERCEPTOR: Handle 401 Unauthorized globally
+// RESPONSE INTERCEPTOR: Retry on 502/503 (Railway cold start), handle 401
 apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
-    if (error.response && error.response.status === 401) {
+    const config = error.config;
+    const status = error.response?.status;
+
+    // Retry once on 502/503 (server waking up) with a short delay
+    if ((status === 502 || status === 503) && config && !config._retried) {
+      config._retried = true;
+      if (__DEV__) console.log(`[API] Got ${status}, retrying in 2s...`);
+      await new Promise(r => setTimeout(r, 2000));
+      return apiClient(config);
+    }
+
+    if (status === 401) {
       if (__DEV__) console.log('[API] Request returned 401 Unauthorized - Redirecting to login.');
-      
+
       // Clear local session storage
       await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user_role']);
-      
+
       try {
         await auth.signOut();
       } catch (signOutErr) {
@@ -110,7 +121,7 @@ apiClient.interceptors.response.use(
         const { Alert } = require('react-native');
         Alert.alert('Session Expired', 'Please log in again.', [{ text: 'OK' }]);
       }
-      
+
       const { router } = require('expo-router');
       router.replace('/login');
     }

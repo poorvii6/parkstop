@@ -23,10 +23,18 @@ export default function WelcomeScreen() {
     if (!isChecked) return;
     try {
       await AsyncStorage.setItem('has_accepted_terms', 'true');
-      if (role === 'ADMIN') router.replace('/admin');
-      else if (role === 'SPOTTER') router.replace('/spotter');
-      else if (role === 'FINDER') router.replace('/finder');
-      else router.replace('/register');
+
+      // If user is already logged in, go to their dashboard
+      const hasFirebaseUser = auth.currentUser !== null;
+      if (hasFirebaseUser && role) {
+        if (role === 'ADMIN') router.replace('/admin');
+        else if (role === 'SPOTTER') router.replace('/spotter');
+        else if (role === 'FINDER') router.replace('/finder');
+        else router.replace('/role-selection');
+      } else {
+        // New user — send to register
+        router.replace('/register');
+      }
     } catch (e) {
       console.error('Error saving terms acceptance:', e);
     }

@@ -13,9 +13,12 @@ import { registerForPushNotificationsAsync } from '../../services/notifications'
 import { io, Socket } from 'socket.io-client';
 import * as Location from 'expo-location';
 import * as Haptics from 'expo-haptics';
+import * as Speech from 'expo-speech';
 import { Ionicons } from '@expo/vector-icons';
 import { BlueprintTheme, BlueprintColors } from '../../constants/BlueprintTheme';
 import apiClient from '../../api/client';
+import { startBackgroundLocation, stopBackgroundLocation, onBackgroundLocation } from '../../services/backgroundLocation';
+import { cacheRouteCorridor, clearOfflinePack } from '../../services/offlineTileCache';
 
 const { width } = Dimensions.get('window');
 
@@ -112,9 +115,21 @@ export default function FinderDashboard() {
   const [arrivalDetected, setArrivalDetected] = useState(false);
   const [simulatedLocation, setSimulatedLocation] = useState<{ lat: number, lng: number } | null>(null);
   const [routeCoords, setRouteCoords] = useState<{ latitude: number, longitude: number }[]>([]);
+  const [altRoutes, setAltRoutes] = useState<Array<{ coords: Array<{ latitude: number; longitude: number }>; duration: number; distance: number }>>([]);
   const [currentRouteIndex, setCurrentRouteIndex] = useState(0);
-  const [distanceInfo, setDistanceInfo] = useState({ miles: '0', mins: '0' });
+  const [distanceInfo, setDistanceInfo] = useState({ km: '0', mins: '0' });
   const [currentInstruction, setCurrentInstruction] = useState({ turn: '', street: '', icon: '' });
+  const [nextTurnPreview, setNextTurnPreview] = useState({ turn: '', icon: '' });
+  const [trafficSegments, setTrafficSegments] = useState<Array<{ coords: Array<[number, number]>; congestion: 'low' | 'moderate' | 'heavy' | 'severe' }>>([]);
+  const [speedLimit, setSpeedLimit] = useState<number | null>(null);
+  const [laneGuidance, setLaneGuidance] = useState<Array<{ indications: string[]; valid: boolean }>>([]);
+  const lastSpeedLimitFetch = useRef(0);
+  const [mapStyleConfig, setMapStyleConfig] = useState<{ styleUrl?: string; apiKey?: string; provider?: string }>({});
+  const [navLanguage, setNavLanguage] = useState<string>('en-IN');
+  const lastSnapFetch = useRef(0);
+  const lastLandmarkFetch = useRef(0);
+  const landmarkCache = useRef<Map<string, string>>(new Map());
+  const lastHapticTurn = useRef('');
   const routeStepsRef = useRef<any[]>([]);
   const ignoreNextQueryChange = useRef(false);
   const [chatOpen, setChatOpen] = useState(false);
@@ -145,6 +160,7 @@ export default function FinderDashboard() {
   const [searchedPlace, setSearchedPlace] = useState<{ lat: number, lng: number, title: string } | null>(null);
   const [isFollowing, setIsFollowing] = useState(true);
   const [isMuted, setIsMuted] = useState(false);
+  useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
   const [deviceHeading, setDeviceHeading] = useState(0);
   // Refs for GPS tracking logic
   const lastAnimatedHeading = useRef(0);
@@ -152,6 +168,10 @@ export default function FinderDashboard() {
   const lastRouteFetch = useRef(0);
   const lastRouteDest = useRef<string | null>(null);
   const lastUpdateCoords = useRef({ lat: 0, lng: 0 });
+  const lastRerouteTime = useRef(0);
+  const lastVoiceInstruction = useRef('');
+  const lastVoiceDistance = useRef(0);
+  const isMutedRef = useRef(false);
 
 
   const [selectedSpotId, setSelectedSpotId] = useState<string | null>(null);
@@ -180,6 +200,13 @@ export default function FinderDashboard() {
   const [showPaymentMethodModal, setShowPaymentMethodModal] = useState(false);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'online' | 'cash'>('online');
 
+  // Default payment method to what was chosen at booking time
+  useEffect(() => {
+    if (step === 'payment' && bookingDetails?.payment_mode) {
+      setSelectedPaymentMethod(bookingDetails.payment_mode === 'cash' ? 'cash' : 'online');
+    }
+  }, [step]);
+
   useEffect(() => {
     if (step !== 'active_parking') {
       setElapsedMinutes(0);
@@ -196,7 +223,7 @@ export default function FinderDashboard() {
     };
 
     updateTimer();
-    const interval = setInterval(updateTimer, 30000); // update every 30 seconds
+    const interval = setInterval(updateTimer, 1000); // update every second for live feel
 
     return () => clearInterval(interval);
   }, [step, bookingDetails]);
@@ -220,6 +247,7 @@ export default function FinderDashboard() {
 
     const delayDebounceFn = setTimeout(async () => {
       setIsCalculatingPrice(true);
+      const spot = spots.find(s => s.id === selectedSpotId);
       try {
         const res = await apiClient.post('/bookings/calculate-price', {
           spot_id: parseInt(selectedSpotId, 10),
@@ -229,8 +257,12 @@ export default function FinderDashboard() {
         if (res.data.success) {
           setCalculatedPrice(res.data.data.total_price);
         }
-      } catch (err) {
-        console.error('Failed to calculate dynamic price', err);
+      } catch (err: any) {
+        console.warn('Dynamic price API failed, using local estimate', err?.response?.status);
+        // Local fallback: base rate × hours (no surge)
+        if (spot?.price_per_hour) {
+          setCalculatedPrice(Number((spot.price_per_hour * hours).toFixed(2)));
+        }
       } finally {
         setIsCalculatingPrice(false);
       }
@@ -264,6 +296,12 @@ export default function FinderDashboard() {
         }
         setIsFollowing(true);
         setStep('en_route');
+        // Phase 3: Start background location + cache tiles
+        startBackgroundLocation().catch(() => {});
+        if (routeCoords.length > 2) {
+          const styleUrl = mapStyleConfig.provider === 'ola' ? mapStyleConfig.styleUrl : undefined;
+          cacheRouteCorridor(routeCoords, styleUrl).catch(() => {});
+        }
       }
       return;
     }
@@ -421,6 +459,25 @@ export default function FinderDashboard() {
         return (oldH + diff * alpha + 360) % 360;
       };
 
+      // Simple Kalman filter for GPS smoothing
+      let kalmanLat = { estimate: 0, error: 1, initialized: false };
+      let kalmanLng = { estimate: 0, error: 1, initialized: false };
+      const kalmanUpdate = (state: typeof kalmanLat, measurement: number, accuracy: number) => {
+        const measureNoise = Math.max(accuracy * 0.00001, 0.000005); // convert ~meters to ~degrees
+        const processNoise = 0.000003; // process noise (movement uncertainty)
+        if (!state.initialized) {
+          state.estimate = measurement;
+          state.error = measureNoise;
+          state.initialized = true;
+          return measurement;
+        }
+        state.error += processNoise;
+        const gain = state.error / (state.error + measureNoise);
+        state.estimate += gain * (measurement - state.estimate);
+        state.error *= (1 - gain);
+        return state.estimate;
+      };
+
       const startRealTracking = async () => {
         try {
           locationSub = await Location.watchPositionAsync({
@@ -428,7 +485,11 @@ export default function FinderDashboard() {
             timeInterval: 1000,
             distanceInterval: 5,
           }, (loc) => {
-            const coords = { lat: loc.coords.latitude, lng: loc.coords.longitude };
+            const gpsAccuracy = loc.coords.accuracy || 10;
+            // Apply Kalman filter to smooth GPS jitter
+            const smoothLat = kalmanUpdate(kalmanLat, loc.coords.latitude, gpsAccuracy);
+            const smoothLng = kalmanUpdate(kalmanLng, loc.coords.longitude, gpsAccuracy);
+            const coords = { lat: smoothLat, lng: smoothLng };
             setSimulatedLocation(coords);
             setUserLocation(coords);
 
@@ -446,72 +507,339 @@ export default function FinderDashboard() {
               heading: lastAnimatedHeading.current
             });
 
-            // Distance to destination via road factor (~1.3x straight-line in cities)
+            // Calculate remaining distance along actual route
             const straightKm = getDistanceKm(coords.lat, coords.lng, spot.lat, spot.lng);
-            const roadKm = straightKm * 1.3;
-            const avgSpeedKmh = speedKmh > 8 ? speedKmh : 25; // Assume 25 km/h in city
-            const etaMins = Math.max(1, Math.ceil((roadKm / avgSpeedKmh) * 60));
+            const currentRoute = routeCoords;
+            let remainingKm = straightKm * 1.3; // fallback
+            let closestIdx = 0;
+            if (currentRoute.length >= 2) {
+              let closestDist = Infinity;
+              for (let ri = 0; ri < currentRoute.length; ri++) {
+                const d = getDistanceKm(coords.lat, coords.lng, currentRoute[ri].latitude, currentRoute[ri].longitude);
+                if (d < closestDist) { closestDist = d; closestIdx = ri; }
+              }
+              let segDist = 0;
+              for (let ri = closestIdx; ri < currentRoute.length - 1; ri++) {
+                segDist += getDistanceKm(
+                  currentRoute[ri].latitude, currentRoute[ri].longitude,
+                  currentRoute[ri + 1].latitude, currentRoute[ri + 1].longitude
+                );
+              }
+              if (segDist > 0.01) remainingKm = segDist;
+            }
+
+            // Traffic-adjusted ETA: sum remaining step durations instead of speed guessing
+            let etaMins = 0;
+            const stepsForEta = routeStepsRef.current;
+            if (stepsForEta.length > 0) {
+              // Sum duration from all remaining steps (already traffic-aware from Ola Maps)
+              let sumDurationSec = 0;
+              let foundCurrent = false;
+              for (const st of stepsForEta) {
+                // Count all remaining steps (they've been trimmed by the step-consumption logic)
+                sumDurationSec += (st.duration || 0);
+              }
+              etaMins = Math.max(1, Math.ceil(sumDurationSec / 60));
+            } else {
+              // Fallback to speed-based estimate
+              const avgSpeedKmh = speedKmh > 8 ? speedKmh : 25;
+              etaMins = Math.max(1, Math.ceil((remainingKm / avgSpeedKmh) * 60));
+            }
 
             setDistanceInfo({
-              miles: roadKm.toFixed(1), // We display as "km" in the UI
+              km: remainingKm.toFixed(1),
               mins: etaMins.toString()
             });
 
-            // Turn-by-turn: consume steps based on proximity to maneuver location
-            const stepsArr = [...routeStepsRef.current];
-            if (stepsArr.length > 0) {
-              const activeStep = stepsArr[0];
-              const maneuverLoc = activeStep?.maneuver?.location;
+            // Periodic traffic re-fetch: every 60s, re-request route for updated traffic ETA
+            const now = Date.now();
+            if (now - lastRouteFetch.current > 60000 && remainingKm > 0.3) {
+              lastRouteFetch.current = now;
+              apiClient.get(`/maps/route?start=${coords.lng},${coords.lat}&end=${spot.lng},${spot.lat}&alternatives=false`)
+                .then((rRes: any) => {
+                  if (rRes.data.success) {
+                    const rRoute = rRes.data.data.routes?.[0];
+                    if (rRoute?.legs?.[0]?.steps) {
+                      routeStepsRef.current = rRoute.legs[0].steps;
+                      // Update traffic segments
+                      const segs: Array<{ coords: Array<[number, number]>; congestion: 'low' | 'moderate' | 'heavy' | 'severe' }> = [];
+                      for (const s of rRoute.legs[0].steps) {
+                        if (s.geometry?.coordinates && s.geometry.coordinates.length >= 2 && s.duration > 0) {
+                          const segSpd = (s.distance / s.duration) * 3.6;
+                          let cong: 'low' | 'moderate' | 'heavy' | 'severe' = 'low';
+                          if (segSpd < 10) cong = 'severe';
+                          else if (segSpd < 25) cong = 'heavy';
+                          else if (segSpd < 45) cong = 'moderate';
+                          segs.push({ coords: s.geometry.coordinates, congestion: cong });
+                        }
+                      }
+                      setTrafficSegments(segs);
+                    }
+                    if (rRoute) {
+                      setRouteCoords(rRoute.geometry.coordinates.map((p: any) => ({ latitude: p[1], longitude: p[0] })));
+                    }
+                  }
+                })
+                .catch(() => {});
+            }
 
-              // Calculate distance to the maneuver point
-              let distToManeuver = Infinity;
-              if (maneuverLoc) {
-                distToManeuver = getDistanceKm(coords.lat, coords.lng, maneuverLoc[1], maneuverLoc[0]) * 1000; // in meters
-              }
+            // Speed limit fetch: every 30s
+            if (now - lastSpeedLimitFetch.current > 30000) {
+              lastSpeedLimitFetch.current = now;
+              apiClient.get(`/maps/speed-limit?lat=${coords.lat}&lng=${coords.lng}`)
+                .then((slRes: any) => {
+                  if (slRes.data.success && slRes.data.data.speedLimit) {
+                    setSpeedLimit(slRes.data.data.speedLimit);
+                  }
+                })
+                .catch(() => {});
+            }
 
-              // Pop step if within 30m of its maneuver point
-              if (distToManeuver < 30 && stepsArr.length > 1) {
-                stepsArr.shift();
-                routeStepsRef.current = stepsArr;
-              }
-
-              if (activeStep?.maneuver) {
-                const type = activeStep.maneuver.type;
-                const modifier = activeStep.maneuver.modifier || '';
-                const name = activeStep.name || '';
-                let action = 'Continue straight';
-                let icon = '⬆️';
-
-                if (type === 'turn' || type === 'end of road' || type === 'fork') {
-                  if (modifier.includes('sharp right')) { action = 'Sharp right'; icon = '↪️'; }
-                  else if (modifier.includes('slight right')) { action = 'Slight right'; icon = '↗️'; }
-                  else if (modifier.includes('right')) { action = 'Turn right'; icon = '➡️'; }
-                  else if (modifier.includes('sharp left')) { action = 'Sharp left'; icon = '↩️'; }
-                  else if (modifier.includes('slight left')) { action = 'Slight left'; icon = '↖️'; }
-                  else if (modifier.includes('left')) { action = 'Turn left'; icon = '⬅️'; }
-                  else if (modifier.includes('uturn')) { action = 'U-turn'; icon = '↩️'; }
-                } else if (type === 'roundabout' || type === 'rotary') {
-                  action = 'Enter roundabout'; icon = '🔄';
-                } else if (type === 'merge') {
-                  action = 'Merge'; icon = '↗️';
-                } else if (type === 'arrive') {
-                  action = 'You have arrived'; icon = '📍';
+            // ── Phase 4: Server-side snap-to-road (every 5s) ──
+            if (now - lastSnapFetch.current > 5000) {
+              lastSnapFetch.current = now;
+              apiClient.post('/maps/snap-to-road', {
+                points: [{ lat: coords.lat, lng: coords.lng }]
+              }).then((snapRes: any) => {
+                const snapped = snapRes.data?.data?.snapped;
+                if (snapped?.length > 0 && snapped[0].lat && snapped[0].lng) {
+                  setSimulatedLocation({ lat: snapped[0].lat, lng: snapped[0].lng });
                 }
+              }).catch(() => {});
+            }
 
-                // Show distance to next maneuver
-                const distText = distToManeuver < 1000
-                  ? `In ${Math.round(distToManeuver)} m`
-                  : `In ${(distToManeuver / 1000).toFixed(1)} km`;
-                const streetText = name ? `${distText} • ${name}` : distText;
+            // Turn-by-turn: consume steps and find the next meaningful maneuver
+            const stepsArr = [...routeStepsRef.current];
 
-                setCurrentInstruction({ turn: action, street: streetText, icon });
+            // Pop all steps whose maneuver point we've already passed (within 30m)
+            while (stepsArr.length > 1) {
+              const loc = stepsArr[0]?.maneuver?.location;
+              if (!loc) break;
+              const d = getDistanceKm(coords.lat, coords.lng, loc[1], loc[0]) * 1000;
+              if (d < 30) { stepsArr.shift(); } else { break; }
+            }
+            routeStepsRef.current = stepsArr;
+
+            // Helper: parse a maneuver step into action + icon
+            const parseManeuver = (s: any) => {
+              if (!s?.maneuver) return { action: 'Head straight', icon: '⬆️' };
+              const type = s.maneuver.type;
+              const modifier = s.maneuver.modifier || '';
+              const sName = s.name || '';
+              let action = 'Head straight';
+              let icon = '⬆️';
+              if (type === 'turn' || type === 'end of road' || type === 'fork') {
+                if (modifier.includes('sharp right')) { action = 'Sharp right'; icon = '↪️'; }
+                else if (modifier.includes('slight right')) { action = 'Bear right'; icon = '↗️'; }
+                else if (modifier.includes('right')) { action = 'Turn right'; icon = '➡️'; }
+                else if (modifier.includes('sharp left')) { action = 'Sharp left'; icon = '↩️'; }
+                else if (modifier.includes('slight left')) { action = 'Bear left'; icon = '↖️'; }
+                else if (modifier.includes('left')) { action = 'Turn left'; icon = '⬅️'; }
+                else if (modifier.includes('uturn')) { action = 'Make a U-turn'; icon = '↩️'; }
+                else { action = 'Continue'; icon = '⬆️'; }
+              } else if (type === 'roundabout' || type === 'rotary') {
+                action = 'Enter roundabout'; icon = '🔄';
+              } else if (type === 'merge') {
+                if (modifier.includes('left')) { action = 'Merge left'; icon = '↖️'; }
+                else if (modifier.includes('right')) { action = 'Merge right'; icon = '↗️'; }
+                else { action = 'Merge'; icon = '↗️'; }
+              } else if (type === 'depart') {
+                action = 'Head ' + (modifier || 'straight'); icon = '⬆️';
+              } else if (type === 'arrive') {
+                action = 'Arriving at destination'; icon = '📍';
+              } else if (type === 'new name' || type === 'continue') {
+                action = sName ? `Continue on ${sName}` : 'Continue straight';
+                icon = '⬆️';
+              }
+              return { action, icon };
+            };
+
+            // Find next meaningful turn (skip 'continue' / 'depart' / 'new name' steps)
+            let displayStep = stepsArr[0];
+            let displayDist = Infinity;
+            let displayIdx = 0;
+            for (let si = 0; si < stepsArr.length; si++) {
+              const s = stepsArr[si];
+              const t = s?.maneuver?.type || '';
+              if (['turn', 'end of road', 'fork', 'roundabout', 'rotary', 'merge', 'arrive'].includes(t)) {
+                displayStep = s;
+                displayIdx = si;
+                if (s.maneuver?.location) {
+                  displayDist = getDistanceKm(coords.lat, coords.lng, s.maneuver.location[1], s.maneuver.location[0]) * 1000;
+                }
+                break;
+              }
+              if (si === 0 && s?.maneuver?.location) {
+                displayDist = getDistanceKm(coords.lat, coords.lng, s.maneuver.location[1], s.maneuver.location[0]) * 1000;
               }
             }
 
-            // Arrival detection: within ~50m
-            if (straightKm < 0.05) {
+            // Fallback: if no turn found, use first step
+            if (displayStep?.maneuver?.location && displayDist === Infinity) {
+              displayDist = getDistanceKm(coords.lat, coords.lng, displayStep.maneuver.location[1], displayStep.maneuver.location[0]) * 1000;
+            }
+
+            // Find the NEXT meaningful turn after the current one (for "then" preview)
+            let nextStep: any = null;
+            for (let si = displayIdx + 1; si < stepsArr.length; si++) {
+              const t = stepsArr[si]?.maneuver?.type || '';
+              if (['turn', 'end of road', 'fork', 'roundabout', 'rotary', 'merge', 'arrive'].includes(t)) {
+                nextStep = stepsArr[si];
+                break;
+              }
+            }
+
+            if (displayStep?.maneuver) {
+              const { action, icon } = parseManeuver(displayStep);
+              const name = displayStep.name || '';
+
+              // Distance text
+              let distText = '';
+              if (displayDist < 50) { distText = 'Now'; }
+              else if (displayDist < 1000) { distText = `${Math.round(displayDist / 10) * 10} m`; }
+              else { distText = `${(displayDist / 1000).toFixed(1)} km`; }
+
+              const streetText = name
+                ? (distText === 'Now' ? name : `${distText} · ${name}`)
+                : distText;
+
+              setCurrentInstruction({ turn: action, street: streetText, icon });
+
+              // ── Phase 4: Landmark fetch for next turn ──
+              if (now - lastLandmarkFetch.current > 15000 && displayStep?.maneuver?.location) {
+                const turnLoc = displayStep.maneuver.location;
+                const cacheKey = `${turnLoc[1].toFixed(4)},${turnLoc[0].toFixed(4)}`;
+                if (!landmarkCache.current.has(cacheKey)) {
+                  lastLandmarkFetch.current = now;
+                  apiClient.get(`/maps/nearby-pois?lat=${turnLoc[1]}&lng=${turnLoc[0]}&radius=80`)
+                    .then((poiRes: any) => {
+                      const pois = poiRes.data?.data?.pois || [];
+                      if (pois.length > 0) {
+                        landmarkCache.current.set(cacheKey, pois[0].name);
+                      }
+                    }).catch(() => {});
+                }
+              }
+
+              // Lane guidance: show lanes for the current/upcoming step
+              if (displayStep?.lanes && displayStep.lanes.length > 0 && displayDist < 500) {
+                setLaneGuidance(displayStep.lanes);
+              } else {
+                setLaneGuidance([]);
+              }
+
+              // Next-turn preview ("then turn left")
+              if (nextStep && displayDist < 800) {
+                const next = parseManeuver(nextStep);
+                setNextTurnPreview({ turn: `Then ${next.action.toLowerCase()}`, icon: next.icon });
+              } else {
+                setNextTurnPreview({ turn: '', icon: '' });
+              }
+
+              // ── Voice navigation + haptics ──
+              if (displayDist < Infinity) {
+                // Voice at 500m, 200m, and 50m thresholds (don't repeat same tier)
+                let voiceTier = 0;
+                if (displayDist <= 50) voiceTier = 50;
+                else if (displayDist <= 200) voiceTier = 200;
+                else if (displayDist <= 500) voiceTier = 500;
+
+                const voiceKey = `${action}@${voiceTier}`;
+                if (voiceTier > 0 && voiceKey !== lastVoiceInstruction.current) {
+                  lastVoiceInstruction.current = voiceKey;
+
+                  // ── Phase 4: Haptic turn alert ──
+                  const hapticKey = `${action}@${voiceTier}`;
+                  if (hapticKey !== lastHapticTurn.current) {
+                    lastHapticTurn.current = hapticKey;
+                    if (voiceTier === 50) {
+                      // Imminent turn: strong double-pulse
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+                      setTimeout(() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy), 150);
+                    } else if (voiceTier === 200) {
+                      // Approaching: medium pulse
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                    } else {
+                      // 500m warning: light pulse
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                    }
+                  }
+
+                  if (!isMutedRef.current) {
+                    // Build voice text
+                    let voiceText = '';
+                    if (voiceTier === 500) {
+                      voiceText = `In ${Math.round(displayDist / 100) * 100} meters, ${action.toLowerCase()}`;
+                    } else if (voiceTier === 200) {
+                      voiceText = `In ${Math.round(displayDist / 50) * 50} meters, ${action.toLowerCase()}`;
+                    } else {
+                      voiceText = action;
+                    }
+                    if (name && voiceTier >= 200) voiceText += `, on ${name}`;
+
+                    // Phase 4: Landmark enrichment ("turn left after the petrol pump")
+                    if (displayStep?.maneuver?.location && voiceTier >= 200) {
+                      const turnLoc = displayStep.maneuver.location;
+                      const cacheKey = `${turnLoc[1].toFixed(4)},${turnLoc[0].toFixed(4)}`;
+                      const landmark = landmarkCache.current.get(cacheKey);
+                      if (landmark) {
+                        voiceText += `, after ${landmark}`;
+                      }
+                    }
+
+                    // Phase 4: Hindi/regional TTS — translate common instructions
+                    const ttsLang = navLanguage;
+                    if (ttsLang === 'hi-IN') {
+                      // Hindi translations for common nav instructions
+                      voiceText = voiceText
+                        .replace(/Turn right/gi, 'Daayein mudhein')
+                        .replace(/Turn left/gi, 'Baayein mudhein')
+                        .replace(/Sharp right/gi, 'Tez daayein')
+                        .replace(/Sharp left/gi, 'Tez baayein')
+                        .replace(/Bear right/gi, 'Halka daayein')
+                        .replace(/Bear left/gi, 'Halka baayein')
+                        .replace(/Continue straight/gi, 'Seedha chalein')
+                        .replace(/Head straight/gi, 'Seedha chalein')
+                        .replace(/Make a U-turn/gi, 'U-turn lein')
+                        .replace(/Enter roundabout/gi, 'Gol chakkar mein jaayein')
+                        .replace(/In (\d+) meters/gi, '$1 meter mein')
+                        .replace(/Arriving at destination/gi, 'Aap apni manzil par pahunch gaye hain')
+                        .replace(/Rerouting/gi, 'Naya raasta dhundh rahe hain')
+                        .replace(/You have arrived/gi, 'Aap pahunch gaye hain');
+                    } else if (ttsLang === 'ta-IN') {
+                      voiceText = voiceText
+                        .replace(/Turn right/gi, 'Valathupuram thirumbavum')
+                        .replace(/Turn left/gi, 'Idathupuram thirumbavum')
+                        .replace(/Continue straight/gi, 'Neraaga sellavum')
+                        .replace(/Head straight/gi, 'Neraaga sellavum');
+                    } else if (ttsLang === 'te-IN') {
+                      voiceText = voiceText
+                        .replace(/Turn right/gi, 'Kudi vaipunaku thirugandi')
+                        .replace(/Turn left/gi, 'Edama vaipunaku thirugandi')
+                        .replace(/Continue straight/gi, 'Thinnaga vellandi');
+                    } else if (ttsLang === 'kn-IN') {
+                      voiceText = voiceText
+                        .replace(/Turn right/gi, 'Balagade thirugiri')
+                        .replace(/Turn left/gi, 'Edagade thirugiri')
+                        .replace(/Continue straight/gi, 'Neravagi hogiri');
+                    }
+
+                    Speech.speak(voiceText, { rate: 1.0, pitch: 1.0, language: ttsLang });
+                  }
+                }
+              }
+            }
+
+            // Arrival detection: within ~100m straight-line OR < 100m remaining on route
+            if (straightKm < 0.1 || remainingKm < 0.1) {
               setArrivalDetected(true);
               setIsFollowing(false);
+              if (!isMutedRef.current) {
+                const arrText = navLanguage === 'hi-IN' ? 'Aap apni manzil par pahunch gaye hain'
+                  : 'You have arrived at your destination';
+                Speech.speak(arrText, { rate: 1.0, pitch: 1.0, language: navLanguage });
+                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              }
               if (locationSub) {
                 try { locationSub.remove(); } catch (e) {}
                 locationSub = null;
@@ -525,15 +853,34 @@ export default function FinderDashboard() {
 
       startRealTracking();
 
+      // Background location listener — merges BG updates when app is backgrounded
+      const removeBgListener = onBackgroundLocation((bgCoords) => {
+        setUserLocation({ lat: bgCoords.latitude, lng: bgCoords.longitude });
+        setSimulatedLocation({ lat: bgCoords.latitude, lng: bgCoords.longitude });
+        if (bgCoords.heading != null) {
+          setNavigationData(prev => ({ ...prev, heading: bgCoords.heading || prev.heading }));
+        }
+      });
+
       return () => {
         if (locationSub) {
           try { locationSub.remove(); } catch (e) {}
         }
+        removeBgListener();
+        stopBackgroundLocation().catch(() => {});
+        clearOfflinePack().catch(() => {});
+        Speech.stop();
       };
-    } else {
+    } else if (!['arriving'].includes(step)) {
+      // Don't reset arrivalDetected when transitioning to 'arriving' (check-in flow)
       setArrivalDetected(false);
       setSimulatedLocation(null);
-      setDistanceInfo({ miles: '0', mins: '0' });
+      setDistanceInfo({ km: '0', mins: '0' });
+      setTrafficSegments([]);
+      setSpeedLimit(null);
+      setLaneGuidance([]);
+      Speech.stop();
+      lastVoiceInstruction.current = '';
     }
   }, [step, selectedSpotId]);
 
@@ -543,11 +890,13 @@ export default function FinderDashboard() {
       console.log("[NAV] Navigation mode active. Waiting for GPS signal...");
     }
   }, [step, routeCoords]);
+  // Only fetch route when a spot is selected (tapped or booked) — NOT on search alone.
+  // Search just shows the pin + nearby spots; directions appear after selecting a spot.
   useEffect(() => {
     const now = Date.now();
     const destination = selectedSpotId
       ? spots.find(s => s.id === selectedSpotId)
-      : searchedPlace;
+      : null; // No fallback to searchedPlace — routes only for selected spots
 
     const isActiveNav = ['en_route', 'navigating', 'arriving'].includes(step);
     const destId = destination ? String(('id' in destination ? (destination as any).id : '') || `${destination.lat},${destination.lng}`) : null;
@@ -559,13 +908,46 @@ export default function FinderDashboard() {
       (async () => {
         try {
           console.log(`[API] Fetching route from ${userLocation.lat},${userLocation.lng} to ${destination.lat},${destination.lng}`);
-          const res = await apiClient.get(`/maps/route?start=${userLocation.lng},${userLocation.lat}&end=${destination.lng},${destination.lat}`);
+          const isNav = ['en_route', 'navigating', 'arriving'].includes(step);
+          const res = await apiClient.get(`/maps/route?start=${userLocation.lng},${userLocation.lat}&end=${destination.lng},${destination.lat}&alternatives=${!isNav}`);
           if (res.data.success) {
-            const route = res.data.data.routes[0];
-            console.log(`[API] Route found! ${route.geometry.coordinates.length} points.`);
+            const routes = res.data.data.routes || [];
+            const route = routes[0];
+            console.log(`[API] Route found! ${route.geometry.coordinates.length} points. ${routes.length} alternatives.`);
             setRouteCoords(route.geometry.coordinates.map((p: any) => ({ latitude: p[1], longitude: p[0] })));
-            setDistanceInfo({ miles: (route.distance / 1609.34).toFixed(1), mins: Math.ceil(route.duration / 60).toString() });
-            if (route.legs?.[0]?.steps) routeStepsRef.current = route.legs[0].steps;
+            setDistanceInfo({ km: (route.distance / 1000).toFixed(1), mins: Math.ceil(route.duration / 60).toString() });
+            if (route.legs?.[0]?.steps) {
+              routeStepsRef.current = route.legs[0].steps;
+              // Compute traffic segments from step-level speed data
+              const steps = route.legs[0].steps;
+              const segments: Array<{ coords: Array<[number, number]>; congestion: 'low' | 'moderate' | 'heavy' | 'severe' }> = [];
+              for (const s of steps) {
+                if (s.geometry?.coordinates && s.geometry.coordinates.length >= 2 && s.duration > 0) {
+                  // Speed in km/h for this segment
+                  const segSpeedKmh = (s.distance / s.duration) * 3.6;
+                  let congestion: 'low' | 'moderate' | 'heavy' | 'severe' = 'low';
+                  if (segSpeedKmh < 10) congestion = 'severe';
+                  else if (segSpeedKmh < 25) congestion = 'heavy';
+                  else if (segSpeedKmh < 45) congestion = 'moderate';
+                  segments.push({ coords: s.geometry.coordinates, congestion });
+                }
+              }
+              setTrafficSegments(segments);
+              // Extract lane guidance for first meaningful step
+              const firstLaneStep = steps.find((s: any) => s.lanes && s.lanes.length > 0);
+              if (firstLaneStep) setLaneGuidance(firstLaneStep.lanes);
+              else setLaneGuidance([]);
+            }
+            // Store alternative routes (skip first — that's the primary)
+            if (!isNav && routes.length > 1) {
+              setAltRoutes(routes.slice(1).map((r: any) => ({
+                coords: r.geometry.coordinates.map((p: any) => ({ latitude: p[1], longitude: p[0] })),
+                duration: r.duration,
+                distance: r.distance,
+              })));
+            } else {
+              setAltRoutes([]);
+            }
           }
         } catch (e) {
           console.log("Route fetch throttled/failed");
@@ -573,9 +955,21 @@ export default function FinderDashboard() {
       })();
     } else if (!destination) {
       setRouteCoords([]);
+      setAltRoutes([]);
     }
-  }, [selectedSpotId, searchedPlace, userLocation, spots, step]);
+  }, [selectedSpotId, userLocation, spots, step]);
 
+
+  // Fetch map style config (Ola Maps vector tiles or Carto fallback)
+  useEffect(() => {
+    apiClient.get('/maps/style')
+      .then((res: any) => {
+        if (res.data.success && res.data.data) {
+          setMapStyleConfig(res.data.data);
+        }
+      })
+      .catch(() => {}); // silently fallback to Carto defaults
+  }, []);
 
   useEffect(() => {
     registerForPushNotificationsAsync();
@@ -837,6 +1231,7 @@ export default function FinderDashboard() {
           }, { duration: 1200 });
         }
         await fetchNearbySpots(parseFloat(lat), parseFloat(lon), 1000);
+        setIsSearching(false);
       } else {
         throw new Error("No results");
       }
@@ -913,14 +1308,36 @@ export default function FinderDashboard() {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
+  const [recentSearches, setRecentSearches] = useState<any[]>([]);
+  const [searchFocused, setSearchFocused] = useState(false);
+
+  // Load recent searches on mount
+  useEffect(() => {
+    AsyncStorage.getItem('parkstop_recent_searches').then(data => {
+      if (data) setRecentSearches(JSON.parse(data));
+    }).catch(() => {});
+  }, []);
+
+  const saveRecentSearch = async (item: any) => {
+    try {
+      const existing = recentSearches.filter(r => r.display_name !== item.display_name);
+      const updated = [item, ...existing].slice(0, 5);
+      setRecentSearches(updated);
+      await AsyncStorage.setItem('parkstop_recent_searches', JSON.stringify(updated));
+    } catch (e) {}
+  };
+
   const selectSuggestion = async (item: any) => {
     const lat = parseFloat(item.lat);
     const lon = parseFloat(item.lon);
     const name = item.display_name;
 
+    saveRecentSearch(item);
     ignoreNextQueryChange.current = true;
     setSearchQuery(name);
     setSuggestions([]);
+    setIsSearching(false);
+    setSearchFocused(false);
     Keyboard.dismiss();
 
     // First: show the destination pin on the map
@@ -970,10 +1387,12 @@ export default function FinderDashboard() {
             if (currentBooking) {
               if (step === 'arriving' && (currentBooking.status === 'active' || currentBooking.status === 'occupied')) {
                 setBookingDetails({ ...bookingDetails, ...currentBooking });
+                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
                 setStep('active_parking');
                 clearInterval(pollInterval);
               } else if (step === 'checkout_verification' && currentBooking.status === 'completed') {
                 setBookingDetails({ ...bookingDetails, ...currentBooking });
+                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
                 setStep('payment');
                 clearInterval(pollInterval);
               }
@@ -1424,10 +1843,12 @@ export default function FinderDashboard() {
                 value={searchQuery}
                 onChangeText={setSearchQuery}
                 onSubmitEditing={handleSearch}
+                onFocus={() => setSearchFocused(true)}
+                onBlur={() => setTimeout(() => setSearchFocused(false), 200)}
                 returnKeyType="search"
               />
               {searchQuery.length > 0 && (
-                <TouchableOpacity onPress={() => { setSearchQuery(''); setSuggestions([]); setSearchedPlace(null); }} style={{ padding: 6, marginRight: 6 }}>
+                <TouchableOpacity onPress={() => { setSearchQuery(''); setSuggestions([]); setSearchedPlace(null); setSearchFocused(false); }} style={{ padding: 6, marginRight: 6 }}>
                   <Text style={{ color: '#94a3b8', fontSize: 16 }}>✕</Text>
                 </TouchableOpacity>
               )}
@@ -1460,25 +1881,43 @@ export default function FinderDashboard() {
               </TouchableOpacity>
             </View>
 
-            {/* Search Suggestions */}
-            {suggestions.length > 0 && (
+            {/* Search Suggestions / Recent Searches */}
+            {(suggestions.length > 0 || (searchFocused && searchQuery.length === 0 && recentSearches.length > 0)) && (
               <View style={{ backgroundColor: '#0f172a', borderRadius: 20, paddingVertical: 8, marginTop: 8, maxHeight: 300, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 20, elevation: 20 }}>
-                <ScrollView style={{ maxHeight: 280 }} keyboardShouldPersistTaps="handled">
-                  {suggestions.map((item, idx) => (
-                    <TouchableOpacity 
-                      key={idx}
-                      style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.04)' }}
-                      onPress={() => selectSuggestion(item)}
-                    >
-                      <View style={{ width: 36, height: 36, backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
-                        <Text style={{ fontSize: 16 }}>📍</Text>
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }} numberOfLines={1}>{item.display_name?.split(',')[0] || item.display_name}</Text>
-                        <Text style={{ color: '#64748b', fontSize: 12, marginTop: 2 }} numberOfLines={1}>{item.display_name}</Text>
-                      </View>
+                {searchQuery.length === 0 && recentSearches.length > 0 && suggestions.length === 0 && (
+                  <View style={{ paddingHorizontal: 16, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <Text style={{ color: '#64748b', fontSize: 12, fontWeight: '800', letterSpacing: 0.5 }}>RECENT</Text>
+                    <TouchableOpacity onPress={async () => { setRecentSearches([]); await AsyncStorage.removeItem('parkstop_recent_searches'); }}>
+                      <Text style={{ color: '#4285F4', fontSize: 12, fontWeight: '700' }}>Clear</Text>
                     </TouchableOpacity>
-                  ))}
+                  </View>
+                )}
+                <ScrollView style={{ maxHeight: 280 }} keyboardShouldPersistTaps="handled">
+                  {(suggestions.length > 0 ? suggestions : recentSearches).map((item, idx) => {
+                    const isInternal = item.isInternal;
+                    const isRecent = suggestions.length === 0;
+                    const distKm = item.distance != null && isFinite(item.distance) ? item.distance : null;
+                    return (
+                      <TouchableOpacity
+                        key={idx}
+                        style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.04)' }}
+                        onPress={() => selectSuggestion(item)}
+                      >
+                        <View style={{ width: 36, height: 36, backgroundColor: isInternal ? 'rgba(66,133,244,0.15)' : 'rgba(255,255,255,0.05)', borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+                          <Ionicons name={isRecent ? 'time-outline' : isInternal ? 'car-outline' : 'location-outline'} size={18} color={isInternal ? '#4285F4' : '#94a3b8'} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }} numberOfLines={1}>{item.display_name?.split(',')[0] || item.display_name}</Text>
+                          <Text style={{ color: '#64748b', fontSize: 12, marginTop: 2 }} numberOfLines={1}>{item.display_name}</Text>
+                        </View>
+                        {distKm !== null && (
+                          <Text style={{ color: '#64748b', fontSize: 11, fontWeight: '700', marginLeft: 8 }}>
+                            {distKm < 1 ? `${Math.round(distKm * 1000)}m` : `${distKm.toFixed(1)}km`}
+                          </Text>
+                        )}
+                      </TouchableOpacity>
+                    );
+                  })}
                 </ScrollView>
               </View>
             )}
@@ -1595,6 +2034,15 @@ export default function FinderDashboard() {
             ref={mapRef}
             markers={spots}
             routeCoords={showRoute ? routeCoords.slice(currentRouteIndex) : []}
+            altRoutes={showRoute ? altRoutes : []}
+            onSelectAltRoute={(index: number) => {
+              const alt = altRoutes[index];
+              if (alt) {
+                setRouteCoords(alt.coords);
+                setDistanceInfo({ km: (alt.distance / 1000).toFixed(1), mins: Math.ceil(alt.duration / 60).toString() });
+                setAltRoutes([]);
+              }
+            }}
             destination={(() => {
               if (selectedSpotId) {
                 const s = spots.find(x => x.id === selectedSpotId);
@@ -1620,7 +2068,38 @@ export default function FinderDashboard() {
             isFollowing={isFollowing}
             onMapInteraction={() => setIsFollowing(false)}
             isActiveNavigation={['en_route', 'navigating', 'arriving'].includes(step)}
+            trafficSegments={['en_route', 'navigating'].includes(step) ? trafficSegments : []}
+            speedLimit={['en_route', 'navigating'].includes(step) ? speedLimit : null}
+            mapStyleUrl={mapStyleConfig.provider === 'ola' ? mapStyleConfig.styleUrl : undefined}
+            mapApiKey={mapStyleConfig.provider === 'ola' ? mapStyleConfig.apiKey : undefined}
             onMuteToggle={() => setIsMuted(!isMuted)}
+            onOffRoute={(lat: number, lng: number) => {
+              const now = Date.now();
+              if (now - lastRerouteTime.current < 10000) return; // 10s cooldown
+              lastRerouteTime.current = now;
+              const dest = selectedSpotId ? spots.find(s => s.id === selectedSpotId) : null;
+              if (!dest) return;
+              console.log(`[NAV] Off-route detected at ${lat},${lng} — rerouting...`);
+              if (!isMuted) Speech.speak(navLanguage === 'hi-IN' ? 'Naya raasta dhundh rahe hain' : 'Rerouting', { rate: 1.1, pitch: 1.0, language: navLanguage });
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+              (async () => {
+                try {
+                  const res = await apiClient.get(`/maps/route?start=${lng},${lat}&end=${dest.lng},${dest.lat}&alternatives=false`);
+                  if (res.data.success) {
+                    const route = res.data.data.routes?.[0];
+                    if (route) {
+                      setRouteCoords(route.geometry.coordinates.map((p: any) => ({ latitude: p[1], longitude: p[0] })));
+                      setDistanceInfo({ km: (route.distance / 1000).toFixed(1), mins: Math.ceil(route.duration / 60).toString() });
+                      if (route.legs?.[0]?.steps) routeStepsRef.current = route.legs[0].steps;
+                      setIsFollowing(true);
+                      console.log(`[NAV] Rerouted! ${route.geometry.coordinates.length} points`);
+                    }
+                  }
+                } catch (e) {
+                  console.warn('[NAV] Reroute failed', e);
+                }
+              })();
+            }}
             onMarkerPress={(id: string) => {
               const spot = spots.find(s => s.id === id);
               if (spot && !spot.available) {
@@ -1643,7 +2122,11 @@ export default function FinderDashboard() {
               setSelectedSpotId(null);
               setSearchedPlace(null);
               setRouteCoords([]);
-              setDistanceInfo({ miles: '0', mins: '0' });
+              setAltRoutes([]);
+              setDistanceInfo({ km: '0', mins: '0' });
+              setTrafficSegments([]);
+              setSpeedLimit(null);
+              setLaneGuidance([]);
               if (userLocation && mapRef.current) {
                 mapRef.current.animateCamera({
                   center: { latitude: userLocation.lat, longitude: userLocation.lng },
@@ -1654,20 +2137,14 @@ export default function FinderDashboard() {
             hideControls={['spot_booking'].includes(step)}
           />
 
-          {/* Floating OTP Badge During Navigation/Parking */}
-          {['navigating', 'en_route', 'arriving', 'active_parking'].includes(step) && bookingDetails?.otp && !isInPip && (
-            <View style={{ position: 'absolute', top: 160, right: 16, backgroundColor: 'rgba(15,23,42,0.9)', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(99,102,241,0.3)', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 10, zIndex: 99 }}>
-              <Text style={{ color: '#94a3b8', fontSize: 10, fontWeight: '800', marginBottom: 2 }}>CHECK-IN PIN</Text>
-              <Text selectable={true} style={{ color: '#10b981', fontSize: 22, fontWeight: '900', letterSpacing: 4 }}>{bookingDetails.otp}</Text>
-            </View>
-          )}
+          {/* Floating OTP Badge — only on arrival, not during navigation */}
         </View>
       )}
 
       {/* Google Maps Style Instruction Banner */}
 
       {/* FLOATING BACK/HOME BUTTON — rendered AFTER map so it sits on top of WebView */}
-      {(['spot_booking', 'en_route', 'navigating', 'arriving', 'booking_confirm', 'active_parking'].includes(step) || (step === 'home' && searchedPlace !== null)) && (
+      {['spot_booking', 'en_route', 'navigating', 'arriving', 'booking_confirm', 'active_parking', 'checkout_verification', 'payment'].includes(step) && (
         <TouchableOpacity
           style={{
             position: 'absolute',
@@ -1703,6 +2180,9 @@ export default function FinderDashboard() {
                     setSimulatedLocation(null);
                     setArrivalDetected(false);
                     setCurrentInstruction({ turn: '', street: '', icon: '' });
+                    setTrafficSegments([]);
+                    setSpeedLimit(null);
+                    setLaneGuidance([]);
                     if (userLocation) {
                       fetchNearbySpots(userLocation.lat, userLocation.lng);
                       if (mapRef.current) {
@@ -1720,7 +2200,11 @@ export default function FinderDashboard() {
               setSelectedSpotId(null);
               setSlotData([]);
             } else if (step === 'active_parking') {
-              // Stay on active parking
+              // Stay on active parking — use End Session button
+            } else if (step === 'checkout_verification') {
+              setStep('active_parking');
+            } else if (step === 'payment') {
+              setStep('checkout_verification');
             } else {
               setStep('home');
             }
@@ -1729,20 +2213,98 @@ export default function FinderDashboard() {
           <Ionicons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
       )}
+      {/* Directions Banner / Arrival Banner */}
       {['navigating', 'en_route', 'arriving'].includes(step) && !isInPip && (
-        <View style={{ position: 'absolute', top: 50, left: 16, right: 16, backgroundColor: 'rgba(26,115,232,0.97)', borderRadius: 24, padding: 18, flexDirection: 'row', alignItems: 'center', shadowColor: '#1a73e8', shadowOpacity: 0.5, shadowRadius: 20, zIndex: 1000 }}>
-          <View style={{ width: 56, height: 56, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 16, alignItems: 'center', justifyContent: 'center', marginRight: 14 }}>
-            <Text style={{ fontSize: 32 }}>{currentInstruction.icon || '⬆️'}</Text>
+        arrivalDetected ? (
+          /* ── Arrival banner with Check In button ── */
+          <View style={{ position: 'absolute', top: 50, left: 16, right: 16, backgroundColor: '#0f172a', borderRadius: 24, padding: 20, alignItems: 'center', shadowColor: '#10b981', shadowOpacity: 0.4, shadowRadius: 20, zIndex: 1000, borderWidth: 1.5, borderColor: 'rgba(16,185,129,0.4)' }}>
+            <Text style={{ fontSize: 28, marginBottom: 8 }}>🎉</Text>
+            <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900', marginBottom: 4 }}>You have arrived!</Text>
+            <Text style={{ color: '#94a3b8', fontSize: 13, fontWeight: '500', marginBottom: 16 }} numberOfLines={1}>{spots.find(s => s.id === selectedSpotId)?.title || 'Parking Spot'}</Text>
+            <TouchableOpacity
+              activeOpacity={0.8}
+              style={{ backgroundColor: '#10b981', paddingVertical: 16, borderRadius: 18, alignItems: 'center', width: '100%' }}
+              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setStep('arriving'); }}
+            >
+              <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Check In</Text>
+            </TouchableOpacity>
           </View>
-          <View style={{ flex: 1 }}>
-            <Text style={{ color: '#fff', fontSize: 20, fontWeight: '900' }} numberOfLines={1}>{currentInstruction.turn}</Text>
-            <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 13, fontWeight: '600', marginTop: 2 }} numberOfLines={1}>{currentInstruction.street}</Text>
+        ) : (
+          /* ── Turn-by-turn directions banner ── */
+          <View style={{ position: 'absolute', top: 50, left: 16, right: 16, backgroundColor: '#1E293B', borderRadius: 24, padding: 16, shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 20, zIndex: 1000, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <View style={{ width: 52, height: 52, backgroundColor: '#1a73e8', borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginRight: 14 }}>
+                <Text style={{ fontSize: 28 }}>{currentInstruction.icon || '⬆️'}</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900' }} numberOfLines={1}>{currentInstruction.turn || 'Head straight'}</Text>
+                <Text style={{ color: '#94a3b8', fontSize: 13, fontWeight: '600', marginTop: 3 }} numberOfLines={1}>{currentInstruction.street || 'Calculating...'}</Text>
+              </View>
+            </View>
+            {/* Lane guidance arrows */}
+            {laneGuidance.length > 0 ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.06)', gap: 4 }}>
+                {laneGuidance.map((lane, li) => {
+                  const arrow = lane.indications?.includes('left') ? '←'
+                    : lane.indications?.includes('slight_left') ? '↖'
+                    : lane.indications?.includes('sharp_left') ? '↰'
+                    : lane.indications?.includes('right') ? '→'
+                    : lane.indications?.includes('slight_right') ? '↗'
+                    : lane.indications?.includes('sharp_right') ? '↱'
+                    : lane.indications?.includes('uturn') ? '↩'
+                    : '↑';
+                  return (
+                    <View key={li} style={{
+                      width: 28, height: 28, borderRadius: 6,
+                      backgroundColor: lane.valid ? 'rgba(66,133,244,0.25)' : 'rgba(255,255,255,0.06)',
+                      borderWidth: lane.valid ? 1.5 : 1,
+                      borderColor: lane.valid ? '#4285F4' : 'rgba(255,255,255,0.1)',
+                      alignItems: 'center', justifyContent: 'center'
+                    }}>
+                      <Text style={{ fontSize: 14, color: lane.valid ? '#4285F4' : '#64748b', fontWeight: '800' }}>{arrow}</Text>
+                    </View>
+                  );
+                })}
+              </View>
+            ) : null}
+            {/* Next-turn preview strip */}
+            {nextTurnPreview.turn ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10, paddingTop: 10, paddingBottom: 2, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.06)' }}>
+                <Text style={{ fontSize: 16, marginRight: 8 }}>{nextTurnPreview.icon}</Text>
+                <Text style={{ color: '#94a3b8', fontSize: 13, fontWeight: '700' }}>{nextTurnPreview.turn}</Text>
+              </View>
+            ) : null}
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: nextTurnPreview.turn ? 8 : 12, paddingTop: nextTurnPreview.turn ? 8 : 12, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.06)' }}>
+              <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 4 }}>
+                  <Text style={{ color: '#10b981', fontSize: 16, fontWeight: '900' }}>{distanceInfo.km}</Text>
+                  <Text style={{ color: '#64748b', fontSize: 11, fontWeight: '700' }}>km</Text>
+                </View>
+                <View style={{ width: 1, height: 16, backgroundColor: 'rgba(255,255,255,0.08)' }} />
+                <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 4 }}>
+                  <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>{distanceInfo.mins}</Text>
+                  <Text style={{ color: '#64748b', fontSize: 11, fontWeight: '700' }}>min</Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                onPress={() => {
+                  const langs = ['en-IN', 'hi-IN', 'ta-IN', 'te-IN', 'kn-IN'];
+                  const idx = langs.indexOf(navLanguage);
+                  setNavLanguage(langs[(idx + 1) % langs.length]);
+                }}
+                style={{ width: 36, height: 36, backgroundColor: navLanguage !== 'en-IN' ? 'rgba(66,133,244,0.2)' : 'rgba(255,255,255,0.06)', borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginRight: 8, borderWidth: navLanguage !== 'en-IN' ? 1 : 0, borderColor: '#4285F4' }}
+              >
+                <Text style={{ color: navLanguage !== 'en-IN' ? '#4285F4' : '#94a3b8', fontSize: 10, fontWeight: '900' }}>
+                  {navLanguage === 'hi-IN' ? 'हि' : navLanguage === 'ta-IN' ? 'த' : navLanguage === 'te-IN' ? 'తె' : navLanguage === 'kn-IN' ? 'ಕ' : 'EN'}
+                </Text>
+              </TouchableOpacity>
+              <View style={{ width: 44, height: 44, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 22, alignItems: 'center', justifyContent: 'center' }}>
+                <Text style={{ color: '#fff', fontSize: 15, fontWeight: '900' }}>{Math.round(navigationData.speed * 3.6)}</Text>
+                <Text style={{ color: '#64748b', fontSize: 7, fontWeight: '800' }}>km/h</Text>
+              </View>
+            </View>
           </View>
-          <View style={{ width: 52, height: 52, backgroundColor: 'rgba(0,0,0,0.2)', borderRadius: 26, alignItems: 'center', justifyContent: 'center' }}>
-            <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900' }}>{(navigationData.speed * 3.6).toFixed(0)}</Text>
-            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 8, fontWeight: '800' }}>km/h</Text>
-          </View>
-        </View>
+        )
       )}
 
       {/* STEP 5: SPOT BOOKING BOTTOM SHEET */}
@@ -2078,62 +2640,124 @@ export default function FinderDashboard() {
           {step === 'en_route' && !isInPip && (
             <>
 
-              {arrivalDetected && (
-                <View style={styles.enRouteOverlay} pointerEvents="box-none">
-                  <View style={styles.enRouteBanner}>
-                    <View style={{ flex: 1, alignItems: 'center' }}>
-                      <Text style={{ fontSize: 36, marginBottom: 4 }}>🎉</Text>
-                      <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', textAlign: 'center' }}>You have reached your destination!</Text>
-                      <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 13, marginTop: 6, textAlign: 'center' }}>Park in Slot {selectedSlot} and show your check-in PIN to the spot owner.</Text>
-                    </View>
-                    <TouchableOpacity style={[styles.continueBtn, { backgroundColor: '#10b981', marginTop: 12, paddingVertical: 14, paddingHorizontal: 28, borderRadius: 16 }]} onPress={() => setStep('arriving')}>
-                      <Text style={[styles.continueBtnText, { fontSize: 16 }]}>Check In</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              )}
-
               <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#0f172a', borderTopLeftRadius: 32, borderTopRightRadius: 32, paddingBottom: 40, paddingTop: 20, shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 30, elevation: 30, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' }}>
                 <View style={{ width: 48, height: 5, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 3, alignSelf: 'center', marginBottom: 20 }} />
                 
-                <View style={{ height: 4, backgroundColor: 'rgba(255,255,255,0.05)', marginHorizontal: 32, borderRadius: 2, marginBottom: 24, overflow: 'hidden' }}>
-                  <View style={{ height: '100%', backgroundColor: '#6366f1', width: '70%', borderRadius: 2 }} />
-                </View>
+                {arrivalDetected ? (
+                  <View style={{ paddingHorizontal: 24 }}>
+                    {/* Spot name */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
+                      <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: 'rgba(16,185,129,0.12)', alignItems: 'center', justifyContent: 'center', marginRight: 10 }}>
+                        <Ionicons name="location" size={18} color="#10b981" />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }} numberOfLines={1}>{spots.find(s => s.id === selectedSpotId)?.title || 'Parking Spot'}</Text>
+                        <Text style={{ color: '#94a3b8', fontSize: 11, fontWeight: '500', marginTop: 2 }}>Slot {selectedSlot?.split('_').pop() || '—'} · Booking #{bookingDetails?.id}</Text>
+                      </View>
+                    </View>
 
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-evenly', paddingHorizontal: 20 }}>
-                  <View style={{ alignItems: 'center' }}>
-                    <Text style={{ color: '#fff', fontSize: 28, fontWeight: '900' }}>{distanceInfo.miles}</Text>
-                    <Text style={{ color: '#64748b', fontSize: 12, fontWeight: '800', textTransform: 'uppercase', marginTop: 2 }}>km</Text>
-                  </View>
-                  <View style={{ width: 1, height: 40, backgroundColor: 'rgba(255,255,255,0.05)' }} />
-                  <View style={{ alignItems: 'center' }}>
-                    <Text style={{ color: '#10b981', fontSize: 28, fontWeight: '900' }}>{distanceInfo.mins}</Text>
-                    <Text style={{ color: '#64748b', fontSize: 12, fontWeight: '800', textTransform: 'uppercase', marginTop: 2 }}>min</Text>
-                  </View>
-                  <View style={{ width: 1, height: 40, backgroundColor: 'rgba(255,255,255,0.05)' }} />
-                  <TouchableOpacity 
-                    activeOpacity={0.8}
-                    style={{ backgroundColor: '#f43f5e', paddingHorizontal: 24, paddingVertical: 14, borderRadius: 16, shadowColor: '#f43f5e', shadowOpacity: 0.2, shadowRadius: 10 }} 
-                    onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                      Alert.alert('Exit Navigation', 'Are you sure you want to stop navigating?', [
-                        { text: 'Cancel', style: 'cancel' },
-                        {
-                          text: 'Yes, Exit', onPress: () => {
-                            setStep('home');
-                            setSelectedSpotId(null);
-                            setRouteCoords([]);
-                            setSimulatedLocation(null);
-                            setArrivalDetected(false);
-                            if (userLocation) fetchNearbySpots(userLocation.lat, userLocation.lng);
+                    {/* PIN */}
+                    <View style={{ backgroundColor: 'rgba(16,185,129,0.06)', paddingVertical: 16, paddingHorizontal: 20, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(16,185,129,0.15)', marginBottom: 16, alignItems: 'center' }}>
+                      <Text style={{ fontSize: 9, color: '#10b981', fontWeight: '800', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1.5 }}>Check-in PIN</Text>
+                      <Text selectable={true} style={{ fontSize: 32, fontWeight: '900', color: '#fff', letterSpacing: 6 }}>{bookingDetails?.otp}</Text>
+                    </View>
+
+                    {/* Check In + Close */}
+                    <View style={{ flexDirection: 'row', gap: 12, width: '100%' }}>
+                      <TouchableOpacity
+                        activeOpacity={0.8}
+                        style={{ flex: 1, backgroundColor: '#10b981', paddingVertical: 16, borderRadius: 18, alignItems: 'center', shadowColor: '#10b981', shadowOpacity: 0.3, shadowRadius: 10, elevation: 5 }}
+                        onPress={() => {
+                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                          setStep('arriving');
+                        }}
+                      >
+                        <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Check In</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        activeOpacity={0.8}
+                        style={{ backgroundColor: 'rgba(255,255,255,0.05)', paddingHorizontal: 20, borderRadius: 18, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' }}
+                        onPress={() => {
+                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                          setStep('home');
+                          setSelectedSpotId(null);
+                          setRouteCoords([]);
+                          setSimulatedLocation(null);
+                          setArrivalDetected(false);
+                          setCurrentInstruction({ turn: '', street: '', icon: '' });
+                          if (userLocation) {
+                            fetchNearbySpots(userLocation.lat, userLocation.lng);
+                            if (mapRef.current) {
+                              mapRef.current.animateCamera({
+                                center: { latitude: userLocation.lat, longitude: userLocation.lng },
+                                zoom: 15
+                              }, { duration: 1000 });
+                            }
                           }
-                        }
-                      ]);
-                    }}
-                  >
-                    <Text style={{ color: '#fff', fontWeight: '900', fontSize: 16 }}>Exit</Text>
-                  </TouchableOpacity>
-                </View>
+                        }}
+                      >
+                        <Ionicons name="close" size={24} color="#fff" />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ) : (
+                  <>
+                    {/* Destination info */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, marginBottom: 16 }}>
+                      <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: 'rgba(99,102,241,0.12)', alignItems: 'center', justifyContent: 'center', marginRight: 10 }}>
+                        <Ionicons name="navigate" size={18} color="#818cf8" />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: '#fff', fontSize: 14, fontWeight: '800' }} numberOfLines={1}>{spots.find(s => s.id === selectedSpotId)?.title || 'Destination'}</Text>
+                        <Text style={{ color: '#64748b', fontSize: 11, fontWeight: '500', marginTop: 1 }}>Slot {selectedSlot?.split('_').pop() || '—'}</Text>
+                      </View>
+                    </View>
+
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-evenly', paddingHorizontal: 20 }}>
+                      <View style={{ alignItems: 'center' }}>
+                        <Text style={{ color: '#fff', fontSize: 28, fontWeight: '900' }}>{distanceInfo.km}</Text>
+                        <Text style={{ color: '#64748b', fontSize: 12, fontWeight: '800', textTransform: 'uppercase', marginTop: 2 }}>km</Text>
+                      </View>
+                      <View style={{ width: 1, height: 40, backgroundColor: 'rgba(255,255,255,0.05)' }} />
+                      <View style={{ alignItems: 'center' }}>
+                        <Text style={{ color: '#10b981', fontSize: 28, fontWeight: '900' }}>{distanceInfo.mins}</Text>
+                        <Text style={{ color: '#64748b', fontSize: 12, fontWeight: '800', textTransform: 'uppercase', marginTop: 2 }}>min</Text>
+                      </View>
+                      <View style={{ width: 1, height: 40, backgroundColor: 'rgba(255,255,255,0.05)' }} />
+                      <TouchableOpacity
+                        activeOpacity={0.8}
+                        style={{ backgroundColor: '#f43f5e', paddingHorizontal: 24, paddingVertical: 14, borderRadius: 16, shadowColor: '#f43f5e', shadowOpacity: 0.2, shadowRadius: 10 }}
+                        onPress={() => {
+                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                          Alert.alert('Exit Navigation', 'Are you sure you want to stop navigating?', [
+                            { text: 'Cancel', style: 'cancel' },
+                            {
+                              text: 'Yes, Exit', onPress: () => {
+                                setStep('home');
+                                setSelectedSpotId(null);
+                                setRouteCoords([]);
+                                setSimulatedLocation(null);
+                                setArrivalDetected(false);
+                                setCurrentInstruction({ turn: '', street: '', icon: '' });
+                                if (userLocation) {
+                                  fetchNearbySpots(userLocation.lat, userLocation.lng);
+                                  if (mapRef.current) {
+                                    mapRef.current.animateCamera({
+                                      center: { latitude: userLocation.lat, longitude: userLocation.lng },
+                                      zoom: 15
+                                    }, { duration: 1000 });
+                                  }
+                                }
+                              }
+                            }
+                          ]);
+                        }}
+                      >
+                        <Ionicons name="close" size={24} color="#fff" />
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                )}
               </View>
 
 
@@ -2163,9 +2787,9 @@ export default function FinderDashboard() {
                         </View>
                       </View>
 
-                      <View style={{ backgroundColor: 'rgba(99,102,241,0.05)', padding: 14, borderRadius: 16, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(99,102,241,0.1)' }}>
-                        <Text style={{ color: '#94a3b8', fontSize: 10, fontWeight: '800', marginBottom: 6 }}>ENTRY OTP</Text>
-                        <Text selectable={true} style={{ color: '#10b981', fontSize: 32, fontWeight: '900', letterSpacing: 6 }}>{bookingDetails?.otp}</Text>
+                      <View style={{ backgroundColor: 'rgba(16,185,129,0.05)', padding: 14, borderRadius: 16, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(16,185,129,0.1)' }}>
+                        <Text style={{ color: '#94a3b8', fontSize: 10, fontWeight: '800', marginBottom: 6 }}>PIN ON ARRIVAL</Text>
+                        <Text style={{ color: '#64748b', fontSize: 13, fontWeight: '600' }}>Your check-in PIN will appear when you arrive</Text>
                       </View>
                     </View>
                     {navCountdown !== null && (
@@ -2211,75 +2835,86 @@ export default function FinderDashboard() {
 
                 {step === 'arriving' && (
                   <View style={{ paddingVertical: 10 }}>
-                    <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', marginBottom: 4, letterSpacing: -0.5 }}>Host Verification</Text>
-                    <Text style={{ color: '#94a3b8', fontSize: 13, marginBottom: 20, fontWeight: '500' }}>Show OTP to the host.</Text>
-                    
-                    <View style={{ backgroundColor: 'rgba(255,255,255,0.03)', padding: 18, borderRadius: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', marginBottom: 24 }}>
-                      <View style={{ flexDirection: 'row', gap: 12, marginBottom: 16 }}>
-                        <View style={{ flex: 1, backgroundColor: 'rgba(255,255,255,0.05)', padding: 14, borderRadius: 16, alignItems: 'center' }}>
-                          <Text style={{ fontSize: 9, color: '#64748b', fontWeight: '800', marginBottom: 4 }}>ID</Text>
-                          <Text style={{ fontSize: 16, fontWeight: '900', color: '#fff' }}>#{bookingDetails?.id}</Text>
-                        </View>
-                        <View style={{ flex: 1, backgroundColor: 'rgba(255,255,255,0.05)', padding: 14, borderRadius: 16, alignItems: 'center' }}>
-                          <Text style={{ fontSize: 9, color: '#64748b', fontWeight: '800', marginBottom: 4 }}>Slot</Text>
-                          <Text style={{ fontSize: 16, fontWeight: '900', color: '#6366f1' }}>{selectedSlot?.split('_').pop()}</Text>
-                        </View>
+                    {/* Spot name header */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
+                      <View style={{ width: 40, height: 40, borderRadius: 12, backgroundColor: 'rgba(16,185,129,0.12)', alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
+                        <Ionicons name="location" size={20} color="#10b981" />
                       </View>
-
-                      <View style={{ backgroundColor: 'rgba(16,185,129,0.08)', padding: 20, borderRadius: 20, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(16,185,129,0.15)' }}>
-                        <Text style={{ fontSize: 10, color: '#10b981', fontWeight: '800', marginBottom: 8, textTransform: 'uppercase' }}>Check-in OTP</Text>
-                        <Text selectable={true} style={{ fontSize: 40, fontWeight: '900', color: '#fff', letterSpacing: 8 }}>{bookingDetails?.otp}</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900', letterSpacing: -0.3 }} numberOfLines={1}>{spots.find(s => s.id === selectedSpotId)?.title || 'Parking Spot'}</Text>
+                        <Text style={{ color: '#94a3b8', fontSize: 12, fontWeight: '500', marginTop: 2 }}>Show PIN to the spot owner to check in</Text>
                       </View>
                     </View>
 
-                    <TouchableOpacity 
-                      activeOpacity={0.8}
-                      style={{ 
-                        backgroundColor: 'rgba(16,185,129,0.1)', 
-                        paddingVertical: 16, borderRadius: 16, 
-                        borderWidth: 1, borderColor: 'rgba(16,185,129,0.3)', 
-                        alignItems: 'center' 
-                      }} 
-                      onPress={() => {
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-                        setStep('active_parking');
-                      }}
-                    >
-                      <Text style={{ color: '#10b981', fontWeight: '800', fontSize: 15 }}>Verify</Text>
-                    </TouchableOpacity>
+                    {/* PIN display — large and prominent */}
+                    <View style={{ backgroundColor: 'rgba(16,185,129,0.06)', padding: 24, borderRadius: 24, alignItems: 'center', borderWidth: 1.5, borderColor: 'rgba(16,185,129,0.15)', marginBottom: 16 }}>
+                      <Text style={{ fontSize: 10, color: '#10b981', fontWeight: '800', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 2 }}>Check-in PIN</Text>
+                      <Text selectable={true} style={{ fontSize: 48, fontWeight: '900', color: '#fff', letterSpacing: 10 }}>{bookingDetails?.otp}</Text>
+                    </View>
+
+                    {/* Booking ID and Slot */}
+                    <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
+                      <View style={{ flex: 1, backgroundColor: 'rgba(255,255,255,0.04)', padding: 14, borderRadius: 16, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' }}>
+                        <Text style={{ fontSize: 9, color: '#64748b', fontWeight: '800', marginBottom: 4, textTransform: 'uppercase' }}>Booking ID</Text>
+                        <Text style={{ fontSize: 18, fontWeight: '900', color: '#fff' }}>#{bookingDetails?.id}</Text>
+                      </View>
+                      <View style={{ flex: 1, backgroundColor: 'rgba(255,255,255,0.04)', padding: 14, borderRadius: 16, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' }}>
+                        <Text style={{ fontSize: 9, color: '#64748b', fontWeight: '800', marginBottom: 4, textTransform: 'uppercase' }}>Slot</Text>
+                        <Text style={{ fontSize: 18, fontWeight: '900', color: '#6366f1' }}>{selectedSlot?.split('_').pop()}</Text>
+                      </View>
+                    </View>
+
+                    {/* Waiting for host */}
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingVertical: 14, backgroundColor: 'rgba(99,102,241,0.06)', borderRadius: 16, borderWidth: 1, borderColor: 'rgba(99,102,241,0.12)' }}>
+                      <ActivityIndicator size="small" color="#818cf8" />
+                      <Text style={{ color: '#818cf8', fontWeight: '700', fontSize: 13 }}>Waiting for host to verify...</Text>
+                    </View>
                   </View>
                 )}
 
                 {step === 'active_parking' && (
                   <View style={{ paddingVertical: 10 }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-                      <View>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                      <View style={{ flex: 1 }}>
                         <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', letterSpacing: -0.5 }}>Active Session</Text>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
-                          <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#10b981', marginRight: 6 }} />
-                          <Text style={{ color: '#10b981', fontWeight: '800', fontSize: 12 }}>Live Tracking</Text>
-                        </View>
+                        <Text style={{ color: '#94a3b8', fontSize: 12, fontWeight: '500', marginTop: 3 }} numberOfLines={1}>{spots.find(s => s.id === selectedSpotId)?.title || 'Parking Spot'}</Text>
                       </View>
-                      <View style={{ backgroundColor: 'rgba(255,255,255,0.05)', padding: 10, borderRadius: 14, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' }}>
-                        <Text style={{ color: '#64748b', fontSize: 9, fontWeight: '800', marginBottom: 2 }}>SLOT</Text>
-                        <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>{selectedSlot?.split('_').pop()}</Text>
+                      <View style={{ flexDirection: 'row', gap: 8 }}>
+                        <View style={{ backgroundColor: 'rgba(16,185,129,0.1)', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 12, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(16,185,129,0.15)' }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                            <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#10b981' }} />
+                            <Text style={{ color: '#10b981', fontWeight: '800', fontSize: 10 }}>LIVE</Text>
+                          </View>
+                        </View>
+                        <View style={{ backgroundColor: 'rgba(255,255,255,0.05)', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 12, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' }}>
+                          <Text style={{ color: '#64748b', fontSize: 8, fontWeight: '800', marginBottom: 1 }}>SLOT</Text>
+                          <Text style={{ color: '#fff', fontSize: 14, fontWeight: '900' }}>{selectedSlot?.split('_').pop()}</Text>
+                        </View>
                       </View>
                     </View>
 
-                    <View style={{ backgroundColor: 'rgba(255,255,255,0.02)', padding: 18, borderRadius: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', marginBottom: 24, alignItems: 'center' }}>
-                      <Text style={{ color: '#94a3b8', fontSize: 11, fontWeight: '800', textTransform: 'uppercase', marginBottom: 8 }}>Duration</Text>
-                      <Text style={{ color: '#fff', fontSize: 28, fontWeight: '900' }}>{isLongParking ? 'Long Term' : `${Math.floor(elapsedMinutes / 60)}h ${(elapsedMinutes % 60).toString().padStart(2, '0')}m`}</Text>
-                      
-                      <View style={{ height: 1, width: '100%', backgroundColor: 'rgba(255,255,255,0.05)', marginVertical: 16 }} />
-                      
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                        <View style={{ padding: 8, backgroundColor: 'rgba(244,63,94,0.1)', borderRadius: 10 }}>
-                          <Text style={{ fontSize: 14 }}>⚠️</Text>
+                    <View style={{ backgroundColor: 'rgba(255,255,255,0.02)', padding: 18, borderRadius: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)', marginBottom: 20 }}>
+                      <View style={{ flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center' }}>
+                        <View style={{ alignItems: 'center' }}>
+                          <Text style={{ color: '#94a3b8', fontSize: 10, fontWeight: '800', textTransform: 'uppercase', marginBottom: 6 }}>Duration</Text>
+                          <Text style={{ color: '#fff', fontSize: 26, fontWeight: '900' }}>{isLongParking ? 'Long' : `${Math.floor(elapsedMinutes / 60)}h ${(elapsedMinutes % 60).toString().padStart(2, '0')}m`}</Text>
                         </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={{ color: '#fff', fontSize: 13, fontWeight: '700' }}>Avoid Overstay</Text>
-                          <Text style={{ color: '#64748b', fontSize: 11, marginTop: 1, fontWeight: '500' }}>Fees resume after grace.</Text>
+                        <View style={{ width: 1, height: 40, backgroundColor: 'rgba(255,255,255,0.06)' }} />
+                        <View style={{ alignItems: 'center' }}>
+                          <Text style={{ color: '#94a3b8', fontSize: 10, fontWeight: '800', textTransform: 'uppercase', marginBottom: 6 }}>Est. Cost</Text>
+                          <Text style={{ color: '#10b981', fontSize: 26, fontWeight: '900' }}>₹{(() => {
+                            const spot = spots.find(s => s.id === selectedSpotId);
+                            const rate = spot?.price || 0;
+                            const cost = (elapsedMinutes / 60) * rate;
+                            return cost < 1 ? rate.toFixed(0) : cost.toFixed(0);
+                          })()}</Text>
                         </View>
+                      </View>
+
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 16, paddingTop: 14, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.04)' }}>
+                        <Text style={{ color: '#64748b', fontSize: 11, fontWeight: '600' }}>Rate: ₹{spots.find(s => s.id === selectedSpotId)?.price || 0}/hr</Text>
+                        <Text style={{ color: 'rgba(255,255,255,0.1)' }}>·</Text>
+                        <Text style={{ color: '#64748b', fontSize: 11, fontWeight: '600' }}>Booked: {parkingHours}h {parkingMinutes > 0 ? `${parkingMinutes}m` : ''}</Text>
                       </View>
                     </View>
 
@@ -2326,20 +2961,19 @@ export default function FinderDashboard() {
                           if (!bookingDetails?.id) return;
                           setIsLoading(true);
                           try {
-                            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-                            const res = await apiClient.put(`/bookings/${bookingDetails.id}/finder-checkout`);
-                            if (res.data?.success) {
+                            // Fetch checkout amount first, then show checkout verification
+                            const amtRes = await apiClient.get(`/bookings/${bookingDetails.id}/checkout-amount`);
+                            if (amtRes.data?.success) {
                               setBookingDetails(prev => prev ? {
                                 ...prev,
-                                basePrice: res.data.data.total_price,
-                                arrears: 0,
-                                finalAmount: res.data.data.total_price,
-                                ...res.data.data
+                                basePrice: amtRes.data.data.base_price,
+                                arrears: amtRes.data.data.arrears || 0,
+                                finalAmount: amtRes.data.data.total_amount,
                               } : prev);
-                              navigateToStep('payment');
                             }
+                            setStep('checkout_verification');
                           } catch (e: any) {
-                            Alert.alert('Checkout Failed', e.response?.data?.message || 'Unable to end session.');
+                            Alert.alert('Error', e.response?.data?.message || 'Unable to fetch checkout details.');
                           } finally {
                             setIsLoading(false);
                           }
@@ -2353,35 +2987,75 @@ export default function FinderDashboard() {
 
                 {step === 'checkout_verification' && (
                   <View style={{ paddingVertical: 10 }}>
-                    <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', marginBottom: 4, letterSpacing: -0.5, textAlign: 'center' }}>Check-Out</Text>
-                    <Text style={{ color: '#94a3b8', fontSize: 13, marginBottom: 16, fontWeight: '500', textAlign: 'center', lineHeight: 18 }}>
-                      Approach the spot owner and present this Exit OTP code to verify checkout.
+                    <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', marginBottom: 4, letterSpacing: -0.5 }}>Check-Out Verification</Text>
+                    <Text style={{ color: '#94a3b8', fontSize: 13, marginBottom: 20, fontWeight: '500', lineHeight: 18 }}>
+                      Show this exit code to the spot owner before leaving.
                     </Text>
-                    
-                    <View style={{ backgroundColor: 'rgba(255,255,255,0.03)', padding: 18, borderRadius: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', marginBottom: 20 }}>
-                      <View style={{ gap: 12 }}>
+
+                    <View style={{ backgroundColor: 'rgba(255,255,255,0.03)', padding: 18, borderRadius: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', marginBottom: 16 }}>
+                      <View style={{ alignItems: 'center', backgroundColor: 'rgba(99,102,241,0.08)', padding: 24, borderRadius: 20, borderWidth: 1.5, borderColor: 'rgba(99,102,241,0.2)', marginBottom: 16 }}>
+                        <Text style={{ color: '#818cf8', fontWeight: '800', fontSize: 10, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 1.5 }}>Exit OTP</Text>
+                        <Text selectable={true} style={{ color: '#fff', fontWeight: '900', fontSize: 40, letterSpacing: 8 }}>{bookingDetails?.checkoutOtp || bookingDetails?.checkout_otp || '----'}</Text>
+                      </View>
+
+                      <View style={{ gap: 10 }}>
                         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Base Price</Text>
-                          <Text style={{ color: '#6366f1', fontSize: 18, fontWeight: '900' }}>₹{Number(bookingDetails?.basePrice || bookingDetails?.totalPrice || 0).toFixed(2)}</Text>
+                          <Text style={{ color: '#94a3b8', fontSize: 13, fontWeight: '600' }}>Base Price</Text>
+                          <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>₹{Number(bookingDetails?.basePrice || bookingDetails?.totalPrice || 0).toFixed(2)}</Text>
                         </View>
                         {(bookingDetails?.arrears || 0) > 0 && (
-                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
-                            <Text style={{ color: '#f43f5e', fontSize: 14, fontWeight: '800' }}>Previous Arrears</Text>
+                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <Text style={{ color: '#f43f5e', fontSize: 13, fontWeight: '800' }}>Arrears</Text>
                             <Text style={{ color: '#f43f5e', fontSize: 16, fontWeight: '900' }}>₹{Number(bookingDetails?.arrears || 0).toFixed(2)}</Text>
                           </View>
                         )}
-                        <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.05)', marginVertical: 8 }} />
+                        <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.05)' }} />
                         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <Text style={{ color: '#fff', fontSize: 20, fontWeight: '900' }}>Total Due</Text>
-                          <Text style={{ color: '#6366f1', fontSize: 28, fontWeight: '900' }}>₹{Number(bookingDetails?.finalAmount || bookingDetails?.totalPrice || 0).toFixed(2)}</Text>
+                          <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900' }}>Total</Text>
+                          <Text style={{ color: '#6366f1', fontSize: 24, fontWeight: '900' }}>₹{Number(bookingDetails?.finalAmount || bookingDetails?.totalPrice || 0).toFixed(2)}</Text>
                         </View>
                       </View>
                     </View>
 
-                    <View style={{ alignItems: 'center', backgroundColor: 'rgba(99,102,241,0.08)', padding: 20, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(99,102,241,0.2)' }}>
-                      <Text style={{ color: '#818cf8', fontWeight: '800', fontSize: 12, marginBottom: 6, letterSpacing: 1.5 }}>EXIT OTP CODE</Text>
-                      <Text style={{ color: '#fff', fontWeight: '900', fontSize: 36, letterSpacing: 6 }}>{bookingDetails?.checkoutOtp || bookingDetails?.checkout_otp || '000000'}</Text>
-                    </View>
+                    <TouchableOpacity
+                      activeOpacity={0.9}
+                      disabled={isLoading}
+                      style={{ backgroundColor: '#6366f1', paddingVertical: 18, borderRadius: 20, alignItems: 'center', marginBottom: 10 }}
+                      onPress={async () => {
+                        if (!bookingDetails?.id) return;
+                        setIsLoading(true);
+                        try {
+                          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                          const res = await apiClient.put(`/bookings/${bookingDetails.id}/finder-checkout`);
+                          if (res.data?.success) {
+                            setBookingDetails(prev => prev ? {
+                              ...prev,
+                              basePrice: res.data.data.total_price,
+                              finalAmount: res.data.data.total_price,
+                              ...res.data.data
+                            } : prev);
+                            setStep('payment');
+                          }
+                        } catch (e: any) {
+                          Alert.alert('Checkout Failed', e.response?.data?.message || 'Unable to complete checkout.');
+                        } finally {
+                          setIsLoading(false);
+                        }
+                      }}
+                    >
+                      <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>{isLoading ? 'Processing...' : 'Complete Checkout'}</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      activeOpacity={0.8}
+                      style={{ paddingVertical: 12, alignItems: 'center' }}
+                      onPress={() => {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        setStep('active_parking');
+                      }}
+                    >
+                      <Text style={{ color: '#94a3b8', fontWeight: '700', fontSize: 14 }}>Go Back</Text>
+                    </TouchableOpacity>
                   </View>
                 )}
 
@@ -2533,22 +3207,47 @@ export default function FinderDashboard() {
                 )}
 
                 {step === 'receipt' && (
-                  <View style={{ alignItems: 'center', paddingVertical: 10 }}>
-                    <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: '#10b981', justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
-                      <Ionicons name="checkmark" size={50} color="#fff" />
+                  <View style={{ paddingVertical: 10 }}>
+                    <View style={{ alignItems: 'center', marginBottom: 20 }}>
+                      <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: '#10b981', justifyContent: 'center', alignItems: 'center', marginBottom: 12 }}>
+                        <Ionicons name="checkmark" size={36} color="#fff" />
+                      </View>
+                      <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', letterSpacing: -0.5 }}>Payment Complete</Text>
                     </View>
-                    <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', marginBottom: 4, letterSpacing: -0.5 }}>Payment Success!</Text>
-                    <Text style={{ color: '#94a3b8', fontSize: 13, marginBottom: 24, textAlign: 'center' }}>
-                      Receipt sent to email.
-                    </Text>
 
-                    <TouchableOpacity 
+                    <View style={{ backgroundColor: 'rgba(255,255,255,0.03)', padding: 18, borderRadius: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', marginBottom: 20 }}>
+                      <View style={{ gap: 10 }}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                          <Text style={{ color: '#94a3b8', fontSize: 12, fontWeight: '600' }}>Booking ID</Text>
+                          <Text style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>#{bookingDetails?.id}</Text>
+                        </View>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                          <Text style={{ color: '#94a3b8', fontSize: 12, fontWeight: '600' }}>Spot</Text>
+                          <Text style={{ color: '#fff', fontSize: 12, fontWeight: '800' }} numberOfLines={1}>{spots.find(s => s.id === selectedSpotId)?.title || '—'}</Text>
+                        </View>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                          <Text style={{ color: '#94a3b8', fontSize: 12, fontWeight: '600' }}>Slot</Text>
+                          <Text style={{ color: '#6366f1', fontSize: 12, fontWeight: '800' }}>{selectedSlot?.split('_').pop() || '—'}</Text>
+                        </View>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                          <Text style={{ color: '#94a3b8', fontSize: 12, fontWeight: '600' }}>Duration</Text>
+                          <Text style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>{isLongParking ? 'Long Term' : `${parkingHours}h ${parkingMinutes > 0 ? `${parkingMinutes}m` : ''}`}</Text>
+                        </View>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                          <Text style={{ color: '#94a3b8', fontSize: 12, fontWeight: '600' }}>Payment</Text>
+                          <Text style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>{bookingDetails?.payment_mode === 'cash' ? 'Cash' : 'Online'}</Text>
+                        </View>
+                        <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.05)', marginVertical: 4 }} />
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Amount Paid</Text>
+                          <Text style={{ color: '#10b981', fontSize: 22, fontWeight: '900' }}>₹{Number(bookingDetails?.finalAmount || bookingDetails?.totalPrice || bookingDetails?.total_price || 0).toFixed(2)}</Text>
+                        </View>
+                      </View>
+                    </View>
+
+                    <TouchableOpacity
                       activeOpacity={0.9}
-                      style={{ 
-                        backgroundColor: '#6366f1', 
-                        paddingVertical: 18, borderRadius: 20, 
-                        width: '100%', alignItems: 'center',
-                      }} 
+                      style={{ backgroundColor: '#6366f1', paddingVertical: 18, borderRadius: 20, width: '100%', alignItems: 'center' }}
                       onPress={() => {
                         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
                         setStep('home');
@@ -2557,9 +3256,10 @@ export default function FinderDashboard() {
                         setSelectedSlot('');
                         setParkingHours(1);
                         setShowUPIInline(false);
+                        setArrivalDetected(false);
                       }}
                     >
-                      <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Back to Dashboard</Text>
+                      <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Back to Home</Text>
                     </TouchableOpacity>
                   </View>
                 )}
@@ -3026,18 +3726,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.5,
     shadowRadius: 25,
     elevation: 30,
-  },
-  etaProgressBar: {
-    height: 4,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    marginHorizontal: 32,
-    borderRadius: 2,
-    marginBottom: 20,
-  },
-  etaProgressFill: {
-    height: '100%',
-    backgroundColor: '#4285F4',
-    borderRadius: 2,
   },
   bottomNavStats: {
     flexDirection: 'row',

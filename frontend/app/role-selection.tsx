@@ -16,9 +16,10 @@ export default function RoleSelectionScreen() {
   const handleContinue = async () => {
     if (!activeRole) return;
     await AsyncStorage.setItem('user_role', activeRole);
-    if (activeRole === 'SPOTTER' || activeRole === 'FINDER') {
-      router.replace('/welcome');
-    }
+    const r = activeRole.toUpperCase();
+    if (r === 'ADMIN') router.replace('/admin');
+    else if (r === 'SPOTTER') router.replace('/spotter');
+    else if (r === 'FINDER') router.replace('/finder');
   };
 
   const handleLogout = async () => {

@@ -148,6 +148,9 @@ const PORT = process.env.PORT || 3000;
 if (process.env.NODE_ENV !== 'test') {
   server.listen(PORT, '0.0.0.0', async () => {
     logger.info(`🚀 Server running on port ${PORT}`);
+    if (!process.env.OLA_MAPS_API_KEY) {
+      logger.warn('⚠️  OLA_MAPS_API_KEY not set — maps search/routing will use public Nominatim/OSRM fallback (rate-limited, not production-grade)');
+    }
 
     try {
       const prisma = require('./config/prisma');
