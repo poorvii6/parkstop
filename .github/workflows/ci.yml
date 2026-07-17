@@ -35,6 +35,12 @@ jobs:
       - name: Generate Prisma client
         run: cd backend && npx prisma generate
 
+      # Non-blocking for now — the existing code has a lint backlog. Reports
+      # issues without failing the build. Remove continue-on-error once clean.
+      - name: Lint
+        run: cd backend && npm run lint
+        continue-on-error: true
+
       - name: Run unit tests (pure, mocked — no database needed)
         run: cd backend && npm test
 
