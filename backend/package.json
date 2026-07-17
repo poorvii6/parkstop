@@ -16,6 +16,7 @@
     "migrate:legacy": "node database/migrations/run.js",
     "seed": "node database/seeds/run.js",
     "test": "jest --testPathPatterns=tests/unit --runInBand --forceExit",
+    "test:integration": "jest --testPathPatterns=tests/integration --runInBand --forceExit",
     "test:e2e": "node tests/e2e/runner.js"
   },
   "keywords": [
