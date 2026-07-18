@@ -452,18 +452,21 @@ class AuthController {
         return res.status(404).json({ success: false, message: 'User not found' });
       }
 
-      const isRegistered = newRole.toUpperCase() === 'FINDER' ? user.is_finder_registered : user.is_spotter_registered;
+      const targetRole = newRole.toUpperCase();
 
-      if (!isRegistered && !registrationDetails) {
+      // Finding parking requires no registration — anyone can be a Finder.
+      // Only becoming a Spotter (which needs payout details) may require a
+      // registration step.
+      if (targetRole === 'SPOTTER' && !user.is_spotter_registered && !registrationDetails) {
         return res.json({
           success: false,
           registrationRequired: true,
-          message: `${newRole.charAt(0).toUpperCase() + newRole.slice(1)} registration is required.`
+          message: 'Spotter registration is required.'
         });
       }
 
-      const updateData = { role: newRole.toUpperCase() };
-      if (newRole.toUpperCase() === 'FINDER') {
+      const updateData = { role: targetRole };
+      if (targetRole === 'FINDER') {
         updateData.is_finder_registered = true;
       } else {
         updateData.is_spotter_registered = true;

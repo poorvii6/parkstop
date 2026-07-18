@@ -232,6 +232,58 @@ router.get('/search', async (req, res) => {
     }
 });
 
+// ── Geocode: resolve a place name/description to coordinates ──────────────
+// Ola Maps AUTOCOMPLETE returns text predictions without coordinates, so the
+// frontend calls this when a suggestion is selected to get the real lat/lon
+// (otherwise the map would drop the destination pin at 0,0). Falls back to
+// Nominatim, which always returns coordinates.
+router.get('/geocode', async (req, res) => {
+    try {
+        const q = (req.query.q || '').toString().trim();
+        if (!q) {
+            return res.status(400).json({ success: false, message: 'Query (q) is required' });
+        }
+
+        const cacheKey = `geocode:${q.toLowerCase()}`;
+        const cached = getCached(cacheKey);
+        if (cached) return res.json({ success: true, data: cached, cached: true });
+
+        const apiKey = process.env.OLA_MAPS_API_KEY;
+        if (apiKey) {
+            try {
+                const url = `https://api.olamaps.io/places/v1/geocode?address=${encodeURIComponent(q)}&api_key=${apiKey}`;
+                const response = await fetch(url, { headers: { 'X-Request-Id': `req-${Date.now()}` } });
+                if (response.ok) {
+                    const olaData = await response.json();
+                    const loc = olaData.geocodingResults?.[0]?.geometry?.location;
+                    if (loc && loc.lat != null && loc.lng != null) {
+                        const result = { lat: loc.lat.toString(), lon: loc.lng.toString() };
+                        setCached(cacheKey, result);
+                        return res.json({ success: true, data: result });
+                    }
+                }
+            } catch (olaError) {
+                console.error('[API ERROR] Ola geocode failed, falling back to Nominatim:', olaError.message);
+            }
+        }
+
+        // Nominatim fallback — always returns coordinates for a resolvable place.
+        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=1`;
+        const response = await fetch(url, { headers: { 'User-Agent': 'ParkStop-App' } });
+        const data = await response.json();
+        if (Array.isArray(data) && data.length > 0 && data[0].lat && data[0].lon) {
+            const result = { lat: data[0].lat, lon: data[0].lon };
+            setCached(cacheKey, result);
+            return res.json({ success: true, data: result });
+        }
+
+        return res.json({ success: false, message: 'Location not found' });
+    } catch (error) {
+        console.error('[Geocode error]', error.message);
+        res.status(500).json({ success: false, message: 'Geocoding failed' });
+    }
+});
+
 // Polyline decoder to convert Google/Ola encoded polyline to GeoJSON coordinates [lng, lat]
 function decodePolyline(str, precision = 5) {
     let index = 0,
