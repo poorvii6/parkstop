@@ -94,7 +94,10 @@ export async function startBackgroundLocation(): Promise<boolean> {
     console.log('[BG Location] Started');
     return true;
   } catch (e: any) {
-    console.error('[BG Location] Start failed:', e.message);
+    // Non-fatal: foreground GPS tracking still works; background updates are a
+    // bonus (screen-off navigation). Warn instead of error so the dev overlay
+    // doesn't present graceful degradation as a crash.
+    console.warn('[BG Location] Start failed (continuing with foreground tracking):', e.message);
     return false;
   }
 }

@@ -11,13 +11,16 @@
  *   - <Marker lngLat={[lng, lat]} anchor="bottom">  (was <MarkerView coordinate>)
  */
 import React, { forwardRef, useImperativeHandle, useRef } from 'react';
-import { StyleSheet, View, Text } from 'react-native';
+import { StyleSheet, View, Text, TouchableOpacity } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 // The native module is present in the dev build; access its v11 named exports.
 const MLGL: any = require('@maplibre/maplibre-react-native');
 const MLMap = MLGL.Map;
 const MLCamera = MLGL.Camera;
 const MLMarker = MLGL.Marker;
+const MLGeoJSONSource = MLGL.GeoJSONSource;
+const MLLayer = MLGL.Layer;
 
 const CARTO_DAY = 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json';
 const CARTO_NIGHT = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
@@ -25,14 +28,31 @@ const CARTO_NIGHT = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style
 type Props = {
   userLocation?: { lat: number; lng: number };
   markers?: Array<{ id: string; lat: number; lng: number; price: number; available: boolean; title?: string }>;
+  routeCoords?: Array<{ latitude: number; longitude: number }>;
+  altRoutes?: Array<{ coords: Array<{ latitude: number; longitude: number }>; duration: number; distance: number }>;
   searchedPlace?: { lat: number; lng: number; title: string } | null;
   destination?: { lat: number; lng: number } | null;
+  isActiveNavigation?: boolean;
+  isFollowing?: boolean;
+  heading?: number;
   mapStyleUrl?: string;
   mapApiKey?: string;
   onMapPress?: (coords: [number, number]) => void;
+  onMapInteraction?: () => void;
   onMarkerPress?: (id: string) => void;
+  onRecenter?: () => void;
+  hideControls?: boolean;
   style?: any;
 };
+
+const lineFeature = (coords: Array<{ latitude: number; longitude: number }>) => ({
+  type: 'Feature' as const,
+  properties: {},
+  geometry: {
+    type: 'LineString' as const,
+    coordinates: coords.map((c) => [c.longitude, c.latitude]),
+  },
+});
 
 const MapLibreNative = forwardRef((props: Props, ref: any) => {
   const cameraRef = useRef<any>(null);
@@ -67,6 +87,7 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
     animateCamera: (cfg: any) => {
       const c = cfg?.center;
       if (!c || !cameraRef.current) return;
+      markProgrammatic(1000);
       cameraRef.current.flyTo({
         center: [c.longitude, c.latitude],
         zoom: cfg.zoom || 15,
@@ -81,46 +102,215 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
       ? { lat: props.destination.lat, lng: props.destination.lng }
       : null;
 
+  // ── Camera follow ─────────────────────────────────────────────
+  // While following, glide the camera to the user's position. During active
+  // navigation: zoom in, tilt, and rotate to the direction of travel.
+  React.useEffect(() => {
+    if (!props.isFollowing || !props.userLocation || !cameraRef.current) return;
+    // Grace period: never fight a gesture the user made in the last 2s,
+    // even if the isFollowing prop hasn't flipped yet.
+    if (Date.now() - lastInteraction.current < 2000) return;
+    markProgrammatic(700);
+    if (props.isActiveNavigation) {
+      cameraRef.current.easeTo({
+        center: [props.userLocation.lng, props.userLocation.lat],
+        zoom: 17.5,
+        pitch: 55,
+        bearing: props.heading || 0,
+        duration: 700,
+      });
+    } else {
+      // Outside navigation only re-center — never force zoom/pitch/bearing,
+      // so the user's pinch-zoom level is respected while following.
+      cameraRef.current.easeTo({
+        center: [props.userLocation.lng, props.userLocation.lat],
+        duration: 700,
+      });
+    }
+  }, [props.userLocation, props.isFollowing, props.isActiveNavigation, props.heading]);
+
+  // ── Fit route into view ───────────────────────────────────────
+  // When a route first appears outside navigation (spot preview), frame it.
+  const hadRouteRef = useRef(false);
+  React.useEffect(() => {
+    const route = props.routeCoords || [];
+    if (route.length >= 2 && !props.isActiveNavigation && !hadRouteRef.current && cameraRef.current) {
+      let w = Infinity, s = Infinity, e = -Infinity, n = -Infinity;
+      for (const c of route) {
+        if (c.longitude < w) w = c.longitude;
+        if (c.longitude > e) e = c.longitude;
+        if (c.latitude < s) s = c.latitude;
+        if (c.latitude > n) n = c.latitude;
+      }
+      cameraRef.current.fitBounds([w, s, e, n], {
+        padding: { top: 120, bottom: 220, left: 60, right: 60 },
+        duration: 1000,
+      });
+    }
+    hadRouteRef.current = route.length >= 2;
+  }, [props.routeCoords, props.isActiveNavigation]);
+
+  const routeGeo = React.useMemo(
+    () => (props.routeCoords && props.routeCoords.length >= 2 ? lineFeature(props.routeCoords) : null),
+    [props.routeCoords]
+  );
+  const altGeos = React.useMemo(
+    () => (props.altRoutes || []).filter((a) => a.coords?.length >= 2).map((a) => lineFeature(a.coords)),
+    [props.altRoutes]
+  );
+
   const handleMapPress = (e: any) => {
     const coords = e?.geometry?.coordinates || e?.nativeEvent?.geometry?.coordinates;
     if (coords && props.onMapPress) props.onMapPress([coords[0], coords[1]]);
   };
 
+  // Any user gesture (pan/pinch/rotate) must release the follow-camera,
+  // otherwise the easeTo loop re-centers every GPS tick and the map feels
+  // stuck. Handle both possible event shapes defensively.
+  const lastInteraction = useRef(0);
+  const bearingRef = useRef(0);
+  const viewStateRef = useRef<any>(null);
+  // Window during which camera movement is OURS (easeTo/flyTo). Any region
+  // change outside this window is, by definition, a user gesture — this makes
+  // gesture detection reliable even if the event's userInteraction flag is
+  // broken on some devices.
+  const programmaticUntil = useRef(0);
+  const markProgrammatic = (durationMs: number) => {
+    programmaticUntil.current = Date.now() + durationMs + 400;
+  };
+
+  const handleRegionChange = (e: any) => {
+    const ev = e?.nativeEvent ?? e;
+    if (typeof ev?.bearing === 'number') bearingRef.current = ev.bearing;
+    const isGesture = ev?.userInteraction || Date.now() > programmaticUntil.current;
+    if (isGesture) {
+      lastInteraction.current = Date.now();
+      props.onMapInteraction?.();
+    }
+  };
+
+  // Fires once per gesture end — keep the latest view state for the nav arrow.
+  const handleRegionDidChange = (e: any) => {
+    const ev = e?.nativeEvent ?? e;
+    if (ev) viewStateRef.current = ev;
+    if (typeof ev?.bearing === 'number') bearingRef.current = ev.bearing;
+  };
+
+  // Hardware-level interaction: the instant ANY finger touches the map, stop
+  // the follow-camera. Passive observation — does not steal the gesture.
+  const handleTouchStart = () => {
+    lastInteraction.current = Date.now();
+    if (props.isFollowing) props.onMapInteraction?.();
+  };
+
+  // Recenter must move the camera IMMEDIATELY — the follow effect alone can be
+  // blocked by the interaction grace period (the tap itself counts as a touch).
+  const handleRecenter = () => {
+    lastInteraction.current = 0;
+    if (props.userLocation && cameraRef.current) {
+      markProgrammatic(800);
+      cameraRef.current.easeTo({
+        center: [props.userLocation.lng, props.userLocation.lat],
+        zoom: props.isActiveNavigation ? 17.5 : 15,
+        pitch: props.isActiveNavigation ? 55 : 0,
+        bearing: props.isActiveNavigation ? props.heading || 0 : 0,
+        duration: 800,
+      });
+    }
+    props.onRecenter?.();
+  };
+
   return (
-    <View style={[StyleSheet.absoluteFill, props.style]}>
+    <View style={[StyleSheet.absoluteFill, props.style]} onTouchStart={handleTouchStart}>
       <MLMap
         style={StyleSheet.absoluteFill}
         mapStyle={styleUrl}
         onPress={handleMapPress}
         onDidFailLoadingMap={() => setStyleFailed(true)}
+        onRegionWillChange={handleRegionChange}
+        onRegionIsChanging={handleRegionChange}
+        onRegionDidChange={handleRegionDidChange}
         logo={false}
         attribution={false}
+        compass={true}
+        compassPosition={{ top: 130, right: 18 }}
       >
         <MLCamera ref={cameraRef} initialViewState={{ center: [loc.lng, loc.lat], zoom: 14 }} />
 
-        {/* Live location — blue dot */}
+        {/* Alternative routes — muted gray beneath the main route */}
+        {altGeos.map((geo, i) => (
+          <MLGeoJSONSource key={`alt-${i}`} id={`alt-route-${i}`} data={geo}>
+            <MLLayer
+              id={`alt-route-line-${i}`}
+              type="line"
+              layout={{ 'line-join': 'round', 'line-cap': 'round' }}
+              paint={{ 'line-color': '#78909c', 'line-width': 6, 'line-opacity': 0.55 }}
+            />
+          </MLGeoJSONSource>
+        ))}
+
+        {/* Main route — casing + line (Google-style) */}
+        {routeGeo ? (
+          <MLGeoJSONSource id="main-route" data={routeGeo}>
+            <MLLayer
+              id="main-route-casing"
+              type="line"
+              layout={{ 'line-join': 'round', 'line-cap': 'round' }}
+              paint={{ 'line-color': '#0d47a1', 'line-width': 12, 'line-opacity': 0.5 }}
+            />
+            <MLLayer
+              id="main-route-line"
+              type="line"
+              layout={{ 'line-join': 'round', 'line-cap': 'round' }}
+              paint={{ 'line-color': '#4285F4', 'line-width': 7 }}
+            />
+          </MLGeoJSONSource>
+        ) : null}
+
+        {/* Live location — blue dot normally, Google-style arrow while navigating */}
         {props.userLocation ? (
           <MLMarker id="user" lngLat={[props.userLocation.lng, props.userLocation.lat]} anchor="center">
-            <View style={styles.userDotOuter}>
-              <View style={styles.userDot} />
-            </View>
+            {props.isActiveNavigation ? (
+              <View
+                style={[
+                  styles.navArrowWrap,
+                  { transform: [{ rotate: `${(props.heading || 0) - bearingRef.current}deg` }] },
+                ]}
+              >
+                <View style={styles.navArrow} />
+              </View>
+            ) : (
+              <View style={styles.userDotOuter}>
+                <View style={styles.userDot} />
+              </View>
+            )}
           </MLMarker>
         ) : null}
 
-        {/* Parking spots — compact professional pills */}
-        {(props.markers || []).map((m) => (
-          <MLMarker
-            key={m.id}
-            id={String(m.id)}
-            lngLat={[m.lng, m.lat]}
-            anchor="bottom"
-            onPress={() => props.onMarkerPress?.(m.id)}
-          >
-            <View style={[styles.spotPill, !m.available && styles.spotPillUnavailable]}>
-              <Text style={styles.spotPillText}>₹{m.price}</Text>
-            </View>
-          </MLMarker>
-        ))}
+        {/* Parking spots — compact professional pills (selected spot highlighted) */}
+        {(props.markers || []).map((m) => {
+          const isActive =
+            !!dest && Math.abs(dest.lat - m.lat) < 0.001 && Math.abs(dest.lng - m.lng) < 0.001;
+          return (
+            <MLMarker
+              key={m.id}
+              id={String(m.id)}
+              lngLat={[m.lng, m.lat]}
+              anchor="bottom"
+              onPress={() => props.onMarkerPress?.(m.id)}
+            >
+              <View
+                style={[
+                  styles.spotPill,
+                  !m.available && styles.spotPillUnavailable,
+                  isActive && styles.spotPillActive,
+                ]}
+              >
+                <Text style={styles.spotPillText}>🅿️ ₹{m.price}</Text>
+              </View>
+            </MLMarker>
+          );
+        })}
 
         {/* Destination pin */}
         {dest ? (
@@ -131,6 +321,16 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
           </MLMarker>
         ) : null}
       </MLMap>
+
+      {/* Compass is the map's built-in native one (compass prop above):
+          appears when rotated, hides facing north, tap resets — Google-style. */}
+
+      {/* Recenter — reappears whenever the user has panned away */}
+      {!props.hideControls && !props.isFollowing ? (
+        <TouchableOpacity style={styles.recenterBtn} onPress={handleRecenter} activeOpacity={0.8}>
+          <Ionicons name="locate" size={22} color="#1a73e8" />
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 });
@@ -164,6 +364,69 @@ const styles = StyleSheet.create({
   },
   spotPillUnavailable: {
     backgroundColor: '#9aa0a6',
+  },
+  spotPillActive: {
+    backgroundColor: '#0d47a1',
+    borderColor: '#FFD54F',
+    transform: [{ scale: 1.15 }],
+  },
+  navArrowWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#1a73e8',
+    borderWidth: 3,
+    borderColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.35,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 6,
+  },
+  navArrow: {
+    width: 0,
+    height: 0,
+    borderLeftWidth: 9,
+    borderRightWidth: 9,
+    borderBottomWidth: 18,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderBottomColor: '#fff',
+    marginTop: -3,
+  },
+  compassBtn: {
+    position: 'absolute',
+    top: 130,
+    right: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 6,
+  },
+  recenterBtn: {
+    position: 'absolute',
+    bottom: 210,
+    right: 16,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 6,
   },
   spotPillText: {
     color: '#fff',
