@@ -116,6 +116,7 @@ export default function FinderDashboard() {
   const lastNearbyFetch = useRef(0);
   const lastRouteFetch = useRef(0);
   const lastRouteDest = useRef<string | null>(null);
+  const lastRouteFetchPos = useRef<{ lat: number; lng: number } | null>(null);
   const lastUpdateCoords = useRef({ lat: 0, lng: 0 });
   const lastRerouteTime = useRef(0);
   const lastVoiceInstruction = useRef('');
@@ -444,7 +445,10 @@ export default function FinderDashboard() {
 
             const rawSpeed = loc.coords.speed || 0;
             const speedKmh = rawSpeed * 3.6;
-            const isMoving = speedKmh > 3;
+            // Idle GPS jitter reports phantom speeds of 2-6 km/h; require a
+            // clearly-moving speed AND a reasonable GPS fix before showing it.
+            const gpsOk = (loc.coords.accuracy || 99) < 30;
+            const isMoving = gpsOk && speedKmh > 6;
 
             // Use GPS heading when moving, keep last heading when stationary
             if (isMoving && loc.coords.heading != null && loc.coords.heading >= 0) {
@@ -851,9 +855,20 @@ export default function FinderDashboard() {
     const destId = destination ? String(('id' in destination ? (destination as any).id : '') || `${destination.lat},${destination.lng}`) : null;
     const isNewDest = destId !== lastRouteDest.current;
 
-    if (destination && userLocation && (isActiveNav || isNewDest) && (now - lastRouteFetch.current > 4000 || isNewDest)) {
+    // During navigation, only refetch when the user has actually MOVED —
+    // GPS jitter at rest (±2-5m) must not trigger a refetch loop that thrashes
+    // the map and the server every few seconds.
+    let movedEnough = true;
+    if (isActiveNav && !isNewDest && userLocation && lastRouteFetchPos.current) {
+      const dLat = (userLocation.lat - lastRouteFetchPos.current.lat) * 110540;
+      const dLng = (userLocation.lng - lastRouteFetchPos.current.lng) * 111320;
+      movedEnough = Math.sqrt(dLat * dLat + dLng * dLng) > 30; // meters
+    }
+
+    if (destination && userLocation && (isActiveNav || isNewDest) && (now - lastRouteFetch.current > 4000 || isNewDest) && movedEnough) {
       lastRouteFetch.current = now;
       lastRouteDest.current = destId;
+      lastRouteFetchPos.current = { lat: userLocation.lat, lng: userLocation.lng };
       (async () => {
         try {
           console.log(`[API] Fetching route from ${userLocation.lat},${userLocation.lng} to ${destination.lat},${destination.lng}`);
@@ -1281,18 +1296,32 @@ export default function FinderDashboard() {
     let lon = parseFloat(item.lon);
     const name = item.display_name;
 
-    // Ola Maps autocomplete predictions come back without coordinates (lat/lon = 0),
-    // so resolve the real location via the geocode endpoint before dropping the pin.
-    // Internal parking-spot results already carry valid coordinates and skip this.
+    // Google-style resolution: the autocomplete result carries a place_id —
+    // resolve THAT exact place via place-details. Text geocoding is only a
+    // last resort (ambiguous names like "Tumkur" can otherwise land on
+    // "Tumkur Road, Bangalore"). Internal spots already have coordinates.
     if (!item.isInternal && (!lat || !lon || isNaN(lat) || isNaN(lon))) {
-      try {
-        const geo = await apiClient.get(`/maps/geocode?q=${encodeURIComponent(name)}`);
-        if (geo.data?.success && geo.data.data) {
-          lat = parseFloat(geo.data.data.lat);
-          lon = parseFloat(geo.data.data.lon);
+      if (item.place_id) {
+        try {
+          const det = await apiClient.get(`/maps/place-details?place_id=${encodeURIComponent(item.place_id)}`);
+          if (det.data?.success && det.data.data) {
+            lat = parseFloat(det.data.data.lat);
+            lon = parseFloat(det.data.data.lon);
+          }
+        } catch (e) {
+          console.log('[Search] Place details failed:', (e as any)?.message);
         }
-      } catch (e) {
-        console.log('[Search] Geocode failed:', (e as any)?.message);
+      }
+      if (!lat || !lon || isNaN(lat) || isNaN(lon)) {
+        try {
+          const geo = await apiClient.get(`/maps/geocode?q=${encodeURIComponent(name)}`);
+          if (geo.data?.success && geo.data.data) {
+            lat = parseFloat(geo.data.data.lat);
+            lon = parseFloat(geo.data.data.lon);
+          }
+        } catch (e) {
+          console.log('[Search] Geocode failed:', (e as any)?.message);
+        }
       }
     }
 

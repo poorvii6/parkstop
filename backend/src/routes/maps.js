@@ -140,6 +140,9 @@ router.get('/search', async (req, res) => {
                             display_name: item.description || item.structured_formatting?.main_text || '',
                             lat: latVal ? latVal.toString() : '0',
                             lon: lngVal ? lngVal.toString() : '0',
+                            // Google-style flow: resolve the EXACT selected place
+                            // via place-details instead of re-geocoding its text.
+                            place_id: item.place_id || null,
                             class: 'place',
                             type: 'city',
                             address: {
@@ -229,6 +232,49 @@ router.get('/search', async (req, res) => {
         res.json({ success: true, data });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+// ── Place details: exact coordinates for a selected autocomplete result ───
+// This is how Google Maps works: autocomplete returns a place_id, selection
+// resolves THAT exact place — no ambiguity, no re-geocoding of display text
+// (which was landing "Tumkur" searches on "Tumkur Road, Bangalore").
+router.get('/place-details', async (req, res) => {
+    try {
+        const placeId = (req.query.place_id || '').toString().trim();
+        if (!placeId) {
+            return res.status(400).json({ success: false, message: 'place_id is required' });
+        }
+
+        const cacheKey = `placedetails:${placeId}`;
+        const cached = getCached(cacheKey);
+        if (cached) return res.json({ success: true, data: cached, cached: true });
+
+        const apiKey = process.env.OLA_MAPS_API_KEY;
+        if (!apiKey) {
+            return res.json({ success: false, message: 'Place details unavailable (no maps key)' });
+        }
+
+        const url = `https://api.olamaps.io/places/v1/details?place_id=${encodeURIComponent(placeId)}&api_key=${apiKey}`;
+        const response = await fetch(url, { headers: { 'X-Request-Id': `req-${Date.now()}` } });
+        if (response.ok) {
+            const data = await response.json();
+            const loc = data.result?.geometry?.location;
+            if (loc && loc.lat != null && loc.lng != null) {
+                const result = {
+                    lat: loc.lat.toString(),
+                    lon: loc.lng.toString(),
+                    name: data.result?.name || '',
+                    address: data.result?.formatted_address || ''
+                };
+                setCached(cacheKey, result);
+                return res.json({ success: true, data: result });
+            }
+        }
+        return res.json({ success: false, message: 'Place not found' });
+    } catch (error) {
+        console.error('[Place details error]', error.message);
+        res.status(500).json({ success: false, message: 'Place details failed' });
     }
 });
 

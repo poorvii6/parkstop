@@ -150,14 +150,75 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
     hadRouteRef.current = route.length >= 2;
   }, [props.routeCoords, props.isActiveNavigation]);
 
+  // ── Signature-based memoization ───────────────────────────────
+  // The finder re-renders every few seconds (spot polling, route refetch) and
+  // passes NEW array identities each time even when the content is identical.
+  // Recomputing on identity would re-upload sources / rebuild native markers
+  // mid-gesture and make the map feel stiff. Instead we key everything on cheap
+  // content signatures: same content ⇒ zero native updates.
+  const propsRef = useRef(props);
+  propsRef.current = props; // callbacks inside memoized trees stay fresh
+
+  const rc = props.routeCoords || [];
+  const routeSig = rc.length >= 2
+    ? `${rc.length}:${rc[0].latitude.toFixed(5)},${rc[0].longitude.toFixed(5)}:${rc[rc.length - 1].latitude.toFixed(5)},${rc[rc.length - 1].longitude.toFixed(5)}`
+    : '';
+  const altSig = (props.altRoutes || [])
+    .map((a) => `${a.coords?.length || 0}:${Math.round(a.duration || 0)}`)
+    .join('|');
+  const markerSig = (props.markers || [])
+    .map((m) => `${m.id}:${m.price}:${m.available ? 1 : 0}`)
+    .join('|');
+  const destKey = dest ? `${dest.lat.toFixed(5)},${dest.lng.toFixed(5)}` : '';
+
+  /* eslint-disable react-hooks/exhaustive-deps -- intentionally keyed on content signatures */
   const routeGeo = React.useMemo(
-    () => (props.routeCoords && props.routeCoords.length >= 2 ? lineFeature(props.routeCoords) : null),
-    [props.routeCoords]
+    () => (rc.length >= 2 ? lineFeature(rc) : null),
+    [routeSig]
   );
   const altGeos = React.useMemo(
-    () => (props.altRoutes || []).filter((a) => a.coords?.length >= 2).map((a) => lineFeature(a.coords)),
-    [props.altRoutes]
+    () => (propsRef.current.altRoutes || []).filter((a) => a.coords?.length >= 2).map((a) => lineFeature(a.coords)),
+    [altSig]
   );
+
+  const spotMarkerElements = React.useMemo(() => {
+    const d = propsRef.current.searchedPlace || propsRef.current.destination;
+    return (propsRef.current.markers || []).map((m) => {
+      const isActive = !!d && Math.abs(d.lat - m.lat) < 0.001 && Math.abs(d.lng - m.lng) < 0.001;
+      return (
+        <MLMarker
+          key={m.id}
+          id={String(m.id)}
+          lngLat={[m.lng, m.lat]}
+          anchor="bottom"
+          onPress={() => propsRef.current.onMarkerPress?.(m.id)}
+        >
+          <View
+            style={[
+              styles.spotPill,
+              !m.available && styles.spotPillUnavailable,
+              isActive && styles.spotPillActive,
+            ]}
+          >
+            <Text style={styles.spotPillText}>🅿️ ₹{m.price}</Text>
+          </View>
+        </MLMarker>
+      );
+    });
+  }, [markerSig, destKey]);
+
+  const destMarkerElement = React.useMemo(
+    () =>
+      dest ? (
+        <MLMarker id="destination" lngLat={[dest.lng, dest.lat]} anchor="bottom">
+          <View style={styles.destPin}>
+            <View style={styles.destPinInner} />
+          </View>
+        </MLMarker>
+      ) : null,
+    [destKey]
+  );
+  /* eslint-enable react-hooks/exhaustive-deps */
 
   const handleMapPress = (e: any) => {
     const coords = e?.geometry?.coordinates || e?.nativeEvent?.geometry?.coordinates;
@@ -233,7 +294,8 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
         logo={false}
         attribution={false}
         compass={true}
-        compassPosition={{ top: 130, right: 18 }}
+        compassPosition={{ bottom: 275, right: 22 }}
+        androidView="texture"
       >
         <MLCamera ref={cameraRef} initialViewState={{ center: [loc.lng, loc.lat], zoom: 14 }} />
 
@@ -287,48 +349,25 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
           </MLMarker>
         ) : null}
 
-        {/* Parking spots — compact professional pills (selected spot highlighted) */}
-        {(props.markers || []).map((m) => {
-          const isActive =
-            !!dest && Math.abs(dest.lat - m.lat) < 0.001 && Math.abs(dest.lng - m.lng) < 0.001;
-          return (
-            <MLMarker
-              key={m.id}
-              id={String(m.id)}
-              lngLat={[m.lng, m.lat]}
-              anchor="bottom"
-              onPress={() => props.onMarkerPress?.(m.id)}
-            >
-              <View
-                style={[
-                  styles.spotPill,
-                  !m.available && styles.spotPillUnavailable,
-                  isActive && styles.spotPillActive,
-                ]}
-              >
-                <Text style={styles.spotPillText}>🅿️ ₹{m.price}</Text>
-              </View>
-            </MLMarker>
-          );
-        })}
+        {/* Parking spots — memoized; only rebuild when content actually changes */}
+        {spotMarkerElements}
 
-        {/* Destination pin */}
-        {dest ? (
-          <MLMarker id="destination" lngLat={[dest.lng, dest.lat]} anchor="bottom">
-            <View style={styles.destPin}>
-              <View style={styles.destPinInner} />
-            </View>
-          </MLMarker>
-        ) : null}
+        {/* Destination pin — memoized on coordinates */}
+        {destMarkerElement}
       </MLMap>
 
       {/* Compass is the map's built-in native one (compass prop above):
           appears when rotated, hides facing north, tap resets — Google-style. */}
 
-      {/* Recenter — reappears whenever the user has panned away */}
-      {!props.hideControls && !props.isFollowing ? (
+      {/* Recenter — Google-style: always visible; blue while following the
+          user, grey once panned away. Tap to snap back to your location. */}
+      {!props.hideControls ? (
         <TouchableOpacity style={styles.recenterBtn} onPress={handleRecenter} activeOpacity={0.8}>
-          <Ionicons name="locate" size={22} color="#1a73e8" />
+          <Ionicons
+            name={props.isFollowing ? 'locate' : 'locate-outline'}
+            size={22}
+            color={props.isFollowing ? '#1a73e8' : '#5f6368'}
+          />
         </TouchableOpacity>
       ) : null}
     </View>
