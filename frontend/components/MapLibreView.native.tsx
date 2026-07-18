@@ -10,6 +10,7 @@
 import React, { useEffect, useRef, useState, useImperativeHandle, useCallback, useMemo } from 'react';
 import { View, StyleSheet, TouchableOpacity, Text, Platform, Animated as RNAnimated } from 'react-native';
 import { WebView } from 'react-native-webview';
+import MapLibreNative from './MapLibreNative';
 
 // Try to load native MapLibre
 let MapLibreGL: any = null;
@@ -26,7 +27,8 @@ try {
   // MarkerView -> Marker, ShapeSource -> GeoJSONSource, LineLayer -> Layer), so
   // this guard keeps us on the WebView fallback instead of crashing. Enabling
   // native rendering requires migrating this component to the v11 API.
-  NATIVE_AVAILABLE = !!(MapLibreGL && MapLibreGL.MapView);
+  // v11 renamed MapView -> Map; accept either so native rendering turns on.
+  NATIVE_AVAILABLE = !!(MapLibreGL && (MapLibreGL.Map || MapLibreGL.MapView));
 } catch (e) {
   console.warn('[MapLibre] Native module not available — map features will be limited:', (e as any)?.message);
 }
@@ -368,6 +370,10 @@ const MapLibreView: React.FC<MapProps> = React.forwardRef((props: MapProps, ref:
   if (!NATIVE_AVAILABLE) {
     return <WebViewFallback {...props} ref={ref} />;
   }
+
+  // Native MapLibre v11 (Track 1 migration). The legacy native branch below is
+  // kept for reference during the migration but is no longer rendered.
+  return <MapLibreNative {...props} ref={ref} />;
 
   const {
     userLocation,
