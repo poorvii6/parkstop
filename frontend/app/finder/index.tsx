@@ -80,6 +80,13 @@ export default function FinderDashboard() {
 
   const { isInPipMode: isInPip } = ExpoPip.useIsInPip();
 
+  // Ensure the backend's active role matches this dashboard so Finder actions
+  // (price calculation, booking, cancel, etc.) are authorized. Finding requires
+  // no registration, so this is safe and idempotent.
+  useEffect(() => {
+    apiClient.post('/auth/switch-role', { newRole: 'FINDER' }).catch(() => {});
+  }, []);
+
   useEffect(() => {
     const subscription = AppState.addEventListener('change', nextAppState => {
       if (nextAppState === 'background' && ['en_route', 'navigating', 'arriving'].includes(step)) {
@@ -1270,9 +1277,30 @@ export default function FinderDashboard() {
   };
 
   const selectSuggestion = async (item: any) => {
-    const lat = parseFloat(item.lat);
-    const lon = parseFloat(item.lon);
+    let lat = parseFloat(item.lat);
+    let lon = parseFloat(item.lon);
     const name = item.display_name;
+
+    // Ola Maps autocomplete predictions come back without coordinates (lat/lon = 0),
+    // so resolve the real location via the geocode endpoint before dropping the pin.
+    // Internal parking-spot results already carry valid coordinates and skip this.
+    if (!item.isInternal && (!lat || !lon || isNaN(lat) || isNaN(lon))) {
+      try {
+        const geo = await apiClient.get(`/maps/geocode?q=${encodeURIComponent(name)}`);
+        if (geo.data?.success && geo.data.data) {
+          lat = parseFloat(geo.data.data.lat);
+          lon = parseFloat(geo.data.data.lon);
+        }
+      } catch (e) {
+        console.log('[Search] Geocode failed:', (e as any)?.message);
+      }
+    }
+
+    // If we still don't have a valid location, stop rather than flying to (0,0).
+    if (!lat || !lon || isNaN(lat) || isNaN(lon)) {
+      Alert.alert('Location unavailable', 'Could not find the exact location for that place. Please try another search.');
+      return;
+    }
 
     saveRecentSearch(item);
     ignoreNextQueryChange.current = true;

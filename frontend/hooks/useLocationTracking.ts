@@ -34,51 +34,63 @@ export function useLocationTracking(
     let headingSub: any = null;
     
     (async () => {
-      let coords = { lat: 37.78825, lng: -122.4324 }; // Default SF
+      // Sensible fallback (Bengaluru) if we can't get a real fix — never San Francisco.
+      let coords = { lat: 12.9716, lng: 77.5946 };
       try {
         let { status } = await Location.requestForegroundPermissionsAsync();
-        
+
         if (status === 'granted') {
-          let location = await Promise.race([
-            Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
-            new Promise<null>((_, reject) => setTimeout(() => reject(new Error('Timeout')), 10000))
-          ]).catch(async () => {
-            return await Location.getLastKnownPositionAsync({});
-          }) as Location.LocationObject;
+          // Try a fresh fix; if it's unavailable or times out, fall back to the
+          // last known position before giving up on a real location entirely.
+          let location: Location.LocationObject | null = null;
+          try {
+            location = await Promise.race([
+              Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+              new Promise<null>((_, reject) => setTimeout(() => reject(new Error('Timeout')), 10000)),
+            ]) as Location.LocationObject;
+          } catch {
+            location = await Location.getLastKnownPositionAsync({}).catch(() => null);
+          }
 
           if (location) {
             coords = { lat: location.coords.latitude, lng: location.coords.longitude };
             if (shouldSyncToBackend) syncLocation(coords);
           }
 
-          watchSub = await Location.watchPositionAsync({
-            accuracy: Location.Accuracy.Balanced,
-            timeInterval: 5000,
-            distanceInterval: 20,
-          }, (loc) => {
-            const newCoords = { lat: loc.coords.latitude, lng: loc.coords.longitude };
-            const dy = newCoords.lat - lastUpdateCoords.current.lat;
-            const dx = newCoords.lng - lastUpdateCoords.current.lng;
-            const dist = Math.sqrt(dx * dx + dy * dy) * 111000;
+          // Start live tracking separately: if location services are disabled these
+          // can throw, and that must NOT discard the fix we already obtained above.
+          try {
+            watchSub = await Location.watchPositionAsync({
+              accuracy: Location.Accuracy.Balanced,
+              timeInterval: 5000,
+              distanceInterval: 20,
+            }, (loc) => {
+              const newCoords = { lat: loc.coords.latitude, lng: loc.coords.longitude };
+              const dy = newCoords.lat - lastUpdateCoords.current.lat;
+              const dx = newCoords.lng - lastUpdateCoords.current.lng;
+              const dist = Math.sqrt(dx * dx + dy * dy) * 111000;
 
-            if (dist > 15) {
-              lastUpdateCoords.current = newCoords;
-              setUserLocation(newCoords);
-              if (shouldSyncToBackend) syncLocation(newCoords);
-            }
-          });
+              if (dist > 15) {
+                lastUpdateCoords.current = newCoords;
+                setUserLocation(newCoords);
+                if (shouldSyncToBackend) syncLocation(newCoords);
+              }
+            });
 
-          headingSub = await Location.watchHeadingAsync((h) => {
-            setDeviceHeading(h.trueHeading);
-          });
+            headingSub = await Location.watchHeadingAsync((h) => {
+              setDeviceHeading(h.trueHeading);
+            });
+          } catch (watchErr) {
+            console.log('[Location] Live tracking unavailable:', (watchErr as any).message);
+          }
         }
       } catch (error) {
         console.log('[Location] Error during initialization:', error);
       }
-      
+
       setUserLocation(coords);
       lastUpdateCoords.current = coords;
-      
+
       if (onLocationInit) {
         onLocationInit(coords);
       }

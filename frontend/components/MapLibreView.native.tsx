@@ -17,10 +17,18 @@ let NATIVE_AVAILABLE = false;
 try {
   MapLibreGL = require('@maplibre/maplibre-react-native');
   if (MapLibreGL?.default) MapLibreGL = MapLibreGL.default;
-  MapLibreGL.setAccessToken(null);
-  NATIVE_AVAILABLE = true;
+  // MapLibre needs no access token, and v10+ removed setAccessToken entirely.
+  if (typeof MapLibreGL.setAccessToken === 'function') {
+    MapLibreGL.setAccessToken(null);
+  }
+  // Only enable native rendering if the component API this file was written
+  // against is present. The installed v11 renamed components (MapView -> Map,
+  // MarkerView -> Marker, ShapeSource -> GeoJSONSource, LineLayer -> Layer), so
+  // this guard keeps us on the WebView fallback instead of crashing. Enabling
+  // native rendering requires migrating this component to the v11 API.
+  NATIVE_AVAILABLE = !!(MapLibreGL && MapLibreGL.MapView);
 } catch (e) {
-  console.warn('[MapLibre] Native module not available — map features will be limited');
+  console.warn('[MapLibre] Native module not available — map features will be limited:', (e as any)?.message);
 }
 
 export interface MapProps {

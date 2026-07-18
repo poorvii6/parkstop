@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BlueprintColors } from '../constants/BlueprintTheme';
 import { auth } from '../services/firebase';
+import { onAuthStateChanged } from 'firebase/auth';
 
 export default function SplashScreen() {
   const router = useRouter();
@@ -16,24 +17,44 @@ export default function SplashScreen() {
       useNativeDriver: true,
     }).start();
 
-    const checkAuth = async () => {
-      // Shorter delay for premium feel
-      await new Promise(resolve => setTimeout(resolve, 2000));
+    // Resolves once Firebase has finished restoring any persisted session from
+    // AsyncStorage. Reading auth.currentUser directly is unreliable at startup
+    // because that restore happens asynchronously — onAuthStateChanged fires
+    // exactly once when it's ready. A 5s timeout guards against a stuck listener.
+    const getRestoredUser = () =>
+      new Promise<any>((resolve) => {
+        let settled = false;
+        const finish = (u: any) => {
+          if (settled) return;
+          settled = true;
+          resolve(u);
+        };
+        const unsub = onAuthStateChanged(auth, (user) => {
+          unsub();
+          finish(user);
+        });
+        setTimeout(() => finish(auth.currentUser), 5000);
+      });
 
+    const checkAuth = async () => {
       try {
         // 1. Check if terms have been accepted
         const hasAcceptedTerms = await AsyncStorage.getItem('has_accepted_terms');
         if (hasAcceptedTerms !== 'true') {
+          await new Promise(resolve => setTimeout(resolve, 1200));
           router.replace('/welcome');
           return;
         }
 
-        // 2. Check if user is authenticated
+        // 2. Wait for Firebase to restore the persisted session (keeps users logged in)
         const token = await AsyncStorage.getItem('access_token');
         const isOffline = token === 'offline_token';
-        const hasFirebaseUser = auth.currentUser !== null;
+        const firebaseUser = await getRestoredUser();
 
-        if (!hasFirebaseUser && !isOffline) {
+        // Minimum splash time for a premium feel
+        await new Promise(resolve => setTimeout(resolve, 800));
+
+        if (!firebaseUser && !isOffline) {
           router.replace('/login');
           return;
         }

@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Platform, Dimensi
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import apiClient from '../api/client';
 import { BlueprintTheme, BlueprintColors } from '../constants/BlueprintTheme';
 
 export default function RoleSelectionScreen() {
@@ -13,10 +14,30 @@ export default function RoleSelectionScreen() {
     setActiveRole(role);
   };
 
+  const [loading, setLoading] = React.useState(false);
+
   const handleContinue = async () => {
     if (!activeRole) return;
-    await AsyncStorage.setItem('user_role', activeRole);
+    setLoading(true);
     const r = activeRole.toUpperCase();
+    try {
+      // Sync the chosen role to the backend so authorization works (booking,
+      // spot management, etc.). Without this the backend keeps a stale role and
+      // finder/spotter actions fail with 403.
+      const res = await apiClient.post('/auth/switch-role', { newRole: r });
+      if (res.data && res.data.registrationRequired) {
+        // Becoming a Spotter needs payout details — send them to spotter setup.
+        await AsyncStorage.setItem('user_role', activeRole);
+        setLoading(false);
+        router.replace('/spotter');
+        return;
+      }
+    } catch (e) {
+      // Non-fatal: still route locally so the user isn't stuck.
+      console.log('[Role] switch-role failed:', (e as any)?.message);
+    }
+    await AsyncStorage.setItem('user_role', activeRole);
+    setLoading(false);
     if (r === 'ADMIN') router.replace('/admin');
     else if (r === 'SPOTTER') router.replace('/spotter');
     else if (r === 'FINDER') router.replace('/finder');
