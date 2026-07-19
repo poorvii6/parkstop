@@ -44,6 +44,8 @@ type Props = {
   onRecenter?: () => void;
   onOffRoute?: (lat: number, lng: number) => void;
   hideControls?: boolean;
+  /** Bottom offset for recenter/compass so they ride above visible panels. */
+  controlsBottomOffset?: number;
   style?: any;
 };
 
@@ -340,7 +342,7 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
         logo={false}
         attribution={false}
         compass={true}
-        compassPosition={{ bottom: 275, right: 22 }}
+        compassPosition={{ bottom: (props.controlsBottomOffset ?? 210) + 65, right: 22 }}
         androidView="texture"
       >
         <MLCamera ref={cameraRef} initialViewState={{ center: [loc.lng, loc.lat], zoom: 14 }} />
@@ -419,7 +421,11 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
       {/* Recenter — Google-style: always visible; blue while following the
           user, grey once panned away. Tap to snap back to your location. */}
       {!props.hideControls ? (
-        <TouchableOpacity style={styles.recenterBtn} onPress={handleRecenter} activeOpacity={0.8}>
+        <TouchableOpacity
+          style={[styles.recenterBtn, { bottom: props.controlsBottomOffset ?? 210 }]}
+          onPress={handleRecenter}
+          activeOpacity={0.8}
+        >
           <Ionicons
             name={props.isFollowing ? 'locate' : 'locate-outline'}
             size={22}

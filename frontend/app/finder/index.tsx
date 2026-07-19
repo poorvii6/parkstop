@@ -2116,6 +2116,7 @@ export default function FinderDashboard() {
             distanceInfo={distanceInfo}
             searchedPlace={searchedPlace ?? null}
             onRecenter={recenterCamera}
+            controlsBottomOffset={['spot_booking', 'booking_confirm'].includes(step) ? 470 : 260}
             isMuted={isMuted}
             onMapPress={(coords: [number, number]) => {
               fetchNearbySpots(coords[1], coords[0]);
@@ -2170,8 +2171,10 @@ export default function FinderDashboard() {
               fetchSlots(id);
               setStep('spot_booking');
               if (spot && mapRef.current) {
+                // Center slightly BELOW the spot so the destination pin sits in
+                // the upper half of the screen, above the half-height panel.
                 mapRef.current.animateCamera({
-                  center: { latitude: spot.lat, longitude: spot.lng },
+                  center: { latitude: spot.lat - 0.0012, longitude: spot.lng },
                   zoom: 17
                 }, { duration: 1000 });
               }
@@ -2368,7 +2371,7 @@ export default function FinderDashboard() {
 
       {/* STEP 5: SPOT BOOKING BOTTOM SHEET */}
       {step === 'spot_booking' && (
-        <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, maxHeight: '85%', backgroundColor: '#0f172a', borderTopLeftRadius: 28, borderTopRightRadius: 28, shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 30, elevation: 20, zIndex: 1000, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' }}>
+        <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, maxHeight: '50%', backgroundColor: '#0f172a', borderTopLeftRadius: 28, borderTopRightRadius: 28, shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 30, elevation: 20, zIndex: 1000, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' }}>
           <ScrollView showsVerticalScrollIndicator={false} style={{ padding: 20, paddingBottom: 32 }} bounces={false}>
             <View style={{ width: 40, height: 4, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 2, alignSelf: 'center', marginBottom: 20 }} />
 
