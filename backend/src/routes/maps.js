@@ -192,10 +192,15 @@ router.get('/search', async (req, res) => {
                     // lookalike noise (e.g. a Bangalore bus stop named "Hubli").
                     const cityMatches = await cityPromise;
                     const cityNames = new Set(cityMatches.map(c => (c.display_name || '').split(',')[0].trim().toLowerCase()));
-                    const filteredOla = mappedData.filter(m => {
+    const filteredOla = mappedData.filter(m => {
                         const first = (m.display_name || '').split(',')[0].trim().toLowerCase();
                         return !cityNames.has(first);
                     });
+                    // Groom: results whose primary name STARTS WITH the typed
+                    // query rank above loose lookalikes (stable within groups).
+                    const ql = q.toLowerCase();
+                    const prefixRank = (m) => ((m.display_name || '').split(',')[0].trim().toLowerCase().startsWith(ql) ? 0 : 1);
+                    filteredOla.sort((a, b) => prefixRank(a) - prefixRank(b));
                     const merged = [...cityMatches, ...filteredOla].slice(0, 10);
 
                     // Annotate distance for display only — NEVER re-sort by it

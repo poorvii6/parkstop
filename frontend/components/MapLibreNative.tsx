@@ -113,6 +113,7 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
     if (Date.now() - lastInteraction.current < 2000) return;
     markProgrammatic(700);
     if (props.isActiveNavigation) {
+      bearingRef.current = props.heading || 0; // we set the bearing — track it
       cameraRef.current.easeTo({
         center: [props.userLocation.lng, props.userLocation.lat],
         zoom: 17.5,
@@ -343,30 +344,20 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
           </MLMarker>
         ) : null}
         {props.userLocation && props.isActiveNavigation ? (
-          <>
-            <MLImages images={{ navpuck: require('../assets/images/car_marker_small.png') }} />
-            <MLGeoJSONSource
-              id="user-nav"
-              data={{
-                type: 'Feature',
-                properties: {},
-                geometry: { type: 'Point', coordinates: [props.userLocation.lng, props.userLocation.lat] },
-              }}
+          <MLMarker id="user-nav" lngLat={[props.userLocation.lng, props.userLocation.lat]} anchor="center">
+            {/* Arrow rotation = travel heading minus the camera bearing WE set
+                (tracked in bearingRef by our own easeTo calls). While the
+                camera follows the heading this is ~0 → arrow points up, exactly
+                like Google navigation. */}
+            <View
+              style={[
+                styles.navArrowWrap,
+                { transform: [{ rotate: `${(props.heading || 0) - bearingRef.current}deg` }] },
+              ]}
             >
-              <MLLayer
-                id="user-nav-icon"
-                type="symbol"
-                layout={{
-                  'icon-image': 'navpuck',
-                  'icon-rotate': props.heading || 0,
-                  'icon-rotation-alignment': 'map',
-                  'icon-allow-overlap': true,
-                  'icon-ignore-placement': true,
-                  'icon-size': 0.7,
-                }}
-              />
-            </MLGeoJSONSource>
-          </>
+              <View style={styles.navArrow} />
+            </View>
+          </MLMarker>
         ) : null}
 
         {/* Parking spots — memoized; only rebuild when content actually changes */}

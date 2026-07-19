@@ -984,11 +984,22 @@ export default function FinderDashboard() {
         lastUpdateCoords.current = coords;
         fetchNearbySpots(coords.lat, coords.lng);
 
-        // 2. Start continuous watch in parallel
+        // Refine in the background: the fast fix trades accuracy for speed
+        // (last-known/lowest). Follow up with a precise GPS fix so the blue
+        // dot settles on the user's true position within a few seconds.
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
+          .then((l) => {
+            const precise = { lat: l.coords.latitude, lng: l.coords.longitude };
+            setUserLocation(precise);
+            lastUpdateCoords.current = precise;
+          })
+          .catch(() => {});
+
+        // 2. Start continuous watch in parallel (High accuracy, 5m updates)
         watchSub = await Location.watchPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
+          accuracy: Location.Accuracy.High,
           timeInterval: 2000,
-          distanceInterval: 10,
+          distanceInterval: 5,
         }, (l) => {
           const newCoords = { lat: l.coords.latitude, lng: l.coords.longitude };
           setUserLocation(newCoords);
