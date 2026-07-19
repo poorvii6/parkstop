@@ -42,6 +42,7 @@ type Props = {
   onMapInteraction?: () => void;
   onMarkerPress?: (id: string) => void;
   onRecenter?: () => void;
+  onOffRoute?: (lat: number, lng: number) => void;
   hideControls?: boolean;
   style?: any;
 };
@@ -187,6 +188,37 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
       console.log(`[Map] nav=true routePoints=${rc.length} rendered=${!!routeGeo}`);
     }
   }, [props.isActiveNavigation, routeSig]);
+
+  // ── Off-route detection ───────────────────────────────────────
+  // If the user strays >50m from the route during navigation, notify the
+  // finder (which reroutes with voice + haptics, on its own 10s cooldown).
+  React.useEffect(() => {
+    if (!props.isActiveNavigation || !props.userLocation || rc.length < 2) return;
+    const u = props.userLocation;
+    const cosLat = Math.cos((u.lat * Math.PI) / 180);
+    let minSq = Infinity;
+    // Point-to-segment distance in meters (equirectangular approximation),
+    // sampled across the polyline — plenty accurate at street scale.
+    for (let i = 0; i < rc.length - 1; i++) {
+      const ax = (rc[i].longitude - u.lng) * 111320 * cosLat;
+      const ay = (rc[i].latitude - u.lat) * 110540;
+      const bx = (rc[i + 1].longitude - u.lng) * 111320 * cosLat;
+      const by = (rc[i + 1].latitude - u.lat) * 110540;
+      const dx = bx - ax;
+      const dy = by - ay;
+      const len = dx * dx + dy * dy;
+      const t = len ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / len)) : 0;
+      const px = ax + t * dx;
+      const py = ay + t * dy;
+      const d = px * px + py * py;
+      if (d < minSq) minSq = d;
+      if (minSq < 400) return; // already within 20m — on route, stop early
+    }
+    if (Math.sqrt(minSq) > 50) {
+      console.log(`[Map] Off-route by ~${Math.round(Math.sqrt(minSq))}m — requesting reroute`);
+      propsRef.current.onOffRoute?.(u.lat, u.lng);
+    }
+  }, [props.userLocation, props.isActiveNavigation, routeSig]);
   const altGeos = React.useMemo(
     () => (propsRef.current.altRoutes || []).filter((a) => a.coords?.length >= 2).map((a) => lineFeature(a.coords)),
     [altSig]
