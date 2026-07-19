@@ -21,6 +21,7 @@ const MLCamera = MLGL.Camera;
 const MLMarker = MLGL.Marker;
 const MLGeoJSONSource = MLGL.GeoJSONSource;
 const MLLayer = MLGL.Layer;
+const MLImages = MLGL.Images;
 
 const CARTO_DAY = 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json';
 const CARTO_NIGHT = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
@@ -329,24 +330,43 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
           </MLGeoJSONSource>
         ) : null}
 
-        {/* Live location — blue dot normally, Google-style arrow while navigating */}
-        {props.userLocation ? (
+        {/* Live location — blue dot normally; while navigating, a map-aligned
+            vehicle puck rendered as a symbol layer. icon-rotation-alignment:
+            "map" means the GPU rotates it WITH the map — always correct
+            relative to the road, exactly like Google/Uber, with no dependence
+            on JS bearing events. */}
+        {props.userLocation && !props.isActiveNavigation ? (
           <MLMarker id="user" lngLat={[props.userLocation.lng, props.userLocation.lat]} anchor="center">
-            {props.isActiveNavigation ? (
-              <View
-                style={[
-                  styles.navArrowWrap,
-                  { transform: [{ rotate: `${(props.heading || 0) - bearingRef.current}deg` }] },
-                ]}
-              >
-                <View style={styles.navArrow} />
-              </View>
-            ) : (
-              <View style={styles.userDotOuter}>
-                <View style={styles.userDot} />
-              </View>
-            )}
+            <View style={styles.userDotOuter}>
+              <View style={styles.userDot} />
+            </View>
           </MLMarker>
+        ) : null}
+        {props.userLocation && props.isActiveNavigation ? (
+          <>
+            <MLImages images={{ navpuck: require('../assets/images/car_marker_small.png') }} />
+            <MLGeoJSONSource
+              id="user-nav"
+              data={{
+                type: 'Feature',
+                properties: {},
+                geometry: { type: 'Point', coordinates: [props.userLocation.lng, props.userLocation.lat] },
+              }}
+            >
+              <MLLayer
+                id="user-nav-icon"
+                type="symbol"
+                layout={{
+                  'icon-image': 'navpuck',
+                  'icon-rotate': props.heading || 0,
+                  'icon-rotation-alignment': 'map',
+                  'icon-allow-overlap': true,
+                  'icon-ignore-placement': true,
+                  'icon-size': 0.7,
+                }}
+              />
+            </MLGeoJSONSource>
+          </>
         ) : null}
 
         {/* Parking spots — memoized; only rebuild when content actually changes */}

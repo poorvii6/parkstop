@@ -876,8 +876,14 @@ export default function FinderDashboard() {
           const res = await apiClient.get(`/maps/route?start=${userLocation.lng},${userLocation.lat}&end=${destination.lng},${destination.lat}&alternatives=${!isNav}`);
           if (res.data.success) {
             const routes = res.data.data.routes || [];
-            const route = routes[0];
-            console.log(`[API] Route found! ${route.geometry.coordinates.length} points. ${routes.length} alternatives.`);
+            // Never trust provider ordering blindly: pick the FASTEST route
+            // (min duration; ties broken by distance) — the rest stay as
+            // selectable grey alternatives.
+            const route = [...routes].sort(
+              (a: any, b: any) => (a.duration - b.duration) || (a.distance - b.distance)
+            )[0];
+            if (!route) return;
+            console.log(`[API] Route found! ${route.geometry.coordinates.length} points. ${routes.length} alternatives. Best: ${(route.distance / 1000).toFixed(1)}km/${Math.ceil(route.duration / 60)}min`);
             setRouteCoords(route.geometry.coordinates.map((p: any) => ({ latitude: p[1], longitude: p[0] })));
             setDistanceInfo({ km: (route.distance / 1000).toFixed(1), mins: Math.ceil(route.duration / 60).toString() });
             if (route.legs?.[0]?.steps) {
@@ -1277,7 +1283,7 @@ export default function FinderDashboard() {
 
   // Load recent searches on mount
   useEffect(() => {
-    AsyncStorage.getItem('parkstop_recent_searches').then(data => {
+    AsyncStorage.getItem('parkstop_recent_searches_v2').then(data => {
       if (data) setRecentSearches(JSON.parse(data));
     }).catch(() => {});
   }, []);
@@ -1287,7 +1293,7 @@ export default function FinderDashboard() {
       const existing = recentSearches.filter(r => r.display_name !== item.display_name);
       const updated = [item, ...existing].slice(0, 5);
       setRecentSearches(updated);
-      await AsyncStorage.setItem('parkstop_recent_searches', JSON.stringify(updated));
+      await AsyncStorage.setItem('parkstop_recent_searches_v2', JSON.stringify(updated));
     } catch (e) {}
   };
 
@@ -1296,28 +1302,33 @@ export default function FinderDashboard() {
     let lon = parseFloat(item.lon);
     const name = item.display_name;
 
-    // Google-style resolution: the autocomplete result carries a place_id —
-    // resolve THAT exact place via place-details. Text geocoding is only a
-    // last resort (ambiguous names like "Tumkur" can otherwise land on
-    // "Tumkur Road, Bangalore"). Internal spots already have coordinates.
-    if (!item.isInternal && (!lat || !lon || isNaN(lat) || isNaN(lon))) {
+    // Google-style resolution: ALWAYS resolve external selections through
+    // their place_id via place-details — autocomplete-provided coordinates are
+    // unreliable (location-biased, sometimes pointing at nearby lookalikes,
+    // e.g. "Mumbai" landing in Bangalore). Only internal parking spots keep
+    // their own coordinates. Fallbacks: provided coords, then text geocode.
+    if (!item.isInternal) {
       if (item.place_id) {
         try {
           const det = await apiClient.get(`/maps/place-details?place_id=${encodeURIComponent(item.place_id)}`);
           if (det.data?.success && det.data.data) {
             lat = parseFloat(det.data.data.lat);
             lon = parseFloat(det.data.data.lon);
+            console.log(`[Search] Resolved "${name}" via place_id -> ${lat},${lon}`);
           }
         } catch (e) {
           console.log('[Search] Place details failed:', (e as any)?.message);
         }
       }
-      if (!lat || !lon || isNaN(lat) || isNaN(lon)) {
+      // No place_id (or resolution failed): never trust the biased
+      // autocomplete coords — geocode the display text instead.
+      if (!item.place_id || !lat || !lon || isNaN(lat) || isNaN(lon)) {
         try {
           const geo = await apiClient.get(`/maps/geocode?q=${encodeURIComponent(name)}`);
           if (geo.data?.success && geo.data.data) {
             lat = parseFloat(geo.data.data.lat);
             lon = parseFloat(geo.data.data.lon);
+            console.log(`[Search] Resolved "${name}" via geocode -> ${lat},${lon}`);
           }
         } catch (e) {
           console.log('[Search] Geocode failed:', (e as any)?.message);
@@ -1886,7 +1897,7 @@ export default function FinderDashboard() {
                 {searchQuery.length === 0 && recentSearches.length > 0 && suggestions.length === 0 && (
                   <View style={{ paddingHorizontal: 16, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                     <Text style={{ color: '#64748b', fontSize: 12, fontWeight: '800', letterSpacing: 0.5 }}>RECENT</Text>
-                    <TouchableOpacity onPress={async () => { setRecentSearches([]); await AsyncStorage.removeItem('parkstop_recent_searches'); }}>
+                    <TouchableOpacity onPress={async () => { setRecentSearches([]); await AsyncStorage.removeItem('parkstop_recent_searches_v2'); }}>
                       <Text style={{ color: '#4285F4', fontSize: 12, fontWeight: '700' }}>Clear</Text>
                     </TouchableOpacity>
                   </View>

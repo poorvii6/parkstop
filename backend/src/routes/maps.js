@@ -152,7 +152,11 @@ router.get('/search', async (req, res) => {
                         };
                     });
 
-                    // If coordinates are present, calculate distance and sort
+                    // Annotate distance for display, but DO NOT re-sort by it.
+                    // Ola's relevance order already balances proximity against
+                    // what the user actually typed; distance-sorting pushed
+                    // nearby lookalikes above real matches (searching "Mumbai"
+                    // surfaced Bangalore places first).
                     if (lat && lon) {
                         const userLat = parseFloat(lat);
                         const userLon = parseFloat(lon);
@@ -162,12 +166,8 @@ router.get('/search', async (req, res) => {
                                 const itemLon = parseFloat(item.lon);
                                 if (!isNaN(itemLat) && !isNaN(itemLon) && itemLat !== 0 && itemLon !== 0) {
                                     item.distance = getDistance(userLat, userLon, itemLat, itemLon);
-                                } else {
-                                    item.distance = Infinity;
                                 }
                             });
-
-                            mappedData.sort((a, b) => a.distance - b.distance);
                         }
                     }
 
