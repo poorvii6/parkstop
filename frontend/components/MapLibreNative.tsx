@@ -125,15 +125,25 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
         duration: 700,
       });
     } else {
-      // Outside navigation: re-center and turn toward the direction of
-      // movement (Google-style course-up while following). Zoom/pitch remain
+      // Outside navigation: re-center, turning toward the direction of travel
+      // ONLY when it changed meaningfully (>20° deadband). Compass jitter of
+      // ±10-20° between ticks must not shake the map. Zoom/pitch remain
       // whatever the user pinched to.
-      bearingRef.current = props.heading || 0;
-      cameraRef.current.easeTo({
-        center: [props.userLocation.lng, props.userLocation.lat],
-        bearing: props.heading || 0,
-        duration: 500,
-      });
+      const h = props.heading || 0;
+      const delta = Math.abs(((h - bearingRef.current + 540) % 360) - 180);
+      if (delta > 20) {
+        bearingRef.current = h;
+        cameraRef.current.easeTo({
+          center: [props.userLocation.lng, props.userLocation.lat],
+          bearing: h,
+          duration: 500,
+        });
+      } else {
+        cameraRef.current.easeTo({
+          center: [props.userLocation.lng, props.userLocation.lat],
+          duration: 500,
+        });
+      }
     }
   }, [props.userLocation, props.isFollowing, props.isActiveNavigation, props.heading]);
 

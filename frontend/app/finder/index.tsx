@@ -87,6 +87,39 @@ export default function FinderDashboard() {
     apiClient.post('/auth/switch-role', { newRole: 'FINDER' }).catch(() => {});
   }, []);
 
+  // Restore an in-progress booking on mount: if the user has a reserved/active
+  // booking (their parking window is still running), keep guiding them to the
+  // spot — even after leaving the screen or restarting the app.
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await apiClient.get('/bookings/my-bookings');
+        if (!res.data?.success) return;
+        const activeBooking = (res.data.data || []).find((b: any) =>
+          ['reserved', 'active'].includes(b.status)
+        );
+        if (!activeBooking?.parking_spots) return;
+        const sp = activeBooking.parking_spots;
+        const spotObj = {
+          id: sp.id.toString(),
+          title: sp.title,
+          lat: parseFloat(sp.latitude),
+          lng: parseFloat(sp.longitude),
+          price: parseFloat(sp.price_per_hour),
+          available: true,
+          available_slots: parseInt(sp.available_slots) || 1,
+          images: Array.isArray(sp.images) ? sp.images : [],
+        };
+        // Make sure the booked spot exists in the spots list even if it's
+        // outside the nearby radius, then re-select it so the route shows.
+        setSpots((prev) => (prev.some((s) => s.id === spotObj.id) ? prev : [...prev, spotObj]));
+        setSelectedSpotId(spotObj.id);
+        setBookingDetails((prev: any) => prev || activeBooking);
+        console.log(`[Booking] Restored in-progress booking #${activeBooking.id} -> guiding to "${sp.title}"`);
+      } catch {}
+    })();
+  }, []);
+
   useEffect(() => {
     const subscription = AppState.addEventListener('change', nextAppState => {
       if (nextAppState === 'background' && ['en_route', 'navigating', 'arriving'].includes(step)) {
@@ -1203,7 +1236,9 @@ export default function FinderDashboard() {
       const data = response.data.data;
 
       if (data && data.length > 0) {
-        const top = data[0];
+        // Prefer the authoritative CITY match (verified centroid) over any POI
+        // so pressing Enter on a city name drops the pin at the city center.
+        const top = data.find((d: any) => d.verified) || data[0];
         // Same rule as tapping a suggestion: NEVER use raw autocomplete
         // coordinates (location-biased). Resolve the top result through its
         // place_id; fall back to text geocoding. This was the second search
@@ -2151,6 +2186,11 @@ export default function FinderDashboard() {
                       setRouteCoords(route.geometry.coordinates.map((p: any) => ({ latitude: p[1], longitude: p[0] })));
                       setDistanceInfo({ km: (route.distance / 1000).toFixed(1), mins: Math.ceil(route.duration / 60).toString() });
                       if (route.legs?.[0]?.steps) routeStepsRef.current = route.legs[0].steps;
+                      // Clear the stale turn banner immediately — the next GPS
+                      // tick recomputes the correct instruction from the NEW
+                      // route instead of leaving "turn left 50m" from the old one.
+                      setCurrentInstruction({ turn: 'Route updated', street: '', icon: '🔄' });
+                      setNextTurnPreview({ turn: '', icon: '' });
                       setIsFollowing(true);
                       console.log(`[NAV] Rerouted! ${route.geometry.coordinates.length} points`);
                     }
