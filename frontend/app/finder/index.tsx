@@ -1191,16 +1191,46 @@ export default function FinderDashboard() {
       const data = response.data.data;
 
       if (data && data.length > 0) {
-        const { lat, lon } = data[0];
-        setSearchedPlace({ lat: parseFloat(lat), lng: parseFloat(lon), title: searchQuery });
+        const top = data[0];
+        // Same rule as tapping a suggestion: NEVER use raw autocomplete
+        // coordinates (location-biased). Resolve the top result through its
+        // place_id; fall back to text geocoding. This was the second search
+        // path (Enter key) that kept landing everything in Bangalore.
+        let rLat = NaN;
+        let rLon = NaN;
+        if (top.place_id) {
+          try {
+            const det = await apiClient.get(`/maps/place-details?place_id=${encodeURIComponent(top.place_id)}`);
+            if (det.data?.success && det.data.data) {
+              rLat = parseFloat(det.data.data.lat);
+              rLon = parseFloat(det.data.data.lon);
+              console.log(`[Search] (submit) Resolved "${top.display_name}" via place_id -> ${rLat},${rLon}`);
+            }
+          } catch (err) {
+            console.log('[Search] (submit) Place details failed:', (err as any)?.message);
+          }
+        }
+        if (isNaN(rLat) || isNaN(rLon) || !rLat || !rLon) {
+          const geo = await apiClient.get(`/maps/geocode?q=${encodeURIComponent(top.display_name || searchQuery)}`);
+          if (geo.data?.success && geo.data.data) {
+            rLat = parseFloat(geo.data.data.lat);
+            rLon = parseFloat(geo.data.data.lon);
+            console.log(`[Search] (submit) Resolved "${top.display_name || searchQuery}" via geocode -> ${rLat},${rLon}`);
+          }
+        }
+        if (isNaN(rLat) || isNaN(rLon) || !rLat || !rLon) {
+          throw new Error('No results');
+        }
+
+        setSearchedPlace({ lat: rLat, lng: rLon, title: top.display_name || searchQuery });
         setStep('home');
         if (mapRef.current) {
           mapRef.current.animateCamera({
-            center: { latitude: parseFloat(lat), longitude: parseFloat(lon) },
+            center: { latitude: rLat, longitude: rLon },
             zoom: 13
           }, { duration: 1200 });
         }
-        await fetchNearbySpots(parseFloat(lat), parseFloat(lon), 1000);
+        await fetchNearbySpots(rLat, rLon, 1000);
         setIsSearching(false);
       } else {
         throw new Error("No results");
