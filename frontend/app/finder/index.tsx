@@ -995,11 +995,12 @@ export default function FinderDashboard() {
           })
           .catch(() => {});
 
-        // 2. Start continuous watch in parallel (High accuracy, 5m updates)
+        // 2. Start continuous watch in parallel (High accuracy, 1s/3m updates
+        //    — tight loop so the live dot tracks movement with minimal lag)
         watchSub = await Location.watchPositionAsync({
           accuracy: Location.Accuracy.High,
-          timeInterval: 2000,
-          distanceInterval: 5,
+          timeInterval: 1000,
+          distanceInterval: 3,
         }, (l) => {
           const newCoords = { lat: l.coords.latitude, lng: l.coords.longitude };
           setUserLocation(newCoords);
@@ -2121,7 +2122,7 @@ export default function FinderDashboard() {
             }}
             nextInstruction={currentInstruction.turn}
             speed={navigationData.speed}
-            heading={navigationData.heading}
+            heading={['en_route', 'navigating', 'arriving'].includes(step) ? navigationData.heading : deviceHeading}
             userLocation={(simulatedLocation || userLocation) || undefined}
             isFollowing={isFollowing}
             onMapInteraction={() => setIsFollowing(false)}

@@ -123,11 +123,14 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
         duration: 700,
       });
     } else {
-      // Outside navigation only re-center — never force zoom/pitch/bearing,
-      // so the user's pinch-zoom level is respected while following.
+      // Outside navigation: re-center and turn toward the direction of
+      // movement (Google-style course-up while following). Zoom/pitch remain
+      // whatever the user pinched to.
+      bearingRef.current = props.heading || 0;
       cameraRef.current.easeTo({
         center: [props.userLocation.lng, props.userLocation.lat],
-        duration: 700,
+        bearing: props.heading || 0,
+        duration: 500,
       });
     }
   }, [props.userLocation, props.isFollowing, props.isActiveNavigation, props.heading]);
