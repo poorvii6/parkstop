@@ -1713,7 +1713,9 @@ export default function FinderDashboard() {
   };
 
   const isBottomPanelFull = ['arriving', 'active_parking', 'payment', 'receipt'].includes(step);
-  const showRoute = ['navigating', 'en_route', 'booking_confirm', 'home'].includes(step);
+  // Route is visible during spot preview (the "blue line" when a spot is
+  // selected), booking, and ALL navigation phases including final approach.
+  const showRoute = ['spot_booking', 'booking_confirm', 'home', 'navigating', 'en_route', 'arriving'].includes(step);
 
   // Removed welcome auto-transition
 
@@ -2089,7 +2091,7 @@ export default function FinderDashboard() {
           <MapLibreView
             ref={mapRef}
             markers={spots}
-            routeCoords={showRoute ? routeCoords.slice(currentRouteIndex) : []}
+            routeCoords={showRoute ? routeCoords.slice(Math.min(currentRouteIndex, Math.max(0, routeCoords.length - 2))) : []}
             altRoutes={showRoute ? altRoutes : []}
             onSelectAltRoute={(index: number) => {
               const alt = altRoutes[index];

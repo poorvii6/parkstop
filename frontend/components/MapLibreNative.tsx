@@ -178,6 +178,15 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
     () => (rc.length >= 2 ? lineFeature(rc) : null),
     [routeSig]
   );
+
+  // Diagnostics: catches "navigation active but no route line" definitively —
+  // tells us whether the data is missing (finder side) or present-but-invisible
+  // (native layer side).
+  React.useEffect(() => {
+    if (props.isActiveNavigation) {
+      console.log(`[Map] nav=true routePoints=${rc.length} rendered=${!!routeGeo}`);
+    }
+  }, [props.isActiveNavigation, routeSig]);
   const altGeos = React.useMemo(
     () => (propsRef.current.altRoutes || []).filter((a) => a.coords?.length >= 2).map((a) => lineFeature(a.coords)),
     [altSig]
@@ -301,9 +310,11 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
       >
         <MLCamera ref={cameraRef} initialViewState={{ center: [loc.lng, loc.lat], zoom: 14 }} />
 
-        {/* Alternative routes — muted gray beneath the main route */}
+        {/* Alternative routes — muted gray beneath the main route.
+            Keyed by style URL: swapping the map style (Carto -> Ola) rebuilds
+            the style's layer stack, so custom sources must re-mount with it. */}
         {altGeos.map((geo, i) => (
-          <MLGeoJSONSource key={`alt-${i}`} id={`alt-route-${i}`} data={geo}>
+          <MLGeoJSONSource key={`alt-${i}-${styleUrl}`} id={`alt-route-${i}`} data={geo}>
             <MLLayer
               id={`alt-route-line-${i}`}
               type="line"
@@ -315,7 +326,7 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
 
         {/* Main route — casing + line (Google-style) */}
         {routeGeo ? (
-          <MLGeoJSONSource id="main-route" data={routeGeo}>
+          <MLGeoJSONSource key={`main-route-${styleUrl}`} id="main-route" data={routeGeo}>
             <MLLayer
               id="main-route-casing"
               type="line"
