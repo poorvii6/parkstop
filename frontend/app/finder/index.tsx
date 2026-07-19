@@ -1198,7 +1198,12 @@ export default function FinderDashboard() {
         // path (Enter key) that kept landing everything in Bangalore.
         let rLat = NaN;
         let rLon = NaN;
-        if (top.place_id) {
+        if (top.verified) {
+          // Blended city result — coordinates are authoritative.
+          rLat = parseFloat(top.lat);
+          rLon = parseFloat(top.lon);
+        }
+        if ((isNaN(rLat) || !rLat) && top.place_id) {
           try {
             const det = await apiClient.get(`/maps/place-details?place_id=${encodeURIComponent(top.place_id)}`);
             if (det.data?.success && det.data.data) {
@@ -1337,7 +1342,7 @@ export default function FinderDashboard() {
     // unreliable (location-biased, sometimes pointing at nearby lookalikes,
     // e.g. "Mumbai" landing in Bangalore). Only internal parking spots keep
     // their own coordinates. Fallbacks: provided coords, then text geocode.
-    if (!item.isInternal) {
+    if (!item.isInternal && !item.verified) {
       if (item.place_id) {
         try {
           const det = await apiClient.get(`/maps/place-details?place_id=${encodeURIComponent(item.place_id)}`);
