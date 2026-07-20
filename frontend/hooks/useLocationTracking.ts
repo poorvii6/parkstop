@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import * as Location from 'expo-location';
 import apiClient from '../api/client';
+import { DEFAULT_MAP_CENTER } from '../constants/mapDefaults';
 
 export function useLocationTracking(
   onLocationInit?: (coords: { lat: number, lng: number }) => void,
@@ -34,8 +35,8 @@ export function useLocationTracking(
     let headingSub: any = null;
     
     (async () => {
-      // Sensible fallback (Bengaluru) if we can't get a real fix — never San Francisco.
-      let coords = { lat: 12.9716, lng: 77.5946 };
+      // Neutral fallback used only if no real fix can be obtained.
+      let coords = { ...DEFAULT_MAP_CENTER };
       try {
         let { status } = await Location.requestForegroundPermissionsAsync();
 

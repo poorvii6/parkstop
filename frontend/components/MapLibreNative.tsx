@@ -13,6 +13,7 @@
 import React, { forwardRef, useImperativeHandle, useRef } from 'react';
 import { StyleSheet, View, Text, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM, USER_MAP_ZOOM } from '../constants/mapDefaults';
 
 // The native module is present in the dev build; access its v11 named exports.
 const MLGL: any = require('@maplibre/maplibre-react-native');
@@ -62,7 +63,9 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
   const cameraRef = useRef<any>(null);
   const [styleFailed, setStyleFailed] = React.useState(false);
 
-  const loc = props.userLocation || { lat: 12.9716, lng: 77.5946 };
+  // Fallback viewport only — replaced the moment a real fix arrives.
+  const loc = props.userLocation || DEFAULT_MAP_CENTER;
+  const initialZoom = props.userLocation ? USER_MAP_ZOOM : DEFAULT_MAP_ZOOM;
   const hour = new Date().getHours();
   const fallbackStyle = hour >= 19 || hour < 6 ? CARTO_NIGHT : CARTO_DAY;
 
@@ -365,7 +368,7 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
         compassPosition={{ bottom: (props.controlsBottomOffset ?? 210) + 65, right: 22 }}
         androidView="texture"
       >
-        <MLCamera ref={cameraRef} initialViewState={{ center: [loc.lng, loc.lat], zoom: 14 }} />
+        <MLCamera ref={cameraRef} initialViewState={{ center: [loc.lng, loc.lat], zoom: initialZoom }} />
 
         {/* Alternative routes — muted gray beneath the main route.
             Keyed by style URL: swapping the map style (Carto -> Ola) rebuilds

@@ -115,10 +115,13 @@ export default function SpotsScreen() {
         Alert.alert('Permission Denied', 'Location permission is required to auto-detect your position.');
         return;
       }
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      // A spot's coordinates are permanent — capture them with the strongest
+      // GPS mode and tell the Spotter how precise the fix actually was.
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.BestForNavigation });
       setLatitude(loc.coords.latitude.toFixed(8));
       setLongitude(loc.coords.longitude.toFixed(8));
-      Alert.alert('📍 Location Detected', `Lat: ${loc.coords.latitude.toFixed(6)}\nLng: ${loc.coords.longitude.toFixed(6)}`);
+      const accM = Math.round(loc.coords.accuracy || 0);
+      Alert.alert('📍 Location Detected', `Lat: ${loc.coords.latitude.toFixed(6)}\nLng: ${loc.coords.longitude.toFixed(6)}${accM ? `\nAccuracy: ±${accM}m` : ''}`);
     } catch (e) {
       Alert.alert('Error', 'Failed to get current location.');
     }
@@ -554,7 +557,7 @@ export default function SpotsScreen() {
                 <Text style={SS.inputLabel}>LATITUDE</Text>
                 <TextInput
                   style={SS.input}
-                  placeholder="12.9716"
+                  placeholder="Latitude"
                   placeholderTextColor={SC.textDisabled}
                   value={latitude}
                   onChangeText={setLatitude}
@@ -565,7 +568,7 @@ export default function SpotsScreen() {
                 <Text style={SS.inputLabel}>LONGITUDE</Text>
                 <TextInput
                   style={SS.input}
-                  placeholder="77.5946"
+                  placeholder="Longitude"
                   placeholderTextColor={SC.textDisabled}
                   value={longitude}
                   onChangeText={setLongitude}
