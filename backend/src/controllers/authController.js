@@ -15,7 +15,7 @@ class AuthController {
 
       // Per-address cooldown. Stops /auth/send-otp being used to flood a
       // stranger's inbox (and to burn through the Resend quota).
-      const gate = canSendOTP(email);
+      const gate = await canSendOTP(email);
       if (!gate.allowed) {
         return res.status(429).json({
           success: false,
@@ -24,7 +24,7 @@ class AuthController {
         });
       }
 
-      const code = generateOTP(email);
+      const code = await generateOTP(email);
       await sendEmailOTP(email, code);
 
       return res.status(200).json({
@@ -48,7 +48,7 @@ class AuthController {
       const { email, code } = req.body;
       const { verifyOTP, generateOTPToken } = require('../services/otpService');
 
-      const result = verifyOTP(email, code);
+      const result = await verifyOTP(email, code);
       if (!result.ok) {
         // Distinguish "burned after too many guesses" so the user knows to
         // request a fresh code rather than retrying a code that can no longer

@@ -2,12 +2,7 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const logger = require('../utils/logger');
 const config = require('../config/env');
-
-// Local in-memory cache for Email OTP codes.
-// NOTE: this is per-process. If the API is ever scaled to more than one
-// instance, a user could be issued an OTP by instance A and have it verified
-// by instance B, which would not find it. Move to Redis before scaling out.
-const otpCache = new Map();
+const prisma = require('../config/prisma');
 
 // Signing key for completed verification tokens. Sourced from validated config
 // rather than a local `|| 'default'` fallback: env.js already refuses to boot
@@ -15,18 +10,22 @@ const otpCache = new Map();
 // read this file forge an otp_token and register as any email address.
 const JWT_SECRET = config.jwt.secret;
 
-const OTP_TTL_MS = 5 * 60 * 1000;   // code is valid for 5 minutes
+const OTP_TTL_MS = 5 * 60 * 1000;     // code is valid for 5 minutes
 const RESEND_COOLDOWN_MS = 60 * 1000; // min gap between sends to one address
-const MAX_VERIFY_ATTEMPTS = 5;      // guesses allowed before the code is burned
+const MAX_VERIFY_ATTEMPTS = 5;        // guesses allowed before the code is burned
 
 /**
- * Purge expired entries. Without this the cache grows forever, because entries
- * are only deleted on successful verification — every abandoned signup leaks.
+ * Purge expired rows.
+ *
+ * Rows are otherwise only removed on successful verification, so every
+ * abandoned signup would linger forever.
  */
-function sweepExpired() {
-  const now = Date.now();
-  for (const [key, entry] of otpCache) {
-    if (now > entry.expiresAt) otpCache.delete(key);
+async function sweepExpired() {
+  try {
+    await prisma.email_otps.deleteMany({ where: { expires_at: { lt: new Date() } } });
+  } catch (err) {
+    // Housekeeping only — never fail a signup because cleanup failed.
+    logger.error('OTP sweep failed:', err);
   }
 }
 
@@ -38,13 +37,15 @@ function sweepExpired() {
  * does not stop this, since the attacker can rotate IPs while targeting one
  * victim address.
  *
- * @returns {{ allowed: boolean, retryAfterSec: number }}
+ * @returns {Promise<{ allowed: boolean, retryAfterSec: number }>}
  */
-function canSendOTP(email) {
-  const entry = otpCache.get(email.toLowerCase());
-  if (!entry || Date.now() > entry.expiresAt) return { allowed: true, retryAfterSec: 0 };
+async function canSendOTP(email) {
+  const row = await prisma.email_otps.findUnique({ where: { email: email.toLowerCase() } });
+  if (!row || Date.now() > row.expires_at.getTime()) {
+    return { allowed: true, retryAfterSec: 0 };
+  }
 
-  const elapsed = Date.now() - entry.issuedAt;
+  const elapsed = Date.now() - row.issued_at.getTime();
   if (elapsed >= RESEND_COOLDOWN_MS) return { allowed: true, retryAfterSec: 0 };
 
   return {
@@ -54,26 +55,29 @@ function canSendOTP(email) {
 }
 
 /**
- * Generate a secure 6-digit numeric OTP and save to cache.
+ * Generate a secure 6-digit numeric OTP and persist it.
  *
  * Uses crypto.randomInt, not Math.random: Math.random is a non-cryptographic
  * PRNG whose output can be predicted from observed values, which would let an
  * attacker derive a victim's code without ever seeing their inbox.
  *
  * @param {string} email
- * @returns {string} code
+ * @returns {Promise<string>} code
  */
-function generateOTP(email) {
-  sweepExpired();
+async function generateOTP(email) {
+  await sweepExpired();
 
   const code = crypto.randomInt(100000, 1000000).toString();
-  const now = Date.now();
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + OTP_TTL_MS);
+  const key = email.toLowerCase();
 
-  otpCache.set(email.toLowerCase(), {
-    code,
-    issuedAt: now,
-    expiresAt: now + OTP_TTL_MS,
-    attempts: 0,
+  // Upsert: issuing a new code must replace any previous one for this address
+  // AND reset the attempt counter, so a fresh code gets a fresh budget.
+  await prisma.email_otps.upsert({
+    where: { email: key },
+    create: { email: key, code, issued_at: now, expires_at: expiresAt, attempts: 0 },
+    update: { code, issued_at: now, expires_at: expiresAt, attempts: 0 },
   });
 
   // Never log the code itself in production — logs are widely readable and it
@@ -143,7 +147,7 @@ async function sendEmailOTP(email, code) {
 }
 
 /**
- * Verify OTP against cached entry.
+ * Verify OTP against the stored row.
  *
  * Enforces an attempt cap. A 6-digit code is only 900,000 possibilities; with
  * unlimited guesses inside the 5 minute window an attacker can simply grind it,
@@ -152,50 +156,53 @@ async function sendEmailOTP(email, code) {
  *
  * @param {string} email
  * @param {string} code
- * @returns {{ ok: boolean, reason?: 'not_found'|'expired'|'too_many_attempts'|'mismatch' }}
+ * @returns {Promise<{ ok: boolean, reason?: 'not_found'|'expired'|'too_many_attempts'|'mismatch' }>}
  */
-function verifyOTP(email, code) {
-  const emailKey = email.toLowerCase();
-  const cached = otpCache.get(emailKey);
+async function verifyOTP(email, code) {
+  const key = email.toLowerCase();
+  const row = await prisma.email_otps.findUnique({ where: { email: key } });
 
-  if (!cached) {
-    logger.warn(`No OTP found in cache for ${email}`);
+  if (!row) {
+    logger.warn(`No OTP found for ${email}`);
     return { ok: false, reason: 'not_found' };
   }
 
-  if (Date.now() > cached.expiresAt) {
+  if (Date.now() > row.expires_at.getTime()) {
     logger.warn(`OTP for ${email} has expired`);
-    otpCache.delete(emailKey);
+    await prisma.email_otps.delete({ where: { email: key } }).catch(() => {});
     return { ok: false, reason: 'expired' };
   }
 
-  if (cached.attempts >= MAX_VERIFY_ATTEMPTS) {
+  if (row.attempts >= MAX_VERIFY_ATTEMPTS) {
     logger.warn(`OTP for ${email} burned after ${MAX_VERIFY_ATTEMPTS} failed attempts`);
-    otpCache.delete(emailKey);
+    await prisma.email_otps.delete({ where: { email: key } }).catch(() => {});
     return { ok: false, reason: 'too_many_attempts' };
   }
 
-  cached.attempts += 1;
+  // Increment atomically in the database rather than read-modify-write, so
+  // concurrent guesses cannot race each other into extra free attempts.
+  const updated = await prisma.email_otps.update({
+    where: { email: key },
+    data: { attempts: { increment: 1 } },
+  });
 
   const codeBuffer = Buffer.from(code);
-  const cachedBuffer = Buffer.from(cached.code);
+  const storedBuffer = Buffer.from(row.code);
 
   // timingSafeEqual throws on length mismatch, so guard first. Bailing early on
   // a wrong length leaks nothing useful: the length is fixed at 6 and already
   // enforced by the request validator.
-  if (codeBuffer.length !== cachedBuffer.length) {
+  if (codeBuffer.length !== storedBuffer.length) {
     return { ok: false, reason: 'mismatch' };
   }
 
-  if (crypto.timingSafeEqual(codeBuffer, cachedBuffer)) {
-    otpCache.delete(emailKey); // Burn OTP after successful verification
+  if (crypto.timingSafeEqual(codeBuffer, storedBuffer)) {
+    await prisma.email_otps.delete({ where: { email: key } }).catch(() => {});
     logger.info(`OTP verified successfully for ${email}`);
     return { ok: true };
   }
 
-  logger.warn(
-    `Invalid OTP attempt ${cached.attempts}/${MAX_VERIFY_ATTEMPTS} for ${email}`
-  );
+  logger.warn(`Invalid OTP attempt ${updated.attempts}/${MAX_VERIFY_ATTEMPTS} for ${email}`);
   return { ok: false, reason: 'mismatch' };
 }
 
@@ -235,8 +242,6 @@ module.exports = {
   verifyOTP,
   generateOTPToken,
   validateOTPToken,
-  // Exported for tests only.
-  _otpCache: otpCache,
   MAX_VERIFY_ATTEMPTS,
   RESEND_COOLDOWN_MS,
   OTP_TTL_MS

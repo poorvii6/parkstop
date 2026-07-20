@@ -131,6 +131,18 @@ function validateEnv() {
     }
   }
 
+  // Surface test-only escape hatches that have leaked into production. These no
+  // longer weaken anything (authValidator hard-gates on NODE_ENV !== production),
+  // but their presence means the deploy environment is misconfigured and should
+  // be cleaned up. Warn rather than throw: the hole is already closed, and a
+  // crash-loop here would be a worse outcome than a noisy log line.
+  if (isProduction && process.env.IGNORE_RATE_LIMITS === 'true') {
+    console.warn(
+      '🚨 IGNORE_RATE_LIMITS is set in production and is being IGNORED. ' +
+      'Remove it from the deploy environment.'
+    );
+  }
+
   console.log('✅ Environment variables validated');
 }
 

@@ -208,6 +208,24 @@ model reviews {
   @@index([spot_id])
 }
 
+/// Pending email-verification codes for signup.
+///
+/// Deliberately NOT related to `users` — the whole point is that these exist
+/// before an account does. Keyed by email, one live code per address.
+///
+/// Previously held in an in-process Map, which meant every Railway redeploy
+/// silently invalidated the codes of anyone mid-signup, and which could never
+/// work across more than one instance.
+model email_otps {
+  email      String   @id @db.VarChar(150)
+  code       String   @db.VarChar(6)
+  attempts   Int      @default(0)
+  issued_at  DateTime @default(now())
+  expires_at DateTime
+
+  @@index([expires_at])
+}
+
 model disputes {
   id          Int      @id @default(autoincrement())
   booking_id  Int      @unique          // one dispute per booking

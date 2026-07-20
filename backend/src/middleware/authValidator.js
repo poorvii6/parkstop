@@ -13,7 +13,15 @@ const sanitizeInput = (val) => {
   return cleaned.trim();
 };
 
-const isTest = process.env.NODE_ENV === 'test' || process.env.IGNORE_RATE_LIMITS === 'true';
+// Relaxed validation for tests ONLY. The `process.env.NODE_ENV !== 'production'`
+// prefix is a hard gate, not a stylistic choice: `isTest` makes `otp_token` and
+// `firebase_token` optional, so if IGNORE_RATE_LIMITS ever leaked into the
+// production environment it would silently disable email verification entirely
+// — anyone could register as any address. Production can never enter this mode,
+// whatever the other variables say.
+const isTest =
+  process.env.NODE_ENV !== 'production' &&
+  (process.env.NODE_ENV === 'test' || process.env.IGNORE_RATE_LIMITS === 'true');
 
 // Zod schemas
 const registerSchema = z.object({
