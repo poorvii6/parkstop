@@ -18,6 +18,16 @@ router.get(
 );
 
 /**
+ * EARNINGS BREAKDOWN (itemised earnings + fees)
+ */
+router.get(
+  '/earnings-breakdown',
+  authenticate,
+  authorize('SPOTTER'),
+  SpotController.getEarningsBreakdown
+);
+
+/**
  * TOGGLE ALL SPOTS STATUS (Spotter only)
  */
 router.put(

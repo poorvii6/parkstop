@@ -57,6 +57,7 @@ export const TF = {
   body:         { fontSize: 15, fontWeight: '500' as const },
   bodyBold:     { fontSize: 15, fontWeight: '700' as const },
   bodySm:       { fontSize: 13, fontWeight: '500' as const },
+  caption:      { fontSize: 12, fontWeight: '600' as const },
 
   // Labels
   label:        { fontSize: 11, fontWeight: '700' as const, letterSpacing: 0.8, textTransform: 'uppercase' as const },

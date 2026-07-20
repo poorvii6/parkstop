@@ -41,6 +41,101 @@ class SpotController {
   }
 
   /**
+   * GET EARNINGS BREAKDOWN (SPOTTER ONLY)
+   *
+   * Itemises where earnings and platform fees came from. Without this the
+   * wallet is a single opaque number — a Spotter seeing "Dues: ₹340" has no
+   * way to know which bookings produced it.
+   */
+  static async getEarningsBreakdown(req, res) {
+    try {
+      const days = Math.min(parseInt(req.query.days) || 30, 365);
+      const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+      const bookings = await prisma.bookings.findMany({
+        where: {
+          status: 'completed',
+          created_at: { gte: since },
+          parking_spots: { spotter_id: req.user.id },
+        },
+        include: { parking_spots: { select: { id: true, title: true } } },
+        orderBy: { created_at: 'desc' },
+        take: 200,
+      });
+
+      const items = bookings.map((b) => ({
+        booking_id: b.id,
+        spot_id: b.parking_spots?.id || null,
+        spot_title: b.parking_spots?.title || 'Spot',
+        date: b.actual_end_time || b.created_at,
+        hours: Number(b.hours || 0),
+        total_price: Number(b.total_price || 0),
+        platform_fee: Number(b.platform_fee || 0),
+        spotter_earning: Number(b.spotter_earning || 0),
+        payment_mode: b.payment_mode,
+        payment_status: b.payment_status,
+        // Cash bookings DEBIT the wallet (fee owed); online bookings CREDIT it.
+        wallet_effect: b.payment_mode === 'cash'
+          ? -Number(b.platform_fee || 0)
+          : Number(b.spotter_earning || 0),
+      }));
+
+      // Per-spot rollup so the Spotter can see which spot performs best.
+      const bySpotMap = new Map();
+      for (const it of items) {
+        const key = it.spot_id ?? 'unknown';
+        const agg = bySpotMap.get(key) || {
+          spot_id: it.spot_id, spot_title: it.spot_title,
+          bookings: 0, gross: 0, fees: 0, earnings: 0,
+        };
+        agg.bookings += 1;
+        agg.gross += it.total_price;
+        agg.fees += it.platform_fee;
+        agg.earnings += it.spotter_earning;
+        bySpotMap.set(key, agg);
+      }
+      const bySpot = Array.from(bySpotMap.values())
+        .map((a) => ({
+          ...a,
+          gross: Number(a.gross.toFixed(2)),
+          fees: Number(a.fees.toFixed(2)),
+          earnings: Number(a.earnings.toFixed(2)),
+        }))
+        .sort((a, b) => b.earnings - a.earnings);
+
+      const totals = items.reduce(
+        (acc, it) => {
+          acc.gross += it.total_price;
+          acc.fees += it.platform_fee;
+          acc.earnings += it.spotter_earning;
+          if (it.payment_mode === 'cash') acc.cash_fees_owed += it.platform_fee;
+          return acc;
+        },
+        { gross: 0, fees: 0, earnings: 0, cash_fees_owed: 0 }
+      );
+
+      res.json({
+        success: true,
+        data: {
+          period_days: days,
+          totals: {
+            gross: Number(totals.gross.toFixed(2)),
+            fees: Number(totals.fees.toFixed(2)),
+            earnings: Number(totals.earnings.toFixed(2)),
+            cash_fees_owed: Number(totals.cash_fees_owed.toFixed(2)),
+            bookings: items.length,
+          },
+          by_spot: bySpot,
+          items,
+        },
+      });
+    } catch (error) {
+      logger.error('Earnings Breakdown Error:', error);
+      res.status(500).json({ success: false, message: 'Failed to retrieve earnings breakdown' });
+    }
+  }
+
+  /**
    * CREATE SPOT (SPOTTER ONLY)
    */
   static async createSpot(req, res) {

@@ -6,7 +6,10 @@
  * events (new bookings, payout status) never arrived before.
  */
 import { io, Socket } from 'socket.io-client';
-import { getAuth } from 'firebase/auth';
+// Use the SHARED, already-initialized auth instance (configured with
+// AsyncStorage persistence). Calling getAuth() here would create a second,
+// unconfigured instance and can throw during module load.
+import { auth } from './firebase';
 import apiClient from '../api/client';
 
 let socket: Socket | null = null;
@@ -19,7 +22,7 @@ const socketUrl = () => (apiClient.defaults.baseURL || '').replace('/api/v1', ''
  */
 export async function getSocket(): Promise<Socket | null> {
   try {
-    const user = getAuth().currentUser;
+    const user = auth?.currentUser;
     if (!user) return null;
     const token = await user.getIdToken();
 

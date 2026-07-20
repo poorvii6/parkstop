@@ -24,7 +24,6 @@ export default function VerifyScreen() {
   const [spotterUpiId, setSpotterUpiId] = useState<string | null>(null);
   const [accountName, setAccountName] = useState<string | null>(null);
   // Booking is chosen by TAPPING a card; typing an ID is a fallback only.
-  const [manualEntry, setManualEntry] = useState(false);
   const [toast, setToast] = useState<{ msg: string; kind: 'success' | 'error' | 'info' } | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const showToast = (msg: string, kind: 'success' | 'error' | 'info' = 'success') =>
@@ -78,11 +77,26 @@ export default function VerifyScreen() {
         } catch (err) {
           console.log('Error polling payment status:', err);
         }
-      }, 3000);
+      }, 8000); // fallback safety net; the socket below is the fast path
     }
     return () => {
       if (interval) clearInterval(interval);
     };
+  }, [checkoutData]);
+
+  // Fast path: the backend emits when payment lands, so the host sees it
+  // immediately instead of waiting for the next poll.
+  useEffect(() => {
+    if (!checkoutData?.booking_id) return;
+    const off = onRealtime('booking:paid', (payload: any) => {
+      if (payload?.bookingId === checkoutData.booking_id) {
+        showToast('Payment received — session complete', 'success');
+        setCheckoutData(null);
+        setBookingId('');
+        fetchActiveBookings();
+      }
+    });
+    return off;
   }, [checkoutData]);
 
   const checkPayoutStatus = async () => {
@@ -199,7 +213,6 @@ export default function VerifyScreen() {
   const quickVerify = async (booking: any) => {
     setBookingId(booking.id.toString());
     setOtp('');
-    setManualEntry(false);
     // Bring the verification form into view so the OTP field is right there.
     scrollRef.current?.scrollTo({ y: 0, animated: true });
     if (booking.status === 'reserved') {
@@ -347,51 +360,25 @@ export default function VerifyScreen() {
           ) : (
             <>
               <View style={SS.inputGroup}>
-                <Text style={SS.inputLabel}>BOOKING</Text>
+                <Text style={SS.inputLabel}>BOOKING ID</Text>
+                {/* Always typeable; tapping a booking card below fills this in. */}
+                <TextInput
+                  style={[SS.input, selectedBooking && { borderColor: SC.accent }]}
+                  placeholder="e.g. 42  ·  or tap a booking below"
+                  placeholderTextColor={SC.textDisabled}
+                  value={bookingId}
+                  onChangeText={(v) => { setBookingId(v); if (formError) setFormError(null); }}
+                  keyboardType="number-pad"
+                />
 
-                {selectedBooking ? (
-                  /* Selected by tapping a card below — no typing needed */
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: SC.accentSoft ?? 'rgba(59,130,246,0.10)', borderRadius: RAD.md, borderWidth: 1, borderColor: SC.accent, padding: 14 }}>
-                    <Ionicons name="checkmark-circle" size={22} color={SC.accent} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ color: SC.textPrimary, ...TF.bodyBold }} numberOfLines={1}>
-                        #{selectedBooking.id} · {selectedBooking.users?.full_name || 'Driver'}
-                      </Text>
-                      <Text style={{ color: SC.textMuted, ...TF.caption }} numberOfLines={1}>
-                        {selectedBooking.parking_spots?.title || 'Spot'} · {selectedBooking.vehicle_type || 'car'} · {selectedBooking.status}
-                      </Text>
-                    </View>
-                    <TouchableOpacity
-                      onPress={() => { setBookingId(''); setOtp(''); setCheckoutData(null); setManualEntry(false); }}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    >
-                      <Ionicons name="close-circle" size={20} color={SC.textMuted} />
-                    </TouchableOpacity>
-                  </View>
-                ) : manualEntry ? (
-                  <>
-                    <TextInput
-                      style={SS.input}
-                      placeholder="e.g. 42"
-                      placeholderTextColor={SC.textDisabled}
-                      value={bookingId}
-                      onChangeText={setBookingId}
-                      keyboardType="number-pad"
-                      autoFocus
-                    />
-                    <TouchableOpacity onPress={() => { setManualEntry(false); setBookingId(''); }} style={{ paddingVertical: 8 }}>
-                      <Text style={{ color: SC.accent, ...TF.caption }}>← Choose from list instead</Text>
-                    </TouchableOpacity>
-                  </>
-                ) : (
-                  <View style={{ borderRadius: RAD.md, borderWidth: 1, borderStyle: 'dashed', borderColor: SC.border ?? 'rgba(255,255,255,0.15)', padding: 16, alignItems: 'center', gap: 6 }}>
-                    <Ionicons name="finger-print-outline" size={22} color={SC.textMuted} />
-                    <Text style={{ color: SC.textSecondary ?? SC.textMuted, ...TF.body, textAlign: 'center' }}>
-                      Tap a booking below to select it
+                {/* Confirms WHICH booking the ID refers to — prevents verifying
+                    the wrong car when several are parked. */}
+                {selectedBooking && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 }}>
+                    <Ionicons name="checkmark-circle" size={16} color={SC.accent} />
+                    <Text style={{ color: SC.textMuted, ...TF.caption, flex: 1 }} numberOfLines={1}>
+                      {selectedBooking.users?.full_name || 'Driver'} · {selectedBooking.parking_spots?.title || 'Spot'} · {selectedBooking.status}
                     </Text>
-                    <TouchableOpacity onPress={() => setManualEntry(true)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                      <Text style={{ color: SC.accent, ...TF.caption }}>Enter ID manually</Text>
-                    </TouchableOpacity>
                   </View>
                 )}
               </View>

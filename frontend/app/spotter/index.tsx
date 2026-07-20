@@ -1,139 +1,15 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Dimensions, ActivityIndicator, RefreshControl } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter, useFocusEffect } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { Ionicons, FontAwesome5, MaterialCommunityIcons } from '@expo/vector-icons';
 import apiClient from '../../api/client';
-import { onRealtime } from '../../services/realtime';
+import Toast from '../../components/Toast';
+import RevenueChart from '../../components/spotter/RevenueChart';
+import { useSpotterDashboard } from '../../hooks/useSpotterDashboard';
 import { SC, TF, SP, RAD, SS } from '../../constants/SpotterTheme';
-import { registerForPushNotificationsAsync } from '../../services/notifications';
 import RazorpayCheckout from '../../components/RazorpayCheckout';
 import { Alert } from 'react-native';
-
-const { width } = Dimensions.get('window');
-
-/* ── Mini Line Chart ───────────────────────────────────────────── */
-const MiniChart = ({ data = [0, 0, 0, 0, 0, 0, 0] }: { data: number[] }) => {
-  const [activeIdx, setActiveIdx] = useState<number | null>(null);
-  const maxVal = Math.max(...data, 1);
-  const chartH = 120;
-  const paddingX = 36;
-  const chartW = width - 80;
-  const stepX = (chartW - paddingX) / (data.length - 1 || 1);
-
-  const points = data.map((val, i) => ({
-    x: paddingX + i * stepX,
-    y: chartH - (val / maxVal) * chartH,
-  }));
-
-  const lines = [];
-  for (let i = 0; i < points.length - 1; i++) {
-    const p1 = points[i];
-    const p2 = points[i + 1];
-    const dx = p2.x - p1.x;
-    const dy = p2.y - p1.y;
-    const length = Math.sqrt(dx * dx + dy * dy);
-    const angle = Math.atan2(dy, dx) * (180 / Math.PI);
-
-    lines.push(
-      <View
-        key={`l-${i}`}
-        style={{
-          position: 'absolute',
-          left: p1.x,
-          top: p1.y,
-          width: length,
-          height: 3,
-          backgroundColor: SC.accent,
-          borderRadius: 2,
-          transform: [
-            { translateY: -1.5 },
-            { rotate: `${angle}deg` },
-            { translateX: length / 2 - dx / 2 },
-            { translateY: dy / 2 },
-          ],
-        }}
-      />
-    );
-  }
-
-  const yLabels = [maxVal, maxVal * 0.5, 0].map(v =>
-    v >= 1000 ? `${(v / 1000).toFixed(1)}k` : Math.round(v).toString()
-  );
-
-  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-
-  return (
-    <View style={{ height: chartH + 54, position: 'relative' }}>
-      {/* Interactive Tooltip Banner */}
-      <View style={{ height: 26, justifyContent: 'center', alignItems: 'center', marginBottom: 6 }}>
-        {activeIdx !== null ? (
-          <Text style={{ color: SC.accent, fontSize: 13, fontWeight: '900', letterSpacing: 0.5 }}>
-            {days[activeIdx]} Revenue: ₹{data[activeIdx].toFixed(2)}
-          </Text>
-        ) : (
-          <Text style={{ color: SC.textMuted, fontSize: 11, fontWeight: '600' }}>
-            Tap dots to view daily earnings
-          </Text>
-        )}
-      </View>
-
-      <View style={{ position: 'absolute', left: 0, top: 32, bottom: 20, justifyContent: 'space-between' }}>
-        {yLabels.map((l, i) => (
-          <Text key={i} style={{ color: SC.textMuted, fontSize: 9, width: 30, textAlign: 'right' }}>{l}</Text>
-        ))}
-      </View>
-      <View style={{ position: 'absolute', left: paddingX, right: 0, top: 32, bottom: 20, justifyContent: 'space-between' }}>
-        {[0, 1, 2].map(i => (
-          <View key={i} style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.05)', width: '100%' }} />
-        ))}
-      </View>
-      <View style={{ position: 'absolute', left: 0, right: 0, top: 32, bottom: 20 }}>
-        {lines}
-        {points.map((p, i) => {
-          const isActive = activeIdx === i;
-          return (
-            <TouchableOpacity
-              key={`d-${i}`}
-              activeOpacity={0.7}
-              onPress={() => setActiveIdx(activeIdx === i ? null : i)}
-              style={{
-                position: 'absolute',
-                left: p.x - 14,
-                top: p.y - 14,
-                width: 28,
-                height: 28,
-                justifyContent: 'center',
-                alignItems: 'center',
-                zIndex: 20
-              }}
-            >
-              <View
-                style={{
-                  width: isActive ? 12 : 8,
-                  height: isActive ? 12 : 8,
-                  borderRadius: isActive ? 6 : 4,
-                  backgroundColor: isActive ? '#FFF' : SC.accent,
-                  borderWidth: 2,
-                  borderColor: isActive ? SC.accent : SC.bgCard,
-                  shadowColor: SC.accent,
-                  shadowOpacity: isActive ? 0.8 : 0,
-                  shadowRadius: 4,
-                  elevation: isActive ? 4 : 0
-                }}
-              />
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-      <View style={{ position: 'absolute', left: paddingX, right: 0, bottom: 0, flexDirection: 'row', justifyContent: 'space-between' }}>
-        {days.map((d, i) => (
-          <Text key={i} style={{ color: activeIdx === i ? SC.accent : SC.textMuted, fontSize: 9, fontWeight: activeIdx === i ? '900' : '500' }}>{d}</Text>
-        ))}
-      </View>
-    </View>
-  );
-};
 
 /* ── Stat Card ─────────────────────────────────────────────────── */
 const StatCard = ({ icon, iconColor, iconBg, label, value, sub, onPress }: any) => (
@@ -150,30 +26,25 @@ const StatCard = ({ icon, iconColor, iconBg, label, value, sub, onPress }: any) 
 /* ── Main Dashboard ────────────────────────────────────────────── */
 export default function SpotterDashboard() {
   const router = useRouter();
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [dashboardData, setDashboardData] = useState({
-    active_spots: 0,
-    earnings: 0,
-    revenue_trend: [0, 0, 0, 0, 0, 0, 0],
-    surge_factor: 1,
-    inventory: [] as any[],
-    recent_traffic: [] as any[],
-    balance: 0,
-    occupancy_rate: 0,
-    avg_duration: 0.0,
-    global_online: false,
-    payout_history: [] as any[]
-  });
-  const [payoutSetup, setPayoutSetup] = useState<boolean | null>(null);
+  const {
+    data: dashboardData,
+    loading,
+    refreshing,
+    loadFailed,
+    lastSyncedAt,
+    payoutSetup,
+    refetch: fetchDashboardData,
+    onRefresh,
+  } = useSpotterDashboard();
   const [togglingStatus, setTogglingStatus] = useState(false);
+  const [toast, setToast] = useState<{ msg: string; kind: 'success' | 'error' | 'info' } | null>(null);
 
   const toggleGlobalStatus = async (currentStatus: boolean) => {
     setTogglingStatus(true);
     try {
       const res = await apiClient.put('/spots/toggle-all', { online: !currentStatus });
       if (res.data?.success) {
-        Alert.alert('Status Updated', res.data.message);
+        setToast({ msg: res.data.message || (currentStatus ? 'Spots taken offline' : 'Spots are live'), kind: 'success' });
         fetchDashboardData();
       }
     } catch (e: any) {
@@ -212,14 +83,17 @@ export default function SpotterDashboard() {
   const handleRazorpaySuccess = async (data: any) => {
     setIsRazorpayVisible(false);
     try {
-      setLoading(true);
+      // Keep the dues button in its spinner state until verification returns.
+      // (This previously flipped the whole dashboard into its loading screen,
+      // which read as "the app restarted" right after paying.)
+      setIsClearingDues(true);
       const res = await apiClient.post('/payments/verify-dues', {
         razorpay_order_id: data.razorpay_order_id,
         razorpay_payment_id: data.razorpay_payment_id,
         razorpay_signature: data.razorpay_signature,
       });
       if (res.data.success) {
-        Alert.alert('Success', 'Dues cleared successfully!');
+        setToast({ msg: 'Dues cleared — your wallet is settled', kind: 'success' });
         fetchDashboardData();
       } else {
         Alert.alert('Error', 'Payment verification failed');
@@ -227,7 +101,7 @@ export default function SpotterDashboard() {
     } catch (e) {
       Alert.alert('Error', 'Payment verification failed');
     } finally {
-      setLoading(false);
+      setIsClearingDues(false);
     }
   };
 
@@ -235,45 +109,6 @@ export default function SpotterDashboard() {
     setIsRazorpayVisible(false);
     const errorMessage = data && data.error ? data.error.description : 'Your payment could not be processed or was cancelled.';
     Alert.alert('Payment Failed', errorMessage);
-  };
-
-  const fetchDashboardData = useCallback(async () => {
-    try {
-      const res = await apiClient.get('/spots/dashboard');
-      if (res.data?.success) {
-        setDashboardData(res.data.data);
-      }
-    } catch (e) {
-      console.log('Error fetching dashboard', e);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
-
-  // Live updates: a new/cancelled booking refreshes the dashboard instantly —
-  // a host must never miss a booking waiting for a manual pull-to-refresh.
-  useEffect(() => {
-    const offNew = onRealtime('booking:new', () => fetchDashboardData());
-    const offCancelled = onRealtime('booking:cancelled', () => fetchDashboardData());
-    const offPayout = onRealtime('payout:pending', () => fetchDashboardData());
-    return () => { offNew(); offCancelled(); offPayout(); };
-  }, [fetchDashboardData]);
-
-  useFocusEffect(
-    useCallback(() => {
-      fetchDashboardData();
-      registerForPushNotificationsAsync();
-      // Check payout account status
-      apiClient.get('/payouts/account-status')
-        .then(res => { if (res.data?.success) setPayoutSetup(res.data.data.is_setup); })
-        .catch(() => setPayoutSetup(false));
-    }, [fetchDashboardData])
-  );
-
-  const onRefresh = () => {
-    setRefreshing(true);
-    fetchDashboardData();
   };
 
   if (loading) {
@@ -299,6 +134,7 @@ export default function SpotterDashboard() {
   return (
     <View style={SS.page}>
       {/* HEADER */}
+      <Toast message={toast?.msg ?? null} kind={toast?.kind} onHide={() => setToast(null)} />
       <SafeAreaView edges={['top']} style={SS.headerSafe}>
         <View style={SS.header}>
           <Text style={SS.logoText}>
@@ -330,6 +166,14 @@ export default function SpotterDashboard() {
                 alignItems: 'center',
                 gap: 8
               }}
+              accessibilityRole="switch"
+              accessibilityState={{ checked: !!dashboardData.global_online, busy: togglingStatus }}
+              accessibilityLabel={dashboardData.global_online ? 'You are online' : 'You are offline'}
+              accessibilityHint={
+                dashboardData.global_online
+                  ? 'Double tap to go offline and hide all your spots from drivers'
+                  : 'Double tap to go online and make your spots bookable'
+              }
             >
               <View style={{ gap: 2 }}>
                 <Text style={{ color: SC.textMuted, fontSize: 8, fontWeight: '800', letterSpacing: 0.5 }}>STATUS</Text>
@@ -354,7 +198,12 @@ export default function SpotterDashboard() {
                 />
               )}
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => router.push('/modal')} style={SS.profileBtn}>
+            <TouchableOpacity
+              onPress={() => router.push('/modal')}
+              style={SS.profileBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Open profile and settings"
+            >
               <Ionicons name="person" size={18} color={SC.info} />
             </TouchableOpacity>
           </View>
@@ -373,11 +222,41 @@ export default function SpotterDashboard() {
           />
         }
       >
+        {/* OFFLINE BANNER — the numbers below may be stale, say so plainly. */}
+        {loadFailed && (
+          <TouchableOpacity
+            style={{
+              flexDirection: 'row', alignItems: 'center', gap: 8,
+              backgroundColor: 'rgba(245,158,11,0.15)', padding: 12,
+              borderRadius: RAD.md, borderWidth: 1,
+              borderColor: 'rgba(245,158,11,0.3)', marginBottom: SP.lg,
+            }}
+            onPress={onRefresh}
+            accessibilityRole="button"
+            accessibilityLabel="Could not sync. Tap to retry."
+          >
+            <Ionicons name="cloud-offline-outline" size={18} color={SC.warning} />
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: SC.warning, fontWeight: '800', fontSize: 13 }}>
+                Couldn&apos;t sync
+              </Text>
+              <Text style={{ color: SC.textSecondary, fontSize: 11, fontWeight: '600' }}>
+                {lastSyncedAt
+                  ? `Showing data from ${lastSyncedAt.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' })}. Tap to retry.`
+                  : 'These figures may be incomplete. Tap to retry.'}
+              </Text>
+            </View>
+            <Ionicons name="refresh" size={16} color={SC.warning} />
+          </TouchableOpacity>
+        )}
+
         {/* QUICK ACTIONS HUB */}
         <View style={{ flexDirection: 'row', gap: 12, marginBottom: SP.xl }}>
           <TouchableOpacity
             style={[SS.primaryBtn, { flex: 1, backgroundColor: SC.info, paddingVertical: 14 }]}
             onPress={() => router.push('/spotter/verify')}
+            accessibilityRole="button"
+            accessibilityLabel="Verify a finder's booking"
           >
             <Ionicons name="scan-circle-outline" size={24} color="#FFF" style={{ marginBottom: 4 }} />
             <Text style={{ color: '#FFF', fontWeight: '800', fontSize: 13 }}>Verify Finder</Text>
@@ -385,6 +264,8 @@ export default function SpotterDashboard() {
           <TouchableOpacity
             style={[SS.primaryBtn, { flex: 1, backgroundColor: SC.success, paddingVertical: 14 }]}
             onPress={() => router.push('/spotter/spots')}
+            accessibilityRole="button"
+            accessibilityLabel="Add a new parking spot"
           >
             <Ionicons name="add-circle-outline" size={24} color="#FFF" style={{ marginBottom: 4 }} />
             <Text style={{ color: '#FFF', fontWeight: '800', fontSize: 13 }}>Add Spot</Text>
@@ -398,6 +279,10 @@ export default function SpotterDashboard() {
               style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(239,68,68,0.15)', padding: 12, borderRadius: RAD.md, borderWidth: 1, borderColor: 'rgba(239,68,68,0.3)' }}
               onPress={handleClearDues}
               disabled={isClearingDues}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: isClearingDues, busy: isClearingDues }}
+              accessibilityLabel={`Pay outstanding dues of ${Math.abs(dashboardData.balance).toFixed(2)} rupees`}
+              accessibilityHint="Opens payment to settle your platform fees"
             >
               <Ionicons name="warning" size={20} color="#ef4444" style={{ marginRight: 8 }} />
               <View style={{ flex: 1 }}>
@@ -406,7 +291,25 @@ export default function SpotterDashboard() {
               </View>
               {isClearingDues ? <ActivityIndicator color="#ef4444" /> : <Text style={{ color: '#ef4444', fontWeight: 'bold' }}>PAY</Text>}
             </TouchableOpacity>
-          ) : (
+          ) : null}
+
+          {/* A dues figure with no explanation is the top Spotter complaint.
+              This gives them a way to see exactly which bookings produced it. */}
+          {dashboardData.balance < 0 && (
+            <TouchableOpacity
+              style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 8 }}
+              onPress={() => router.push('/spotter/earnings')}
+              accessibilityRole="button"
+              accessibilityLabel="See a breakdown of where your dues came from"
+            >
+              <Ionicons name="receipt-outline" size={14} color={SC.textSecondary} />
+              <Text style={{ color: SC.textSecondary, fontSize: 12, fontWeight: '700' }}>
+                Where did this come from?
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {dashboardData.balance >= 0 && (
             <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(16,185,129,0.15)', padding: 12, borderRadius: RAD.md, borderWidth: 1, borderColor: 'rgba(16,185,129,0.3)' }}>
               <Ionicons name="checkmark-circle" size={20} color="#10b981" style={{ marginRight: 8 }} />
               <View style={{ flex: 1 }}>
@@ -478,6 +381,9 @@ export default function SpotterDashboard() {
             <View style={[SS.card, { alignItems: 'center', paddingVertical: 28 }]}>
               <Ionicons name="car-sport-outline" size={32} color={SC.textMuted} />
               <Text style={SS.emptyText}>No recent activity</Text>
+              <Text style={{ color: SC.textMuted, fontSize: 12, textAlign: 'center', marginTop: 6, paddingHorizontal: 20 }}>
+                Bookings appear here the moment a driver reserves one of your spots.
+              </Text>
             </View>
           ) : (
             dashboardData.recent_traffic.map((traffic: any, i: number) => {
@@ -524,8 +430,20 @@ export default function SpotterDashboard() {
         {/* EARNINGS ANALYTICS */}
         <View style={{ marginBottom: SP.xl }}>
           <View style={[SS.card, { paddingVertical: 20 }]}>
-            <Text style={{ color: SC.textMuted, fontSize: 12, fontWeight: '700', marginBottom: 12, marginLeft: 8 }}>WEEKLY TREND</Text>
-            <MiniChart data={dashboardData.revenue_trend || [0, 0, 0, 0, 0, 0, 0]} />
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, marginLeft: 8 }}>
+              <Text style={{ color: SC.textMuted, fontSize: 12, fontWeight: '700' }}>WEEKLY TREND</Text>
+              <TouchableOpacity
+                onPress={() => router.push('/spotter/earnings')}
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: 8, paddingVertical: 4 }}
+                accessibilityRole="button"
+                accessibilityLabel="View itemised earnings breakdown"
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Text style={{ color: SC.accent, fontSize: 12, fontWeight: '700' }}>Breakdown</Text>
+                <Ionicons name="chevron-forward" size={13} color={SC.accent} />
+              </TouchableOpacity>
+            </View>
+            <RevenueChart data={dashboardData.revenue_trend || [0, 0, 0, 0, 0, 0, 0]} />
           </View>
         </View>
 
@@ -555,6 +473,15 @@ export default function SpotterDashboard() {
             <View style={[SS.card, { alignItems: 'center', paddingVertical: 32 }]}>
               <Ionicons name="location-outline" size={36} color={SC.textMuted} />
               <Text style={[SS.emptyText, { marginTop: 12 }]}>No spots listed yet</Text>
+              <Text style={{ color: SC.textMuted, fontSize: 12, textAlign: 'center', marginTop: 6, paddingHorizontal: 20 }}>
+                List your driveway or garage to start earning from drivers nearby.
+              </Text>
+              <TouchableOpacity
+                onPress={() => router.push('/spotter/spots')}
+                style={{ marginTop: 16, backgroundColor: SC.accent, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 12 }}
+              >
+                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>Add your first spot</Text>
+              </TouchableOpacity>
             </View>
           ) : (
             dashboardData.inventory.map((spot: any, i: number) => (
@@ -601,6 +528,9 @@ export default function SpotterDashboard() {
             <View style={[SS.card, { alignItems: 'center', paddingVertical: 24 }]}>
               <Ionicons name="card-outline" size={32} color={SC.textMuted} />
               <Text style={SS.emptyText}>No payout history</Text>
+              <Text style={{ color: SC.textMuted, fontSize: 12, textAlign: 'center', marginTop: 6, paddingHorizontal: 20 }}>
+                Earnings are paid out automatically after each completed booking.
+              </Text>
             </View>
           ) : (
             dashboardData.payout_history.map((payout: any, i: number) => {

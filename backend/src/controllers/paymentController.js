@@ -345,6 +345,19 @@ class PaymentController {
         }
       });
 
+      // Notify the Spotter in realtime that payment landed, so their checkout
+      // screen closes immediately instead of waiting for a poll.
+      try {
+        if (booking?.parking_spots?.spotter_id) {
+          const { emitToUser } = require('../config/socket');
+          emitToUser(booking.parking_spots.spotter_id, 'booking:paid', {
+            bookingId: parseInt(bookingId),
+          });
+        }
+      } catch (emitErr) {
+        logger.error('Failed to emit booking:paid', emitErr);
+      }
+
       // Trigger online payout to Spotter
       try {
         if (booking && booking.parking_spots) {
