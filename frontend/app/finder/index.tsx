@@ -177,6 +177,9 @@ export default function FinderDashboard() {
   } | null>(null);
   const [elapsedMinutes, setElapsedMinutes] = useState(0);
   const [hasLocationPermission, setHasLocationPermission] = useState(true);
+  // Bumping this re-runs location initialization — lets users enable location
+  // at ANY time (from the banner or system settings) without restarting.
+  const [locationRetryTick, setLocationRetryTick] = useState(0);
   const [extendModalOpen, setExtendModalOpen] = useState(false);
   const [selectedExtendHours, setSelectedExtendHours] = useState(1);
   const [isExtending, setIsExtending] = useState(false);
@@ -1095,7 +1098,39 @@ export default function FinderDashboard() {
         if (headingSub && typeof headingSub.remove === 'function') headingSub.remove();
       } catch (e) { console.log('headingSub remove ignored'); }
     };
-  }, []);
+  }, [locationRetryTick]);
+
+  // If the user enables location in system settings and returns to the app,
+  // detect it on foreground and start tracking immediately (no restart needed).
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', async (s) => {
+      if (s === 'active' && !hasLocationPermission) {
+        try {
+          const { status } = await Location.getForegroundPermissionsAsync();
+          if (status === 'granted') {
+            setHasLocationPermission(true);
+            setLocationRetryTick((t) => t + 1);
+          }
+        } catch {}
+      }
+    });
+    return () => sub.remove();
+  }, [hasLocationPermission]);
+
+  // Banner action: re-prompt in-app when possible; otherwise open settings.
+  const handleEnableLocation = async () => {
+    try {
+      const res = await Location.requestForegroundPermissionsAsync();
+      if (res.status === 'granted') {
+        setHasLocationPermission(true);
+        setLocationRetryTick((t) => t + 1);
+      } else if (!res.canAskAgain) {
+        Linking.openSettings();
+      }
+    } catch {
+      Linking.openSettings();
+    }
+  };
 
   // Load saved vehicle type from AsyncStorage, defaulting to Car Sedan to go straight to dashboard
   useEffect(() => {
@@ -2109,9 +2144,10 @@ export default function FinderDashboard() {
           {!hasLocationPermission && (
             <View style={{ position: 'absolute', bottom: 120, left: 20, right: 20, zIndex: 100, padding: 16, backgroundColor: 'rgba(239, 68, 68, 0.08)', borderRadius: 20, borderWidth: 1, borderColor: 'rgba(239, 68, 68, 0.2)', alignItems: 'center' }}>
               <Ionicons name="warning" size={24} color="#ef4444" style={{ marginBottom: 8 }} />
-              <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800', marginBottom: 4 }}>GPS Access Denied</Text>
-              <TouchableOpacity onPress={() => Linking.openSettings()} style={{ backgroundColor: '#ef4444', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 }}>
-                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 11 }}>Open Settings</Text>
+              <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800', marginBottom: 4 }}>Location is off</Text>
+              <Text style={{ color: '#cbd5e1', fontSize: 11, marginBottom: 10, textAlign: 'center' }}>Turn on location to see nearby parking and navigate.</Text>
+              <TouchableOpacity onPress={handleEnableLocation} style={{ backgroundColor: '#ef4444', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 }}>
+                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 11 }}>Enable Location</Text>
               </TouchableOpacity>
             </View>
           )}
