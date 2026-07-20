@@ -197,6 +197,8 @@ export default function FinderDashboard() {
   const [locationRetryTick, setLocationRetryTick] = useState(0);
   // An in-progress booking found on open; shown as a "Resume" card, never auto-routed.
   const [resumableBooking, setResumableBooking] = useState<any>(null);
+  // Quality of the most recent GPS fix — used to reject wandering low-accuracy readings.
+  const lastFixQuality = useRef<{ acc: number; t: number } | null>(null);
   const [extendModalOpen, setExtendModalOpen] = useState(false);
   const [selectedExtendHours, setSelectedExtendHours] = useState(1);
   const [isExtending, setIsExtending] = useState(false);
@@ -1009,12 +1011,14 @@ export default function FinderDashboard() {
 
         // 1. Race multiple location strategies — whichever resolves first wins
         const getLocationFast = async (): Promise<{ lat: number; lng: number }> => {
-          // Strategy A: Last known position (instant if available)
-          const lastKnown = Location.getLastKnownPositionAsync({ maxAge: 120000 });
-          
-          // Strategy B: Fresh position with lowest accuracy (fast)
-          const fresh = Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Lowest });
-          
+          // Strategy A: Last known position — only if RECENT (≤30s). Stale
+          // positions were placing the dot minutes behind the user.
+          const lastKnown = Location.getLastKnownPositionAsync({ maxAge: 30000 });
+
+          // Strategy B: Fresh position at Balanced (~100m, fast). Never Lowest —
+          // cell-tower granularity put the dot kilometers off on open.
+          const fresh = Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+
           // Strategy C: Timeout fallback after 5 seconds — use a default so app doesn't hang
           const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000));
 
@@ -1026,9 +1030,9 @@ export default function FinderDashboard() {
           ]);
 
           if (result) return result;
-          
-          // If timeout hit, try one more time with Low accuracy
-          const fallback = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Low });
+
+          // If timeout hit, wait for a proper high-accuracy fix
+          const fallback = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
           return { lat: fallback.coords.latitude, lng: fallback.coords.longitude };
         };
 
@@ -1037,24 +1041,31 @@ export default function FinderDashboard() {
         lastUpdateCoords.current = coords;
         fetchNearbySpots(coords.lat, coords.lng);
 
-        // Refine in the background: the fast fix trades accuracy for speed
-        // (last-known/lowest). Follow up with a precise GPS fix so the blue
-        // dot settles on the user's true position within a few seconds.
-        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
+        // Refine in the background with the strongest GPS mode so the dot
+        // settles on the user's true position within a few seconds of opening.
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.BestForNavigation })
           .then((l) => {
             const precise = { lat: l.coords.latitude, lng: l.coords.longitude };
             setUserLocation(precise);
             lastUpdateCoords.current = precise;
+            lastFixQuality.current = { acc: l.coords.accuracy || 15, t: Date.now() };
           })
           .catch(() => {});
 
-        // 2. Start continuous watch in parallel (High accuracy, 1s/3m updates
-        //    — tight loop so the live dot tracks movement with minimal lag)
+        // 2. Continuous watch: strongest GPS, 1s/2m — with ACCURACY GATING.
+        //    A reading with high uncertainty must not drag the dot away from a
+        //    recent precise fix (that wander was the "inaccurate" feeling).
         watchSub = await Location.watchPositionAsync({
-          accuracy: Location.Accuracy.High,
+          accuracy: Location.Accuracy.BestForNavigation,
           timeInterval: 1000,
-          distanceInterval: 3,
+          distanceInterval: 2,
         }, (l) => {
+          const acc = l.coords.accuracy || 99;
+          const q = lastFixQuality.current;
+          // Skip poor readings (>35m uncertainty) when we've had a clearly
+          // better fix within the last 10 seconds.
+          if (acc > 35 && q && q.acc < acc / 2 && Date.now() - q.t < 10000) return;
+          lastFixQuality.current = { acc, t: Date.now() };
           const newCoords = { lat: l.coords.latitude, lng: l.coords.longitude };
           setUserLocation(newCoords);
         });
