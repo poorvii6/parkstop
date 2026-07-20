@@ -95,9 +95,17 @@ export default function FinderDashboard() {
       try {
         const res = await apiClient.get('/bookings/my-bookings');
         if (!res.data?.success) return;
-        const activeBooking = (res.data.data || []).find((b: any) =>
-          ['reserved', 'active'].includes(b.status)
-        );
+        const nowTs = Date.now();
+        const activeBooking = (res.data.data || []).find((b: any) => {
+          if (b.status === 'active') return true; // checked in — always resume
+          // Reserved: only resume a CURRENT session (booked <2h ago, window
+          // still open) — stale test/abandoned reservations must not draw a
+          // route on a fresh app open.
+          if (b.status !== 'reserved') return false;
+          const created = b.created_at ? new Date(b.created_at).getTime() : 0;
+          const ends = b.end_time ? new Date(b.end_time).getTime() : 0;
+          return nowTs - created < 2 * 60 * 60 * 1000 && ends > nowTs;
+        });
         if (!activeBooking?.parking_spots) return;
         const sp = activeBooking.parking_spots;
         const spotObj = {
@@ -1206,8 +1214,25 @@ export default function FinderDashboard() {
     }
   };
 
+  const lastNearbyFetch = useRef({ t: 0, lat: 0, lng: 0 });
+  const spotsLenRef = useRef(0);
+  useEffect(() => { spotsLenRef.current = spots.length; }, [spots]);
+
   const fetchNearbySpots = async (lat: number | string, lon: number | string, radius: number = 10) => {
-    setIsNearbyLoading(true);
+    // Throttle: identical-area refreshes within 5s are dropped (GPS ticks were
+    // spamming this several times per second).
+    const nLat = parseFloat(String(lat));
+    const nLng = parseFloat(String(lon));
+    const now = Date.now();
+    const prev = lastNearbyFetch.current;
+    const dLat = (nLat - prev.lat) * 110540;
+    const dLng = (nLng - prev.lng) * 111320;
+    if (now - prev.t < 5000 && Math.sqrt(dLat * dLat + dLng * dLng) < 30) return;
+    lastNearbyFetch.current = { t: now, lat: nLat, lng: nLng };
+
+    // Quiet refresh: only show the loading skeleton when there's nothing on
+    // screen yet — background refreshes must not blink the list.
+    if (spotsLenRef.current === 0) setIsNearbyLoading(true);
     try {
       const res = await apiClient.get(`/spots/nearby?lat=${lat}&lng=${lon}&radius=${radius}`);
       if (res.data.success) {
