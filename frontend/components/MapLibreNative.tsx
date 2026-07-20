@@ -274,8 +274,13 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
     () =>
       dest ? (
         <MLMarker id="destination" lngLat={[dest.lng, dest.lat]} anchor="bottom">
-          <View style={styles.destPin}>
-            <View style={styles.destPinInner} />
+          {/* Classic teardrop map pin: round head + pointed tail whose tip
+              sits exactly on the destination coordinate. */}
+          <View style={styles.destPinWrap}>
+            <View style={styles.destPinHead}>
+              <View style={styles.destPinInner} />
+            </View>
+            <View style={styles.destPinTail} />
           </View>
         </MLMarker>
       ) : null,
@@ -550,21 +555,42 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     fontSize: 12,
   },
-  destPin: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
+  destPinWrap: {
+    alignItems: 'center',
+  },
+  destPinHead: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     backgroundColor: '#EA4335',
-    borderWidth: 3,
+    borderWidth: 2.5,
     borderColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.35,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 5,
+    zIndex: 2,
   },
   destPinInner: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+    width: 9,
+    height: 9,
+    borderRadius: 4.5,
     backgroundColor: '#fff',
+  },
+  destPinTail: {
+    width: 0,
+    height: 0,
+    borderLeftWidth: 7,
+    borderRightWidth: 7,
+    borderTopWidth: 13,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderTopColor: '#EA4335',
+    marginTop: -4,
+    zIndex: 1,
   },
 });
 
