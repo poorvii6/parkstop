@@ -154,7 +154,6 @@ export default function FinderDashboard() {
   const [deviceHeading, setDeviceHeading] = useState(0);
   // Refs for GPS tracking logic
   const lastAnimatedHeading = useRef(0);
-  const lastNearbyFetch = useRef(0);
   const lastRouteFetch = useRef(0);
   const lastRouteDest = useRef<string | null>(null);
   const lastRouteFetchPos = useRef<{ lat: number; lng: number } | null>(null);
