@@ -243,6 +243,11 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
     const d = propsRef.current.searchedPlace || propsRef.current.destination;
     return (propsRef.current.markers || []).map((m) => {
       const isActive = !!d && Math.abs(d.lat - m.lat) < 0.001 && Math.abs(d.lng - m.lng) < 0.001;
+      // The selected spot is represented by the destination pin alone (its
+      // price is shown in the booking panel) — rendering the ₹ pill too would
+      // stack two markers on the same point. Google does the same: selected
+      // place = one pin.
+      if (isActive) return null;
       return (
         <MLMarker
           key={m.id}
