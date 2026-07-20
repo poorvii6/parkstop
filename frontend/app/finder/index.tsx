@@ -107,26 +107,34 @@ export default function FinderDashboard() {
           return nowTs - created < 2 * 60 * 60 * 1000 && ends > nowTs;
         });
         if (!activeBooking?.parking_spots) return;
-        const sp = activeBooking.parking_spots;
-        const spotObj = {
-          id: sp.id.toString(),
-          title: sp.title,
-          lat: parseFloat(sp.latitude),
-          lng: parseFloat(sp.longitude),
-          price: parseFloat(sp.price_per_hour),
-          available: true,
-          available_slots: parseInt(sp.available_slots) || 1,
-          images: Array.isArray(sp.images) ? sp.images : [],
-        };
-        // Make sure the booked spot exists in the spots list even if it's
-        // outside the nearby radius, then re-select it so the route shows.
-        setSpots((prev) => (prev.some((s) => s.id === spotObj.id) ? prev : [...prev, spotObj]));
-        setSelectedSpotId(spotObj.id);
-        setBookingDetails((prev: any) => prev || activeBooking);
-        console.log(`[Booking] Restored in-progress booking #${activeBooking.id} -> guiding to "${sp.title}"`);
+        // Never auto-draw a route on open — offer to resume instead. The
+        // route/navigation only appears if the user taps "Resume".
+        setResumableBooking(activeBooking);
+        console.log(`[Booking] In-progress booking #${activeBooking.id} found — offering resume`);
       } catch {}
     })();
   }, []);
+
+  const resumeBooking = () => {
+    const b = resumableBooking;
+    if (!b?.parking_spots) return;
+    const sp = b.parking_spots;
+    const spotObj = {
+      id: sp.id.toString(),
+      title: sp.title,
+      lat: parseFloat(sp.latitude),
+      lng: parseFloat(sp.longitude),
+      price: parseFloat(sp.price_per_hour),
+      available: true,
+      available_slots: parseInt(sp.available_slots) || 1,
+      images: Array.isArray(sp.images) ? sp.images : [],
+    };
+    setSpots((prev) => (prev.some((s) => s.id === spotObj.id) ? prev : [...prev, spotObj]));
+    setSelectedSpotId(spotObj.id);
+    setBookingDetails((prev: any) => prev || b);
+    setResumableBooking(null);
+    setStep('booking_confirm');
+  };
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', nextAppState => {
@@ -187,6 +195,8 @@ export default function FinderDashboard() {
   // Bumping this re-runs location initialization — lets users enable location
   // at ANY time (from the banner or system settings) without restarting.
   const [locationRetryTick, setLocationRetryTick] = useState(0);
+  // An in-progress booking found on open; shown as a "Resume" card, never auto-routed.
+  const [resumableBooking, setResumableBooking] = useState<any>(null);
   const [extendModalOpen, setExtendModalOpen] = useState(false);
   const [selectedExtendHours, setSelectedExtendHours] = useState(1);
   const [isExtending, setIsExtending] = useState(false);
@@ -2165,6 +2175,21 @@ export default function FinderDashboard() {
             </ScrollView>
           </View>
 
+          {resumableBooking && !selectedSpotId && (
+            <View style={{ position: 'absolute', bottom: 300, left: 20, right: 20, zIndex: 100, padding: 14, backgroundColor: 'rgba(15,23,42,0.96)', borderRadius: 18, borderWidth: 1, borderColor: 'rgba(66,133,244,0.35)', flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              <Ionicons name="time-outline" size={22} color="#4285F4" />
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>Booking in progress</Text>
+                <Text style={{ color: '#94a3b8', fontSize: 12 }} numberOfLines={1}>{resumableBooking.parking_spots?.title}</Text>
+              </View>
+              <TouchableOpacity onPress={resumeBooking} style={{ backgroundColor: '#4285F4', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 }}>
+                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 12 }}>Resume</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setResumableBooking(null)} style={{ padding: 6 }}>
+                <Ionicons name="close" size={18} color="#94a3b8" />
+              </TouchableOpacity>
+            </View>
+          )}
           {!hasLocationPermission && (
             <View style={{ position: 'absolute', bottom: 120, left: 20, right: 20, zIndex: 100, padding: 16, backgroundColor: 'rgba(239, 68, 68, 0.08)', borderRadius: 20, borderWidth: 1, borderColor: 'rgba(239, 68, 68, 0.2)', alignItems: 'center' }}>
               <Ionicons name="warning" size={24} color="#ef4444" style={{ marginBottom: 8 }} />
