@@ -199,6 +199,8 @@ export default function FinderDashboard() {
   const [resumableBooking, setResumableBooking] = useState<any>(null);
   // Quality of the most recent GPS fix — used to reject wandering low-accuracy readings.
   const lastFixQuality = useRef<{ acc: number; t: number } | null>(null);
+  // Consecutive in-geofence GPS fixes required before declaring arrival.
+  const arrivalHits = useRef(0);
   const [extendModalOpen, setExtendModalOpen] = useState(false);
   const [selectedExtendHours, setSelectedExtendHours] = useState(1);
   const [isExtending, setIsExtending] = useState(false);
@@ -838,8 +840,19 @@ export default function FinderDashboard() {
               }
             }
 
-            // Arrival detection: within ~100m straight-line OR < 100m remaining on route
-            if (straightKm < 0.1 || remainingKm < 0.1) {
+            // Arrival detection — must be genuinely AT the spot:
+            //  • within 25m straight-line of the spot (a real geofence, not a
+            //    block away), AND
+            //  • the GPS fix is trustworthy (accuracy better than 30m), AND
+            //  • confirmed on 2 consecutive fixes so a single stray reading
+            //    can't announce arrival early.
+            // `remainingKm` is deliberately NOT used: it starts life as a
+            // straight-line estimate (×1.3) and could trip arrival on its own.
+            const gpsAcc = loc.coords.accuracy || 99;
+            const withinGeofence = straightKm <= 0.025 && gpsAcc <= 30;
+            arrivalHits.current = withinGeofence ? arrivalHits.current + 1 : 0;
+
+            if (arrivalHits.current >= 2 && !arrivalDetected) {
               setArrivalDetected(true);
               setIsFollowing(false);
               if (!isMutedRef.current) {
@@ -882,6 +895,7 @@ export default function FinderDashboard() {
     } else if (!['arriving'].includes(step)) {
       // Don't reset arrivalDetected when transitioning to 'arriving' (check-in flow)
       setArrivalDetected(false);
+      arrivalHits.current = 0; // fresh geofence count for the next trip
       setSimulatedLocation(null);
       setDistanceInfo({ km: '0', mins: '0' });
       setTrafficSegments([]);
