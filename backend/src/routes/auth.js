@@ -3,6 +3,7 @@ const { validateRegister, validateSocialLogin, validateSendOtp, validateVerifyOt
 const AuthController = require('../controllers/authController');
 const { authenticate } = require('../middleware/auth');
 const loginRateLimiter = require('../middleware/loginRateLimiter');
+const { sendOtpRateLimiter, verifyOtpRateLimiter } = require('../middleware/otpRateLimiter');
 
 const router = express.Router();
 
@@ -11,12 +12,14 @@ const router = express.Router();
  */
 router.post(
   '/send-otp',
+  sendOtpRateLimiter,
   validateSendOtp,
   AuthController.sendOTP
 );
 
 router.post(
   '/verify-otp',
+  verifyOtpRateLimiter,
   validateVerifyOtp,
   AuthController.verifyOTP
 );

@@ -11,7 +11,18 @@ class AuthController {
   static async sendOTP(req, res) {
     try {
       const { email } = req.body;
-      const { generateOTP, sendEmailOTP } = require('../services/otpService');
+      const { generateOTP, sendEmailOTP, canSendOTP } = require('../services/otpService');
+
+      // Per-address cooldown. Stops /auth/send-otp being used to flood a
+      // stranger's inbox (and to burn through the Resend quota).
+      const gate = canSendOTP(email);
+      if (!gate.allowed) {
+        return res.status(429).json({
+          success: false,
+          message: `Please wait ${gate.retryAfterSec}s before requesting another code.`,
+          retry_after: gate.retryAfterSec
+        });
+      }
 
       const code = generateOTP(email);
       await sendEmailOTP(email, code);
@@ -37,11 +48,19 @@ class AuthController {
       const { email, code } = req.body;
       const { verifyOTP, generateOTPToken } = require('../services/otpService');
 
-      const isValid = verifyOTP(email, code);
-      if (!isValid) {
-        return res.status(400).json({
+      const result = verifyOTP(email, code);
+      if (!result.ok) {
+        // Distinguish "burned after too many guesses" so the user knows to
+        // request a fresh code rather than retrying a code that can no longer
+        // work. The other reasons stay deliberately vague — telling an attacker
+        // whether an address has a pending code is an enumeration oracle.
+        const message = result.reason === 'too_many_attempts'
+          ? 'Too many incorrect attempts. Please request a new verification code.'
+          : 'Invalid or expired Gmail OTP verification code';
+
+        return res.status(result.reason === 'too_many_attempts' ? 429 : 400).json({
           success: false,
-          message: 'Invalid or expired Gmail OTP verification code'
+          message
         });
       }
 

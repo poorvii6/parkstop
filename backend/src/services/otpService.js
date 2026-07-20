@@ -1,24 +1,88 @@
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const logger = require('../utils/logger');
+const config = require('../config/env');
 
-// Local in-memory cache for Email OTP codes
+// Local in-memory cache for Email OTP codes.
+// NOTE: this is per-process. If the API is ever scaled to more than one
+// instance, a user could be issued an OTP by instance A and have it verified
+// by instance B, which would not find it. Move to Redis before scaling out.
 const otpCache = new Map();
 
-// JWT Secret for signing the completed verification tokens
-const JWT_SECRET = process.env.JWT_SECRET || 'jwt_default_secret_key';
+// Signing key for completed verification tokens. Sourced from validated config
+// rather than a local `|| 'default'` fallback: env.js already refuses to boot
+// without a >=32 char JWT_SECRET, and a hardcoded fallback would let anyone who
+// read this file forge an otp_token and register as any email address.
+const JWT_SECRET = config.jwt.secret;
+
+const OTP_TTL_MS = 5 * 60 * 1000;   // code is valid for 5 minutes
+const RESEND_COOLDOWN_MS = 60 * 1000; // min gap between sends to one address
+const MAX_VERIFY_ATTEMPTS = 5;      // guesses allowed before the code is burned
 
 /**
- * Generate a secure 6-digit numeric OTP and save to cache
+ * Purge expired entries. Without this the cache grows forever, because entries
+ * are only deleted on successful verification — every abandoned signup leaks.
+ */
+function sweepExpired() {
+  const now = Date.now();
+  for (const [key, entry] of otpCache) {
+    if (now > entry.expiresAt) otpCache.delete(key);
+  }
+}
+
+/**
+ * Whether a fresh OTP may be sent to this address yet.
+ *
+ * Without a per-address cooldown, /auth/send-otp is an email-bombing weapon:
+ * anyone can point it at a stranger's Gmail in a loop. An IP rate limit alone
+ * does not stop this, since the attacker can rotate IPs while targeting one
+ * victim address.
+ *
+ * @returns {{ allowed: boolean, retryAfterSec: number }}
+ */
+function canSendOTP(email) {
+  const entry = otpCache.get(email.toLowerCase());
+  if (!entry || Date.now() > entry.expiresAt) return { allowed: true, retryAfterSec: 0 };
+
+  const elapsed = Date.now() - entry.issuedAt;
+  if (elapsed >= RESEND_COOLDOWN_MS) return { allowed: true, retryAfterSec: 0 };
+
+  return {
+    allowed: false,
+    retryAfterSec: Math.ceil((RESEND_COOLDOWN_MS - elapsed) / 1000),
+  };
+}
+
+/**
+ * Generate a secure 6-digit numeric OTP and save to cache.
+ *
+ * Uses crypto.randomInt, not Math.random: Math.random is a non-cryptographic
+ * PRNG whose output can be predicted from observed values, which would let an
+ * attacker derive a victim's code without ever seeing their inbox.
+ *
  * @param {string} email
  * @returns {string} code
  */
 function generateOTP(email) {
-  const code = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = Date.now() + 5 * 60 * 1000; // 5 minutes TTL
+  sweepExpired();
 
-  otpCache.set(email.toLowerCase(), { code, expiresAt });
-  logger.info(`Gmail OTP generated for ${email}: ${code} (Expires in 5 mins)`);
+  const code = crypto.randomInt(100000, 1000000).toString();
+  const now = Date.now();
+
+  otpCache.set(email.toLowerCase(), {
+    code,
+    issuedAt: now,
+    expiresAt: now + OTP_TTL_MS,
+    attempts: 0,
+  });
+
+  // Never log the code itself in production — logs are widely readable and it
+  // would hand over every signup. Dev keeps it for local testing convenience.
+  if (process.env.NODE_ENV === 'production') {
+    logger.info(`Gmail OTP generated for ${email} (expires in 5 mins)`);
+  } else {
+    logger.info(`Gmail OTP generated for ${email}: ${code} (expires in 5 mins)`);
+  }
   return code;
 }
 
@@ -79,41 +143,60 @@ async function sendEmailOTP(email, code) {
 }
 
 /**
- * Verify OTP against cached entry
+ * Verify OTP against cached entry.
+ *
+ * Enforces an attempt cap. A 6-digit code is only 900,000 possibilities; with
+ * unlimited guesses inside the 5 minute window an attacker can simply grind it,
+ * which would defeat email verification entirely. After MAX_VERIFY_ATTEMPTS the
+ * code is burned and the user must request a new one.
+ *
  * @param {string} email
  * @param {string} code
- * @returns {boolean} success
+ * @returns {{ ok: boolean, reason?: 'not_found'|'expired'|'too_many_attempts'|'mismatch' }}
  */
 function verifyOTP(email, code) {
   const emailKey = email.toLowerCase();
   const cached = otpCache.get(emailKey);
+
   if (!cached) {
     logger.warn(`No OTP found in cache for ${email}`);
-    return false;
+    return { ok: false, reason: 'not_found' };
   }
 
   if (Date.now() > cached.expiresAt) {
     logger.warn(`OTP for ${email} has expired`);
     otpCache.delete(emailKey);
-    return false;
+    return { ok: false, reason: 'expired' };
   }
+
+  if (cached.attempts >= MAX_VERIFY_ATTEMPTS) {
+    logger.warn(`OTP for ${email} burned after ${MAX_VERIFY_ATTEMPTS} failed attempts`);
+    otpCache.delete(emailKey);
+    return { ok: false, reason: 'too_many_attempts' };
+  }
+
+  cached.attempts += 1;
 
   const codeBuffer = Buffer.from(code);
   const cachedBuffer = Buffer.from(cached.code);
 
+  // timingSafeEqual throws on length mismatch, so guard first. Bailing early on
+  // a wrong length leaks nothing useful: the length is fixed at 6 and already
+  // enforced by the request validator.
   if (codeBuffer.length !== cachedBuffer.length) {
-    return false;
+    return { ok: false, reason: 'mismatch' };
   }
 
-  const isMatch = crypto.timingSafeEqual(codeBuffer, cachedBuffer);
-  if (isMatch) {
-    otpCache.delete(emailKey); // Burn OTP after verification
+  if (crypto.timingSafeEqual(codeBuffer, cachedBuffer)) {
+    otpCache.delete(emailKey); // Burn OTP after successful verification
     logger.info(`OTP verified successfully for ${email}`);
-    return true;
+    return { ok: true };
   }
 
-  logger.warn(`Invalid OTP verification attempt for ${email}`);
-  return false;
+  logger.warn(
+    `Invalid OTP attempt ${cached.attempts}/${MAX_VERIFY_ATTEMPTS} for ${email}`
+  );
+  return { ok: false, reason: 'mismatch' };
 }
 
 /**
@@ -147,8 +230,14 @@ function validateOTPToken(email, token) {
 
 module.exports = {
   generateOTP,
+  canSendOTP,
   sendEmailOTP,
   verifyOTP,
   generateOTPToken,
-  validateOTPToken
+  validateOTPToken,
+  // Exported for tests only.
+  _otpCache: otpCache,
+  MAX_VERIFY_ATTEMPTS,
+  RESEND_COOLDOWN_MS,
+  OTP_TTL_MS
 };

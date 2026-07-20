@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, Modal } from 'react-native';
 import { useRouter } from 'expo-router';
 import apiClient from '../api/client';
@@ -20,8 +20,41 @@ export default function RegisterScreen() {
   const [otpModalVisible, setOtpModalVisible] = useState(false);
   const [otpCode, setOtpCode] = useState('');
   const [otpLoading, setOtpLoading] = useState(false);
+  // Inline error instead of an Alert: an Alert covers the modal and makes the
+  // user dismiss it before they can correct the code they just typed.
+  const [otpError, setOtpError] = useState('');
+  const [resendIn, setResendIn] = useState(0);
+  const [resending, setResending] = useState(false);
 
   const router = useRouter();
+
+  // Countdown for the resend button. The backend enforces a 60s per-address
+  // cooldown, so the UI mirrors it rather than letting the user tap into a 429.
+  useEffect(() => {
+    if (resendIn <= 0) return;
+    const t = setTimeout(() => setResendIn((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [resendIn]);
+
+  const handleResendOTP = async () => {
+    if (resendIn > 0 || resending) return;
+    setResending(true);
+    setOtpError('');
+    try {
+      const res = await apiClient.post('/auth/send-otp', { email });
+      if (res.data?.success) {
+        setOtpCode('');
+        setResendIn(60);
+      }
+    } catch (err: any) {
+      // 429 carries the server's authoritative remaining cooldown.
+      const retry = err.response?.data?.retry_after;
+      if (retry) setResendIn(retry);
+      setOtpError(err.response?.data?.message || 'Could not resend the code. Try again.');
+    } finally {
+      setResending(false);
+    }
+  };
 
   const handleSocialLogin = async (providerName: 'google') => {
     try {
@@ -144,6 +177,8 @@ export default function RegisterScreen() {
       
       if (response.data.success) {
         setOtpCode('');
+        setOtpError('');
+        setResendIn(60);
         setOtpModalVisible(true);
       }
     } catch (otpErr: any) {
@@ -160,10 +195,11 @@ export default function RegisterScreen() {
 
   const handleVerifyOTP = async () => {
     if (!otpCode || otpCode.length !== 6) {
-      return Alert.alert('Oops', 'Please enter the 6-digit OTP code');
+      return setOtpError('Please enter the 6-digit code from your email.');
     }
 
     setOtpLoading(true);
+    setOtpError('');
     try {
       if (__DEV__) console.log(`[GMAIL OTP] Verifying OTP code for ${email}...`);
       const response = await apiClient.post('/auth/verify-otp', {
@@ -179,7 +215,14 @@ export default function RegisterScreen() {
     } catch (error: any) {
       console.error('[GMAIL OTP] Verification failed:', error.response?.data || error.message);
       const msg = error.response?.data?.message || 'Invalid or expired OTP verification code';
-      Alert.alert('Verification Failed', msg);
+      setOtpError(msg);
+      // The backend burns the code after 5 wrong guesses and answers 429. When
+      // that happens the only way forward is a fresh code, so free the resend
+      // button immediately instead of making them wait out the countdown.
+      if (error.response?.status === 429) {
+        setResendIn(0);
+        setOtpCode('');
+      }
     } finally {
       setOtpLoading(false);
     }
@@ -372,14 +415,42 @@ export default function RegisterScreen() {
             </Text>
 
             <TextInput
-              style={[BlueprintTheme.input, styles.otpInput]}
+              style={[
+                BlueprintTheme.input,
+                styles.otpInput,
+                !!otpError && styles.otpInputError,
+              ]}
               placeholder="123456"
               placeholderTextColor="rgba(255,255,255,0.2)"
               keyboardType="number-pad"
               maxLength={6}
               value={otpCode}
-              onChangeText={setOtpCode}
+              onChangeText={(t) => { setOtpCode(t); if (otpError) setOtpError(''); }}
+              autoFocus
+              accessibilityLabel="Six digit verification code"
             />
+
+            {!!otpError && <Text style={styles.otpErrorText}>{otpError}</Text>}
+
+            {/* Resend — without this, a code that never arrives is a dead end. */}
+            <TouchableOpacity
+              onPress={handleResendOTP}
+              disabled={resendIn > 0 || resending}
+              style={styles.resendWrap}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: resendIn > 0 || resending }}
+              accessibilityLabel={
+                resendIn > 0 ? `Resend available in ${resendIn} seconds` : 'Resend code'
+              }
+            >
+              {resending ? (
+                <ActivityIndicator color={BlueprintColors.primaryAccent} size="small" />
+              ) : (
+                <Text style={[styles.resendText, resendIn > 0 && styles.resendTextDisabled]}>
+                  {resendIn > 0 ? `Resend code in ${resendIn}s` : "Didn't get it? Resend code"}
+                </Text>
+              )}
+            </TouchableOpacity>
 
             <View style={styles.modalButtons}>
               <TouchableOpacity
@@ -486,6 +557,32 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 8,
     paddingVertical: 12,
+  },
+  otpInputError: {
+    borderColor: '#EF4444',
+    borderWidth: 1,
+  },
+  otpErrorText: {
+    color: '#EF4444',
+    fontSize: 13,
+    fontWeight: '600',
+    textAlign: 'center',
+    marginTop: -8,
+  },
+  resendWrap: {
+    alignItems: 'center',
+    paddingVertical: 4,
+    minHeight: 24,
+    justifyContent: 'center',
+  },
+  resendText: {
+    color: BlueprintColors.primaryAccent,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  resendTextDisabled: {
+    color: BlueprintColors.textSecondary,
+    fontWeight: '600',
   },
   modalButtons: {
     flexDirection: 'row',
