@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons, FontAwesome5, MaterialCommunityIcons } from '@expo/vector-icons';
 import apiClient from '../../api/client';
+import { onRealtime } from '../../services/realtime';
 import { SC, TF, SP, RAD, SS } from '../../constants/SpotterTheme';
 import { registerForPushNotificationsAsync } from '../../services/notifications';
 import RazorpayCheckout from '../../components/RazorpayCheckout';
@@ -249,6 +250,15 @@ export default function SpotterDashboard() {
       setRefreshing(false);
     }
   }, []);
+
+  // Live updates: a new/cancelled booking refreshes the dashboard instantly —
+  // a host must never miss a booking waiting for a manual pull-to-refresh.
+  useEffect(() => {
+    const offNew = onRealtime('booking:new', () => fetchDashboardData());
+    const offCancelled = onRealtime('booking:cancelled', () => fetchDashboardData());
+    const offPayout = onRealtime('payout:pending', () => fetchDashboardData());
+    return () => { offNew(); offCancelled(); offPayout(); };
+  }, [fetchDashboardData]);
 
   useFocusEffect(
     useCallback(() => {

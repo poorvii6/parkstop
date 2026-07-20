@@ -21,20 +21,41 @@ const initializeSocket = (server) => {
   }
 
   // Socket.io authentication middleware
-  io.use((socket, next) => {
-    const token = socket.handshake.auth.token;
-    
+  io.use(async (socket, next) => {
+    const token = socket.handshake.auth?.token;
+
     if (!token) {
       return next(new Error('Authentication error: No token provided'));
     }
 
+    // Primary: Firebase ID token — the same credential the REST API uses.
+    // (Previously this only accepted legacy JWTs, so every Firebase-authenticated
+    // client was rejected and no realtime events were ever delivered.)
+    try {
+      const admin = require('./firebase');
+      const decoded = await admin.auth.verifyIdToken(token);
+      const prisma = require('./prisma');
+      let user = await prisma.users.findUnique({ where: { firebase_uid: decoded.uid } });
+      if (!user && decoded.email) {
+        user = await prisma.users.findUnique({ where: { email: decoded.email } });
+      }
+      if (user) {
+        socket.userId = user.id;
+        socket.userRole = user.role;
+        return next();
+      }
+    } catch (fbErr) {
+      // Not a Firebase token — fall through to the legacy JWT path.
+    }
+
+    // Fallback: legacy JWT (e2e tests / mock login)
     try {
       const decoded = jwt.verify(token, config.jwt.secret);
       socket.userId = decoded.id;
       socket.userRole = decoded.role;
       next();
     } catch (error) {
-      logger.error('Socket authentication error:', error);
+      logger.error('Socket authentication error:', error.message);
       next(new Error('Authentication error: Invalid token'));
     }
   });

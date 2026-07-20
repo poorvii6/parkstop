@@ -4,6 +4,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import apiClient from '../../api/client';
+import { onRealtime } from '../../services/realtime';
+import Toast from '../../components/Toast';
 import { SC, TF, SP, RAD, SS } from '../../constants/SpotterTheme';
 
 export default function VerifyScreen() {
@@ -21,10 +23,26 @@ export default function VerifyScreen() {
 
   const [spotterUpiId, setSpotterUpiId] = useState<string | null>(null);
   const [accountName, setAccountName] = useState<string | null>(null);
+  // Booking is chosen by TAPPING a card; typing an ID is a fallback only.
+  const [manualEntry, setManualEntry] = useState(false);
+  const [toast, setToast] = useState<{ msg: string; kind: 'success' | 'error' | 'info' } | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const showToast = (msg: string, kind: 'success' | 'error' | 'info' = 'success') =>
+    setToast({ msg, kind });
+  const scrollRef = React.useRef<ScrollView | null>(null);
+  const selectedBooking = activeBookings.find((b: any) => b.id?.toString() === bookingId) || null;
 
   useEffect(() => {
     fetchActiveBookings();
     checkPayoutStatus();
+  }, []);
+
+  // Live: a booking made right now appears in the list without a refresh, so
+  // the driver isn't standing there while the host pulls to reload.
+  useEffect(() => {
+    const offNew = onRealtime('booking:new', () => fetchActiveBookings());
+    const offCancelled = onRealtime('booking:cancelled', () => fetchActiveBookings());
+    return () => { offNew(); offCancelled(); };
   }, []);
 
   // Poll for payment status in real-time when checkout QR is open
@@ -95,10 +113,11 @@ export default function VerifyScreen() {
 
   const handleVerify = async () => {
     if (!bookingId || !otp) {
-      Alert.alert('Missing Info', 'Please enter both Booking ID and OTP code.');
+      showToast(bookingId ? 'Enter the OTP code' : 'Select a booking first', 'info');
       return;
     }
     setLoading(true);
+    setFormError(null);
     try {
       const endpoint = mode === 'checkin' ? '/bookings/verify-otp' : '/bookings/verify-checkout-otp';
       const res = await apiClient.post(endpoint, {
@@ -106,18 +125,18 @@ export default function VerifyScreen() {
         otp,
       });
       if (res.data?.success) {
-        Alert.alert(
-          mode === 'checkin' ? '✅ Check-In Verified' : '✅ Checkout Verified',
-          mode === 'checkin'
-            ? 'Vehicle authenticated & parked successfully!'
-            : 'Session completed. Payment will be processed.',
+        // Non-blocking: hosts often verify several cars in a row.
+        showToast(
+          mode === 'checkin' ? 'Checked in — vehicle parked' : 'Checked out — session complete',
+          'success'
         );
         setBookingId('');
         setOtp('');
         fetchActiveBookings();
       }
     } catch (e: any) {
-      Alert.alert('Verification Failed', e.response?.data?.message || 'Invalid OTP or Booking ID');
+      // Inline error keeps the OTP on screen so it can be corrected directly.
+      setFormError(e.response?.data?.message || 'Invalid OTP — please check and try again');
     } finally {
       setLoading(false);
     }
@@ -147,7 +166,7 @@ export default function VerifyScreen() {
     try {
       const res = await apiClient.put(`/bookings/${bookingId}/checkout-unpaid`);
       if (res.data?.success) {
-        Alert.alert('Arrears Applied', 'The Finder has been marked as unpaid. Your wallet was credited with your earnings!');
+        showToast('Marked unpaid — your earnings were credited to your wallet', 'success');
         setCheckoutData(null);
         setBookingId('');
         fetchActiveBookings();
@@ -165,7 +184,7 @@ export default function VerifyScreen() {
     try {
       const res = await apiClient.put(`/bookings/${bookingId}/checkout-cash`);
       if (res.data?.success) {
-        Alert.alert('Cash Collected', 'Booking completed. The platform fee has been deducted from your digital wallet.');
+        showToast('Cash collected — platform fee deducted from your wallet', 'success');
         setCheckoutData(null);
         setBookingId('');
         fetchActiveBookings();
@@ -180,6 +199,9 @@ export default function VerifyScreen() {
   const quickVerify = async (booking: any) => {
     setBookingId(booking.id.toString());
     setOtp('');
+    setManualEntry(false);
+    // Bring the verification form into view so the OTP field is right there.
+    scrollRef.current?.scrollTo({ y: 0, animated: true });
     if (booking.status === 'reserved') {
       setMode('checkin');
       setCheckoutData(null);
@@ -225,7 +247,9 @@ export default function VerifyScreen() {
         </View>
       </SafeAreaView>
 
+      <Toast message={toast?.msg ?? null} kind={toast?.kind} onHide={() => setToast(null)} />
       <ScrollView
+        ref={scrollRef}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={SS.scrollContent}
         refreshControl={
@@ -323,15 +347,53 @@ export default function VerifyScreen() {
           ) : (
             <>
               <View style={SS.inputGroup}>
-                <Text style={SS.inputLabel}>BOOKING ID</Text>
-                <TextInput
-                  style={SS.input}
-                  placeholder="e.g. 42"
-                  placeholderTextColor={SC.textDisabled}
-                  value={bookingId}
-                  onChangeText={setBookingId}
-                  keyboardType="number-pad"
-                />
+                <Text style={SS.inputLabel}>BOOKING</Text>
+
+                {selectedBooking ? (
+                  /* Selected by tapping a card below — no typing needed */
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: SC.accentSoft ?? 'rgba(59,130,246,0.10)', borderRadius: RAD.md, borderWidth: 1, borderColor: SC.accent, padding: 14 }}>
+                    <Ionicons name="checkmark-circle" size={22} color={SC.accent} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: SC.textPrimary, ...TF.bodyBold }} numberOfLines={1}>
+                        #{selectedBooking.id} · {selectedBooking.users?.full_name || 'Driver'}
+                      </Text>
+                      <Text style={{ color: SC.textMuted, ...TF.caption }} numberOfLines={1}>
+                        {selectedBooking.parking_spots?.title || 'Spot'} · {selectedBooking.vehicle_type || 'car'} · {selectedBooking.status}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      onPress={() => { setBookingId(''); setOtp(''); setCheckoutData(null); setManualEntry(false); }}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <Ionicons name="close-circle" size={20} color={SC.textMuted} />
+                    </TouchableOpacity>
+                  </View>
+                ) : manualEntry ? (
+                  <>
+                    <TextInput
+                      style={SS.input}
+                      placeholder="e.g. 42"
+                      placeholderTextColor={SC.textDisabled}
+                      value={bookingId}
+                      onChangeText={setBookingId}
+                      keyboardType="number-pad"
+                      autoFocus
+                    />
+                    <TouchableOpacity onPress={() => { setManualEntry(false); setBookingId(''); }} style={{ paddingVertical: 8 }}>
+                      <Text style={{ color: SC.accent, ...TF.caption }}>← Choose from list instead</Text>
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <View style={{ borderRadius: RAD.md, borderWidth: 1, borderStyle: 'dashed', borderColor: SC.border ?? 'rgba(255,255,255,0.15)', padding: 16, alignItems: 'center', gap: 6 }}>
+                    <Ionicons name="finger-print-outline" size={22} color={SC.textMuted} />
+                    <Text style={{ color: SC.textSecondary ?? SC.textMuted, ...TF.body, textAlign: 'center' }}>
+                      Tap a booking below to select it
+                    </Text>
+                    <TouchableOpacity onPress={() => setManualEntry(true)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                      <Text style={{ color: SC.accent, ...TF.caption }}>Enter ID manually</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
               </View>
               
               {mode === 'checkin' && (
@@ -342,17 +404,29 @@ export default function VerifyScreen() {
                     placeholder="000000"
                     placeholderTextColor={SC.textDisabled}
                     value={otp}
-                    onChangeText={setOtp}
+                    onChangeText={(v) => { setOtp(v); if (formError) setFormError(null); }}
                     keyboardType="number-pad"
                     maxLength={6}
                   />
                 </View>
               )}
 
+              {/* Inline error — correct the OTP without dismissing a modal */}
+              {formError && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: SP.md, padding: 12, borderRadius: RAD.md, backgroundColor: 'rgba(239,68,68,0.10)', borderWidth: 1, borderColor: 'rgba(239,68,68,0.35)' }}>
+                  <Ionicons name="alert-circle" size={18} color={SC.error} />
+                  <Text style={{ color: SC.error, ...TF.caption, flex: 1 }}>{formError}</Text>
+                </View>
+              )}
+
               <TouchableOpacity
-                style={[SS.primaryBtn, mode === 'checkout' && { backgroundColor: SC.info }, loading && { opacity: 0.7 }]}
+                style={[
+                  SS.primaryBtn,
+                  mode === 'checkout' && { backgroundColor: SC.info },
+                  (loading || !bookingId) && { opacity: 0.5 },
+                ]}
                 onPress={mode === 'checkin' ? handleVerify : handleGenerateQR}
-                disabled={loading}
+                disabled={loading || !bookingId}
               >
                 {loading ? (
                   <ActivityIndicator color="#FFF" size="small" />
@@ -404,7 +478,10 @@ export default function VerifyScreen() {
               return (
                 <TouchableOpacity
                   key={i}
-                  style={s.bookingCard}
+                  style={[
+                    s.bookingCard,
+                    bookingId === booking.id?.toString() && { borderColor: SC.accent, borderWidth: 1.5 },
+                  ]}
                   onPress={() => quickVerify(booking)}
                   activeOpacity={0.8}
                 >
