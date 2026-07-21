@@ -1962,6 +1962,49 @@ export default function FinderDashboard() {
     [showRoute, routeCoords, currentRouteIndex]
   );
 
+  // A brand new route starts un-driven. Without this, progress from the
+  // previous route would carry over and chop the head off the new one.
+  useEffect(() => {
+    setCurrentRouteIndex(0);
+  }, [routeCoords]);
+
+  // Consume the route behind the driver.
+  //
+  // `currentRouteIndex` existed and was read by visibleRouteCoords above, but
+  // NOTHING ever advanced it — setCurrentRouteIndex was declared and never
+  // called. So the index sat at 0 and the full line stayed drawn, including the
+  // stretch already driven, which is why the blue route trailed behind instead
+  // of being eaten up as you moved.
+  useEffect(() => {
+    if (!showRoute || !userLocation || routeCoords.length < 2) return;
+
+    // Only scan a window AHEAD of the current position. A route can be many
+    // thousands of points, this runs on every GPS tick, and a driver only ever
+    // moves forward along it — so a full scan would be wasted work and could
+    // also snap backwards where a route loops near itself.
+    const WINDOW = 150;
+    const start = Math.min(currentRouteIndex, routeCoords.length - 1);
+    const end = Math.min(routeCoords.length - 1, start + WINDOW);
+
+    // Metres per degree of longitude shrinks with latitude; without the cosine
+    // term the nearest-point search skews east-west and picks the wrong vertex.
+    const mPerLng = 111320 * Math.cos((userLocation.lat * Math.PI) / 180);
+
+    let bestIdx = start;
+    let bestSq = Infinity;
+    for (let i = start; i <= end; i++) {
+      const p = routeCoords[i];
+      const dy = (p.latitude - userLocation.lat) * 110540;
+      const dx = (p.longitude - userLocation.lng) * mPerLng;
+      const sq = dy * dy + dx * dx;
+      if (sq < bestSq) { bestSq = sq; bestIdx = i; }
+    }
+
+    // Monotonic: only ever move forward. GPS jitter must not un-consume road
+    // the driver has already covered.
+    if (bestIdx > currentRouteIndex) setCurrentRouteIndex(bestIdx);
+  }, [userLocation, routeCoords, showRoute, currentRouteIndex]);
+
   // Removed welcome auto-transition
 
 
