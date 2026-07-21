@@ -44,6 +44,10 @@ export default function FinderDashboard() {
   // Viewport hint only — where the user was last session. Never used as the
   // user's actual position (see services/lastLocation.ts).
   const [viewportHint, setViewportHint] = useState<{ lat: number, lng: number } | null>(null);
+  // Distinct from "permission denied": the app can hold permission while the
+  // DEVICE's location toggle is off. That combination showed no banner at all,
+  // leaving the user on a blank country-wide map with no way to recover.
+  const [locationServicesOff, setLocationServicesOff] = useState(false);
   const [step, setStep] = useState<AppStep>('home');
   const [navCountdown, setNavCountdown] = useState<number | null>(null);
   const [showUPIInline, setShowUPIInline] = useState(false);
@@ -1033,38 +1037,56 @@ export default function FinderDashboard() {
         }
         setHasLocationPermission(true);
 
-        // 1. Race multiple location strategies — whichever resolves first wins
-        const getLocationFast = async (): Promise<{ lat: number; lng: number }> => {
+        // Permission granted is NOT the same as location being available: the
+        // device's own Location Services toggle can still be off, in which case
+        // every position call throws "Current location is unavailable".
+        const servicesOn = await Location.hasServicesEnabledAsync().catch(() => true);
+        setLocationServicesOff(!servicesOn);
+
+        // 1. Race multiple location strategies — whichever resolves first wins.
+        //    Every strategy is made NON-THROWING first. Promise.race rejects as
+        //    soon as ANY input rejects, so an immediate "location unavailable"
+        //    error used to beat the 5s timeout and blow up the whole init —
+        //    skipping the watcher, the heading, and the nearby-spot fetch.
+        const getLocationFast = async (): Promise<{ lat: number; lng: number } | null> => {
           // Strategy A: Last known position — only if RECENT (≤30s). Stale
           // positions were placing the dot minutes behind the user.
-          const lastKnown = Location.getLastKnownPositionAsync({ maxAge: 30000 });
+          const lastKnown = Location.getLastKnownPositionAsync({ maxAge: 30000 })
+            .then((loc) => (loc ? { lat: loc.coords.latitude, lng: loc.coords.longitude } : null))
+            .catch(() => null);
 
           // Strategy B: Fresh position at Balanced (~100m, fast). Never Lowest —
           // cell-tower granularity put the dot kilometers off on open.
-          const fresh = Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+          const fresh = Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
+            .then((loc) => ({ lat: loc.coords.latitude, lng: loc.coords.longitude }))
+            .catch(() => null);
 
-          // Strategy C: Timeout fallback after 5 seconds — use a default so app doesn't hang
+          // Strategy C: Timeout so the app never hangs waiting on a fix.
           const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000));
 
-          // Race: take whichever completes first
-          const result = await Promise.race([
-            lastKnown.then(loc => loc ? { lat: loc.coords.latitude, lng: loc.coords.longitude } : null),
-            fresh.then(loc => ({ lat: loc.coords.latitude, lng: loc.coords.longitude })),
-            timeout
-          ]);
-
+          const result = await Promise.race([lastKnown, fresh, timeout]);
           if (result) return result;
 
-          // If timeout hit, wait for a proper high-accuracy fix
-          const fallback = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-          return { lat: fallback.coords.latitude, lng: fallback.coords.longitude };
+          // Nothing won the race — wait for the slower high-accuracy attempt,
+          // but never let it throw either.
+          const fallback = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
+            .then((l) => ({ lat: l.coords.latitude, lng: l.coords.longitude }))
+            .catch(() => null);
+          return fallback;
         };
 
         const coords = await getLocationFast();
-        setUserLocation(coords);
-        lastUpdateCoords.current = coords;
-        saveLastLocation(coords);
-        fetchNearbySpots(coords.lat, coords.lng);
+
+        if (coords) {
+          setLocationServicesOff(false);
+          setUserLocation(coords);
+          lastUpdateCoords.current = coords;
+          saveLastLocation(coords);
+          fetchNearbySpots(coords.lat, coords.lng);
+        }
+        // If coords is null we deliberately CONTINUE rather than bail: the
+        // watcher below will deliver a position the moment GPS becomes
+        // available, so the map recovers on its own without an app restart.
 
         // Refine in the background with the strongest GPS mode so the dot
         // settles on the user's true position within a few seconds of opening.
@@ -1081,24 +1103,42 @@ export default function FinderDashboard() {
         // 2. Continuous watch: strongest GPS, 1s/2m — with ACCURACY GATING.
         //    A reading with high uncertainty must not drag the dot away from a
         //    recent precise fix (that wander was the "inaccurate" feeling).
-        watchSub = await Location.watchPositionAsync({
-          accuracy: Location.Accuracy.BestForNavigation,
-          timeInterval: 1000,
-          distanceInterval: 2,
-        }, (l) => {
-          const acc = l.coords.accuracy || 99;
-          const q = lastFixQuality.current;
-          // Skip poor readings (>35m uncertainty) when we've had a clearly
-          // better fix within the last 10 seconds.
-          if (acc > 35 && q && q.acc < acc / 2 && Date.now() - q.t < 10000) return;
-          lastFixQuality.current = { acc, t: Date.now() };
-          const newCoords = { lat: l.coords.latitude, lng: l.coords.longitude };
-          setUserLocation(newCoords);
-        });
+        //    Wrapped so a watcher failure cannot take down the heading
+        //    subscription or anything after it.
+        try {
+          watchSub = await Location.watchPositionAsync({
+            accuracy: Location.Accuracy.BestForNavigation,
+            timeInterval: 1000,
+            distanceInterval: 2,
+          }, (l) => {
+            const acc = l.coords.accuracy || 99;
+            const q = lastFixQuality.current;
+            // Skip poor readings (>35m uncertainty) when we've had a clearly
+            // better fix within the last 10 seconds.
+            if (acc > 35 && q && q.acc < acc / 2 && Date.now() - q.t < 10000) return;
+            lastFixQuality.current = { acc, t: Date.now() };
+            const newCoords = { lat: l.coords.latitude, lng: l.coords.longitude };
+            setUserLocation(newCoords);
+            saveLastLocation(newCoords);
+            // A streaming fix proves services are on — clear any stale banner
+            // and load spots if the initial attempt came back empty.
+            setLocationServicesOff(false);
+            if (!lastUpdateCoords.current) {
+              lastUpdateCoords.current = newCoords;
+              fetchNearbySpots(newCoords.lat, newCoords.lng);
+            }
+          });
+        } catch (watchErr) {
+          console.log('[Location] watch unavailable:', watchErr);
+        }
 
-        headingSub = await Location.watchHeadingAsync((h) => {
-          setDeviceHeading(h.trueHeading);
-        });
+        try {
+          headingSub = await Location.watchHeadingAsync((h) => {
+            setDeviceHeading(h.trueHeading);
+          });
+        } catch {
+          // Compass unavailable on this device — navigation still works.
+        }
 
         // NOTE: the initial camera move is deliberately NOT done here any more.
         // The old `setTimeout(800) -> animateCamera` raced both the map style
@@ -1108,7 +1148,10 @@ export default function FinderDashboard() {
         // MapLibreNative now owns this (see positionOnFirstFix) and fires on
         // whichever of {map ready, first fix} completes last.
 
+        // Guarded: with no fix there is nothing to search around. The watcher
+        // above fetches spots itself once a position finally arrives.
         try {
+          if (!coords) throw new Error('no-fix');
           const res = await apiClient.get(`/spots/nearby?lat=${coords.lat}&lng=${coords.lng}&radius=10`);
           if (res.data.success) {
             setSpots(res.data.data.map((sp: any) => ({
@@ -1124,9 +1167,11 @@ export default function FinderDashboard() {
               images: Array.isArray(sp.images) ? sp.images : []
             })));
           }
-        } catch (e) {
-          console.log('Error fetching initial spots', e);
-          setSpots([]);
+        } catch (e: any) {
+          if (e?.message !== 'no-fix') {
+            console.log('Error fetching initial spots', e);
+            setSpots([]);
+          }
         }
       } catch (error) {
         console.log('[Location] Error during initialization:', error);
@@ -1154,20 +1199,51 @@ export default function FinderDashboard() {
   // detect it on foreground and start tracking immediately (no restart needed).
   useEffect(() => {
     const sub = AppState.addEventListener('change', async (s) => {
-      if (s === 'active' && !hasLocationPermission) {
-        try {
+      if (s !== 'active') return;
+      try {
+        if (!hasLocationPermission) {
           const { status } = await Location.getForegroundPermissionsAsync();
           if (status === 'granted') {
             setHasLocationPermission(true);
             setLocationRetryTick((t) => t + 1);
           }
-        } catch {}
-      }
+          return;
+        }
+        // Permission is already held — the user may have just come back from
+        // switching the device location toggle on. Re-run acquisition so the
+        // map recovers without them having to restart the app.
+        if (locationServicesOff) {
+          const on = await Location.hasServicesEnabledAsync().catch(() => false);
+          if (on) {
+            setLocationServicesOff(false);
+            setLocationRetryTick((t) => t + 1);
+          }
+        }
+      } catch {}
     });
     return () => sub.remove();
-  }, [hasLocationPermission]);
+  }, [hasLocationPermission, locationServicesOff]);
 
   // Banner action: re-prompt in-app when possible; otherwise open settings.
+  // Opens the DEVICE location panel, not the app's permission page. On Android
+  // these are different screens: Linking.openSettings() lands on the app info
+  // page, which has no master location toggle — useless for this failure.
+  const openLocationSettings = async () => {
+    try {
+      if (Platform.OS === 'android') {
+        // Built-in RN API — deliberately not expo-intent-launcher, which would
+        // add a native dependency (and a rebuild) for a single intent.
+        await Linking.sendIntent('android.settings.LOCATION_SOURCE_SETTINGS');
+        return;
+      }
+      // iOS exposes no deep link to the location panel; app settings is the
+      // closest reachable surface.
+      await Linking.openSettings();
+    } catch {
+      Linking.openSettings().catch(() => {});
+    }
+  };
+
   const handleEnableLocation = async () => {
     try {
       const res = await Location.requestForegroundPermissionsAsync();
@@ -2230,6 +2306,28 @@ export default function FinderDashboard() {
               <Text style={{ color: '#cbd5e1', fontSize: 11, marginBottom: 10, textAlign: 'center' }}>Turn on location to see nearby parking and navigate.</Text>
               <TouchableOpacity onPress={handleEnableLocation} style={{ backgroundColor: '#ef4444', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 }}>
                 <Text style={{ color: '#fff', fontWeight: '800', fontSize: 11 }}>Enable Location</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Permission is granted but the DEVICE's location toggle is off.
+              Previously this state showed no banner at all — the user sat on a
+              country-wide map with nothing to tap. Re-prompting for permission
+              is useless here; only the OS location settings can fix it. */}
+          {hasLocationPermission && locationServicesOff && !userLocation && (
+            <View style={{ position: 'absolute', bottom: 120, left: 20, right: 20, zIndex: 100, padding: 16, backgroundColor: 'rgba(245, 158, 11, 0.08)', borderRadius: 20, borderWidth: 1, borderColor: 'rgba(245, 158, 11, 0.25)', alignItems: 'center' }}>
+              <Ionicons name="location-outline" size={24} color="#f59e0b" style={{ marginBottom: 8 }} />
+              <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800', marginBottom: 4 }}>Location services are off</Text>
+              <Text style={{ color: '#cbd5e1', fontSize: 11, marginBottom: 10, textAlign: 'center' }}>
+                ParkStop has permission, but your device&apos;s location is switched off.
+              </Text>
+              <TouchableOpacity
+                onPress={openLocationSettings}
+                style={{ backgroundColor: '#f59e0b', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 }}
+                accessibilityRole="button"
+                accessibilityLabel="Open device location settings"
+              >
+                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 11 }}>Turn On Location</Text>
               </TouchableOpacity>
             </View>
           )}
