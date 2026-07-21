@@ -22,10 +22,12 @@ const rateLimit = require('express-rate-limit');
  */
 const loginRateLimiter = rateLimit({
   windowMs: 5 * 60 * 1000,
-  max: 30,
+  max: 20,
   skipSuccessfulRequests: true,
-  skip: () =>
-    process.env.NODE_ENV === 'test' || process.env.IGNORE_RATE_LIMITS === 'true',
+  // Deliberately NOT skipped when NODE_ENV=test — unlike the OTP limiters,
+  // this one has an integration test that must be able to exercise it. Use
+  // IGNORE_RATE_LIMITS for local load testing instead.
+  skip: () => process.env.IGNORE_RATE_LIMITS === 'true',
   message: {
     success: false,
     message:

@@ -96,13 +96,40 @@ describe('Booking API', () => {
     expect(res.body.success).toBe(true);
   });
 
-  test('Rate limiter blocks >10 login attempts', async () => {
-    const attempts = Array(12).fill(null).map(() =>
-      request(app).post('/api/v1/auth/social-login').send({ token: 'mock-firebase-token-testfinder' })
-    );
-    const responses = await Promise.all(attempts);
-    const tooMany = responses.some(r => r.status === 429);
-    expect(tooMany).toBe(true);
+  /**
+   * The login limiter counts FAILED attempts only.
+   *
+   * This changed deliberately: /auth/social-login doubles as profile sync, so
+   * it fires on every sign-in and role switch. When successes counted toward
+   * the budget, ordinary use locked real users out of their own account with a
+   * bare 429. The credential here is a Firebase ID token that Firebase has
+   * already verified, so this limiter is abuse protection — not a password
+   * gate — and rejecting valid sign-ins bought nothing.
+   */
+  describe('social-login rate limiting', () => {
+    // Requests are issued SEQUENTIALLY, not via Promise.all. skipSuccessfulRequests
+    // decrements the counter when the response finishes, so a parallel burst can
+    // transiently exceed the cap before any decrements land — which would make
+    // these tests flaky. Sequential also mirrors how a real person signs in.
+    const post = (token) =>
+      request(app).post('/api/v1/auth/social-login').send({ token });
+
+    test('repeated SUCCESSFUL logins are never rate limited', async () => {
+      // The regression guard for the lockout bug: a real user signing in
+      // several times in a row must never be turned away.
+      const statuses = [];
+      for (let i = 0; i < 25; i++) statuses.push((await post('mock-firebase-token-testfinder')).status);
+
+      expect(statuses).not.toContain(429);
+    });
+
+    test('repeated FAILED attempts are rate limited', async () => {
+      // Garbage tokens are what probing looks like, and those still get cut off.
+      const statuses = [];
+      for (let i = 0; i < 30; i++) statuses.push((await post('not-a-valid-token')).status);
+
+      expect(statuses).toContain(429);
+    });
   });
 
   test('Spotter cannot create a booking', async () => {
