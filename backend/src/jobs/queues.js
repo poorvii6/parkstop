@@ -53,8 +53,20 @@ if (useMockQueue) {
   const { Queue, Worker } = require('bullmq');
   const IORedis = require('ioredis');
 
+  // `family: 0` lets ioredis resolve both IPv4 and IPv6. Railway's private
+  // network (redis.railway.internal) is IPv6-only, so without this a
+  // REDIS_PRIVATE_URL connection fails with ENOTFOUND while the public URL
+  // works — a confusing failure that looks like bad credentials.
   const connection = new IORedis(process.env.REDIS_URL || 'redis://localhost:6379', {
-    maxRetriesPerRequest: null
+    maxRetriesPerRequest: null,
+    family: 0
+  });
+
+  connection.on('error', (err) => {
+    logger.error('Payout/notification queue Redis error:', err.message);
+  });
+  connection.on('ready', () => {
+    logger.info('Payout/notification queues connected to Redis (BullMQ active)');
   });
 
   notificationQueue = new Queue('notifications', { connection });

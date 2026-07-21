@@ -4,8 +4,10 @@ const logger = require('./logger');
 let redis = null;
 if (process.env.REDIS_URL && process.env.NODE_ENV !== 'test') {
   try {
+    // family: 0 — Railway's private network is IPv6-only; see jobs/queues.js.
     redis = new IORedis(process.env.REDIS_URL, {
-      maxRetriesPerRequest: 3
+      maxRetriesPerRequest: 3,
+      family: 0
     });
     redis.on('error', (err) => {
       logger.error('Login tracker Redis error:', err);
