@@ -1,7 +1,16 @@
 const logger = require('../utils/logger');
 
-// Check if we should use mock in-memory queues (useful for testing or local development without Redis)
-const useMockQueue = process.env.NODE_ENV === 'test' || !process.env.REDIS_URL || process.env.USE_MOCK_QUEUE === 'true';
+// Three separate conditions force the in-memory queue. Report WHICH one, rather
+// than assuming: previously this always claimed "REDIS_URL unset", which would
+// send you hunting a variable that was actually set fine while USE_MOCK_QUEUE
+// was the real cause.
+const mockReasons = [];
+if (process.env.NODE_ENV === 'test') mockReasons.push('NODE_ENV=test');
+if (!process.env.REDIS_URL) mockReasons.push('REDIS_URL is not set');
+if (process.env.USE_MOCK_QUEUE === 'true') mockReasons.push('USE_MOCK_QUEUE=true');
+
+const useMockQueue = mockReasons.length > 0;
+const mockReason = mockReasons.join(' + ');
 
 let notificationQueue;
 let payoutQueue;
@@ -13,11 +22,11 @@ if (useMockQueue) {
   // path, where the real queue would have retried 3x with backoff.
   if (process.env.NODE_ENV === 'production') {
     logger.error(
-      '🚨 PAYOUT QUEUE DEGRADED: REDIS_URL is not set, so payouts run inline ' +
-      'with NO retry. Provision Redis and set REDIS_URL.'
+      `🚨 PAYOUT QUEUE DEGRADED (${mockReason}): payouts run inline with NO ` +
+      'retry. Fix the cause above to restore durable queues.'
     );
   } else {
-    logger.info('Using mock in-memory queues (Redis/BullMQ bypassed)');
+    logger.info(`Using mock in-memory queues (${mockReason})`);
   }
 
   notificationQueue = {
@@ -95,4 +104,4 @@ if (useMockQueue) {
  */
 const queueMode = useMockQueue ? 'inline' : 'bullmq';
 
-module.exports = { notificationQueue, payoutQueue, queueMode };
+module.exports = { notificationQueue, payoutQueue, queueMode, mockReason };
