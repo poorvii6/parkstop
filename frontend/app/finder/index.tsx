@@ -49,6 +49,9 @@ export default function FinderDashboard() {
   // DEVICE's location toggle is off. That combination showed no banner at all,
   // leaving the user on a blank country-wide map with no way to recover.
   const [locationServicesOff, setLocationServicesOff] = useState(false);
+  // True when the last nearby-spots fetch failed. Lets the UI say "couldn't
+  // refresh" instead of silently implying there are no spots.
+  const [nearbyFetchFailed, setNearbyFetchFailed] = useState(false);
   const [step, setStep] = useState<AppStep>('home');
   const [navCountdown, setNavCountdown] = useState<number | null>(null);
   const [showUPIInline, setShowUPIInline] = useState(false);
@@ -1365,6 +1368,7 @@ export default function FinderDashboard() {
     try {
       const res = await apiClient.get(`/spots/nearby?lat=${lat}&lng=${lon}&radius=${radius}`);
       if (res.data.success) {
+        setNearbyFetchFailed(false);
         setSpots(res.data.data.map((sp: any) => ({
           id: sp.id.toString(),
           title: sp.title,
@@ -1379,8 +1383,12 @@ export default function FinderDashboard() {
         })));
       }
     } catch (e) {
-      console.log('Search API failed', e);
-      setSpots([]);
+      // Do NOT clear the list here. A rate limit, a timeout, or a moment of bad
+      // signal would otherwise wipe every marker and render "No spots found" —
+      // a network failure disguised as real data. Keep showing the last known
+      // spots; they are far more useful than an empty screen that lies.
+      console.log('Nearby spots fetch failed — keeping last known list', e);
+      setNearbyFetchFailed(true);
     } finally {
       setIsNearbyLoading(false);
     }
@@ -2298,9 +2306,29 @@ export default function FinderDashboard() {
                 ))
               ) : (
                 <View style={{ alignItems: 'center', paddingVertical: 30 }}>
-                  <Text style={{ fontSize: 32, marginBottom: 8 }}>😕</Text>
-                  <Text style={{ color: '#fff', fontSize: 16, fontWeight: '800' }}>No spots found</Text>
-                  <Text style={{ color: '#64748b', marginTop: 4, fontSize: 13 }}>Try searching a different area</Text>
+                  {nearbyFetchFailed ? (
+                    <>
+                      <Ionicons name="cloud-offline-outline" size={30} color="#94a3b8" style={{ marginBottom: 8 }} />
+                      <Text style={{ color: '#fff', fontSize: 16, fontWeight: '800' }}>Couldn&apos;t load spots</Text>
+                      <Text style={{ color: '#64748b', marginTop: 4, fontSize: 13, textAlign: 'center' }}>
+                        Check your connection — this doesn&apos;t mean there are none nearby.
+                      </Text>
+                      <TouchableOpacity
+                        onPress={() => { if (userLocation) fetchNearbySpots(userLocation.lat, userLocation.lng); }}
+                        style={{ marginTop: 12, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 10, backgroundColor: 'rgba(66,133,244,0.18)', borderWidth: 1, borderColor: 'rgba(66,133,244,0.4)' }}
+                        accessibilityRole="button"
+                        accessibilityLabel="Retry loading nearby spots"
+                      >
+                        <Text style={{ color: '#4285F4', fontWeight: '800', fontSize: 12 }}>Try again</Text>
+                      </TouchableOpacity>
+                    </>
+                  ) : (
+                    <>
+                      <Text style={{ fontSize: 32, marginBottom: 8 }}>😕</Text>
+                      <Text style={{ color: '#fff', fontSize: 16, fontWeight: '800' }}>No spots found</Text>
+                      <Text style={{ color: '#64748b', marginTop: 4, fontSize: 13 }}>Try searching a different area</Text>
+                    </>
+                  )}
                 </View>
               )}
               <View style={{ height: 20 }} />

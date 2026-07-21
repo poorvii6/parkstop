@@ -32,6 +32,13 @@ const MLImages = MLGL.Images;
  */
 const FOLLOW_EASE_MS = 1000;
 
+/**
+ * A map press arriving within this long of the last pan/pinch/rotate is treated
+ * as a gesture artifact, not a deliberate tap. Long enough to cover the finger
+ * lift at the end of a pinch; short enough that a real tap still registers.
+ */
+const GESTURE_PRESS_GUARD_MS = 350;
+
 const CARTO_DAY = 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json';
 const CARTO_NIGHT = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 
@@ -362,6 +369,14 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
   /* eslint-enable react-hooks/exhaustive-deps */
 
   const handleMapPress = (e: any) => {
+    // Ignore presses that land inside a gesture window. Pinch-zoom and pan on
+    // Android routinely emit a press when the fingers lift unevenly, and the
+    // finder treats a map press as "search for spots here" — so zooming out
+    // was re-searching around wherever the fingers happened to be, often
+    // kilometres from anything, and the list emptied to "No spots found".
+    // A deliberate tap arrives well after the last gesture ends.
+    if (Date.now() - lastInteraction.current < GESTURE_PRESS_GUARD_MS) return;
+
     const coords = e?.geometry?.coordinates || e?.nativeEvent?.geometry?.coordinates;
     if (coords && props.onMapPress) props.onMapPress([coords[0], coords[1]]);
   };

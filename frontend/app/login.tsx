@@ -148,7 +148,18 @@ export default function LoginScreen() {
       }
     } catch (error: any) {
       console.error('[SOCIAL AUTH] OAuth Error:', error);
-      Alert.alert('Authentication Failed', error.message || 'Failed to complete social login.');
+      // Prefer the server's own message. Falling straight through to
+      // `error.message` surfaced raw axios text like "Request failed with
+      // status code 429", which tells the user nothing about what to do.
+      const serverMsg = error.response?.data?.message;
+      const status = error.response?.status;
+      const msg =
+        serverMsg ||
+        (status === 429
+          ? 'Too many sign-in attempts. Please wait a few minutes and try again.'
+          : error.message) ||
+        'Failed to complete social login.';
+      Alert.alert('Sign-in failed', msg);
     } finally {
       setLoading(false);
     }
