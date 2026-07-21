@@ -13,7 +13,7 @@
 import React, { forwardRef, useImperativeHandle, useRef } from 'react';
 import { StyleSheet, View, Text, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM, USER_MAP_ZOOM } from '../constants/mapDefaults';
+import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM, USER_MAP_ZOOM, HINT_MAP_ZOOM } from '../constants/mapDefaults';
 
 // The native module is present in the dev build; access its v11 named exports.
 const MLGL: any = require('@maplibre/maplibre-react-native');
@@ -29,6 +29,14 @@ const CARTO_NIGHT = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style
 
 type Props = {
   userLocation?: { lat: number; lng: number };
+  /**
+   * Remembered position from a previous session, used ONLY to choose the
+   * opening viewport so a cold start doesn't render the whole country.
+   * Deliberately separate from `userLocation`: this never draws the blue dot
+   * and never feeds distance, booking, or arrival logic, because it may be days
+   * out of date.
+   */
+  viewportHint?: { lat: number; lng: number } | null;
   markers?: Array<{ id: string; lat: number; lng: number; price: number; available: boolean; title?: string }>;
   routeCoords?: Array<{ latitude: number; longitude: number }>;
   altRoutes?: Array<{ coords: Array<{ latitude: number; longitude: number }>; duration: number; distance: number }>;
@@ -63,9 +71,15 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
   const cameraRef = useRef<any>(null);
   const [styleFailed, setStyleFailed] = React.useState(false);
 
-  // Fallback viewport only — replaced the moment a real fix arrives.
-  const loc = props.userLocation || DEFAULT_MAP_CENTER;
-  const initialZoom = props.userLocation ? USER_MAP_ZOOM : DEFAULT_MAP_ZOOM;
+  // Opening viewport, best available first: a live fix, else where the user was
+  // last time, else the country-wide fallback. The country view is a last
+  // resort — it should only ever be seen on a genuine first run.
+  const loc = props.userLocation || props.viewportHint || DEFAULT_MAP_CENTER;
+  const initialZoom = props.userLocation
+    ? USER_MAP_ZOOM
+    : props.viewportHint
+      ? HINT_MAP_ZOOM
+      : DEFAULT_MAP_ZOOM;
   const hour = new Date().getHours();
   const fallbackStyle = hour >= 19 || hour < 6 ? CARTO_NIGHT : CARTO_DAY;
 
@@ -102,6 +116,49 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
       });
     },
   }));
+
+  // ── Initial positioning on the first real fix ─────────────────
+  //
+  // <Camera initialViewState> is applied ONCE at mount and is NOT reactive. So
+  // when the app starts without location permission, the camera locks onto the
+  // country-wide fallback and never moves — even after the user grants access
+  // and `userLocation` populates. That was the "map won't find me" bug.
+  //
+  // The parent used to paper over this with a setTimeout(800) -> animateCamera,
+  // which races both the style load and the camera mount and silently no-ops
+  // when it loses (the ref guard returns early). Owning it here removes the
+  // race: whichever of {map ready, first fix} happens last triggers the move.
+  const didInitialPosition = useRef(false);
+  const mapReady = useRef(false);
+
+  const positionOnFirstFix = React.useCallback(() => {
+    if (didInitialPosition.current) return;
+    if (!mapReady.current || !cameraRef.current || !props.userLocation) return;
+    // Don't hijack the camera if the screen already has somewhere to be.
+    if (props.destination || props.searchedPlace) {
+      didInitialPosition.current = true;
+      return;
+    }
+
+    didInitialPosition.current = true;
+    markProgrammatic(900);
+
+    // Crucially: do NOT animate here. Flying from zoom 4 over the centre of
+    // India to zoom 15 on a street is a ~1.5s swoop across the subcontinent —
+    // that swoop is what reads as unprofessional. Snap instead, so the map
+    // simply *opens* at the user's location.
+    cameraRef.current.easeTo({
+      center: [props.userLocation.lng, props.userLocation.lat],
+      zoom: USER_MAP_ZOOM,
+      pitch: 0,
+      bearing: 0,
+      duration: 0,
+    });
+  }, [props.userLocation, props.destination, props.searchedPlace]);
+
+  React.useEffect(() => {
+    positionOnFirstFix();
+  }, [positionOnFirstFix]);
 
   const dest = props.searchedPlace
     ? { lat: props.searchedPlace.lat, lng: props.searchedPlace.lng }
@@ -359,6 +416,13 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
         mapStyle={styleUrl}
         onPress={handleMapPress}
         onDidFailLoadingMap={() => setStyleFailed(true)}
+        // The camera cannot be driven until the style is up. This is the other
+        // half of the first-fix race: if the location arrived before the map
+        // finished loading, this is what finally applies it.
+        onDidFinishLoadingMap={() => {
+          mapReady.current = true;
+          positionOnFirstFix();
+        }}
         onRegionWillChange={handleRegionChange}
         onRegionIsChanging={handleRegionChange}
         onRegionDidChange={handleRegionDidChange}

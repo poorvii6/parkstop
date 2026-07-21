@@ -19,6 +19,7 @@ import { BlueprintTheme, BlueprintColors } from '../../constants/BlueprintTheme'
 import apiClient from '../../api/client';
 import { startBackgroundLocation, stopBackgroundLocation, onBackgroundLocation } from '../../services/backgroundLocation';
 import { cacheRouteCorridor, clearOfflinePack } from '../../services/offlineTileCache';
+import { saveLastLocation, loadLastLocation } from '../../services/lastLocation';
 import { Spot, PricingBreakdown, AppStep } from '../../types/finder';
 import SkeletonCard from '../../components/SkeletonCard';
 
@@ -40,6 +41,9 @@ export default function FinderDashboard() {
   const router = useRouter();
   const mapRef = useRef<any>(null);
   const [userLocation, setUserLocation] = useState<{ lat: number, lng: number } | null>(null);
+  // Viewport hint only — where the user was last session. Never used as the
+  // user's actual position (see services/lastLocation.ts).
+  const [viewportHint, setViewportHint] = useState<{ lat: number, lng: number } | null>(null);
   const [step, setStep] = useState<AppStep>('home');
   const [navCountdown, setNavCountdown] = useState<number | null>(null);
   const [showUPIInline, setShowUPIInline] = useState(false);
@@ -1010,6 +1014,12 @@ export default function FinderDashboard() {
       .catch(() => {}); // silently fallback to Carto defaults
   }, []);
 
+  // Load the remembered viewport before anything else, so the map's very first
+  // paint is the user's area rather than the whole of India.
+  useEffect(() => {
+    loadLastLocation().then((c) => { if (c) setViewportHint(c); });
+  }, []);
+
   useEffect(() => {
     registerForPushNotificationsAsync();
     let watchSub: Location.LocationSubscription | null = null;
@@ -1053,6 +1063,7 @@ export default function FinderDashboard() {
         const coords = await getLocationFast();
         setUserLocation(coords);
         lastUpdateCoords.current = coords;
+        saveLastLocation(coords);
         fetchNearbySpots(coords.lat, coords.lng);
 
         // Refine in the background with the strongest GPS mode so the dot
@@ -1062,6 +1073,7 @@ export default function FinderDashboard() {
             const precise = { lat: l.coords.latitude, lng: l.coords.longitude };
             setUserLocation(precise);
             lastUpdateCoords.current = precise;
+            saveLastLocation(precise);
             lastFixQuality.current = { acc: l.coords.accuracy || 15, t: Date.now() };
           })
           .catch(() => {});
@@ -1088,17 +1100,13 @@ export default function FinderDashboard() {
           setDeviceHeading(h.trueHeading);
         });
 
-        // Move camera to user location
-        setTimeout(() => {
-          if (mapRef.current) {
-            mapRef.current.animateCamera({
-              center: { latitude: coords.lat, longitude: coords.lng },
-              pitch: 0,
-              heading: 0,
-              zoom: 17
-            }, { duration: 1500 });
-          }
-        }, 800);
+        // NOTE: the initial camera move is deliberately NOT done here any more.
+        // The old `setTimeout(800) -> animateCamera` raced both the map style
+        // load and the camera mount; when it lost, animateCamera's ref guard
+        // returned early and the map silently stayed on the country view. That
+        // was the "map can't find me after granting permission" bug.
+        // MapLibreNative now owns this (see positionOnFirstFix) and fires on
+        // whichever of {map ready, first fix} completes last.
 
         try {
           const res = await apiClient.get(`/spots/nearby?lat=${coords.lat}&lng=${coords.lng}&radius=10`);
@@ -2236,6 +2244,7 @@ export default function FinderDashboard() {
         >
           <MapLibreView
             ref={mapRef}
+            viewportHint={viewportHint}
             markers={spots}
             routeCoords={showRoute ? routeCoords.slice(Math.min(currentRouteIndex, Math.max(0, routeCoords.length - 2))) : []}
             altRoutes={showRoute ? altRoutes : []}

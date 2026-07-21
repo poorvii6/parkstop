@@ -18,3 +18,10 @@ export const DEFAULT_MAP_ZOOM = Number(process.env.EXPO_PUBLIC_DEFAULT_ZOOM ?? 4
 
 /** Zoom used once a real user location is known. */
 export const USER_MAP_ZOOM = 15;
+
+/**
+ * Zoom for the remembered-position hint on cold start. A step wider than
+ * USER_MAP_ZOOM because the hint may be days old — close enough to feel like
+ * "your area", not so close that it asserts a street the user may have left.
+ */
+export const HINT_MAP_ZOOM = 14;

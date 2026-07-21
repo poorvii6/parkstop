@@ -35,6 +35,12 @@ try {
 
 export interface MapProps {
   userLocation?: { lat: number; lng: number };
+  /**
+   * Remembered position from a previous session, used ONLY to pick the opening
+   * viewport so a cold start doesn't render the whole country. Never drives the
+   * blue dot or any distance/booking logic — see services/lastLocation.ts.
+   */
+  viewportHint?: { lat: number; lng: number } | null;
   markers?: Array<{ id: string; lat: number; lng: number; price: number; available: boolean; title?: string }>;
   routeCoords?: Array<{ latitude: number; longitude: number }>;
   altRoutes?: Array<{ coords: Array<{ latitude: number; longitude: number }>; duration: number; distance: number }>;
@@ -61,6 +67,8 @@ export interface MapProps {
   speedLimit?: number | null;
   mapStyleUrl?: string;
   mapApiKey?: string;
+  /** Bottom offset for recenter/compass so they ride above visible panels. */
+  controlsBottomOffset?: number;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -365,7 +373,11 @@ map.on('load',function(){
 });
 
 // ── Main Component ───────────────────────────────────────────────
-const MapLibreView: React.FC<MapProps> = React.forwardRef((props: MapProps, ref: any) => {
+// NOTE: deliberately NOT annotated `React.FC<MapProps>`. React.FC has no `ref`
+// in its props, so that annotation erased the forwardRef typing and made every
+// `<MapLibreView ref={...}>` call site a type error — on a component whose ref
+// (animateCamera) is how the whole map is driven. Let forwardRef infer it.
+const MapLibreView = React.forwardRef((props: MapProps, ref: any) => {
   // If native module didn't load, use the full WebView-based fallback
   if (!NATIVE_AVAILABLE) {
     return <WebViewFallback {...props} ref={ref} />;
