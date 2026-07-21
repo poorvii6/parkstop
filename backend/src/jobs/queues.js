@@ -6,7 +6,16 @@ const logger = require('../utils/logger');
 // was the real cause.
 const mockReasons = [];
 if (process.env.NODE_ENV === 'test') mockReasons.push('NODE_ENV=test');
-if (!process.env.REDIS_URL) mockReasons.push('REDIS_URL is not set');
+if (process.env.REDIS_URL === undefined) {
+  mockReasons.push('REDIS_URL is not set');
+} else if (!process.env.REDIS_URL.trim()) {
+  // A Railway variable reference like ${{Redis.REDIS_PRIVATE_URL}} that cannot
+  // be resolved (wrong service name, or that variable does not exist on the
+  // referenced service) is injected as an EMPTY STRING, not left absent. That
+  // is indistinguishable from "unset" unless reported separately — and it
+  // sends you looking for a missing variable that is actually right there.
+  mockReasons.push('REDIS_URL is set but EMPTY — an unresolved variable reference?');
+}
 if (process.env.USE_MOCK_QUEUE === 'true') mockReasons.push('USE_MOCK_QUEUE=true');
 
 const useMockQueue = mockReasons.length > 0;
