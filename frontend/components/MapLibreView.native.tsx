@@ -55,6 +55,8 @@ export interface MapProps {
   onRecenter?: () => void;
   onMarkerPress?: (id: string) => void;
   onOffRoute?: (lat: number, lng: number) => void;
+  /** Reported GPS uncertainty in metres — widens the off-route threshold. */
+  locationAccuracy?: number;
   onSelectAltRoute?: (index: number) => void;
   distanceInfo?: any;
   nextInstruction?: string;

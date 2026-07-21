@@ -39,6 +39,16 @@ const FOLLOW_EASE_MS = 1000;
  */
 const GESTURE_PRESS_GUARD_MS = 350;
 
+/** Minimum distance from the route before we even consider a reroute. */
+const OFF_ROUTE_BASE_M = 50;
+
+/**
+ * Consecutive off-route fixes required before rerouting. One stray GPS reading
+ * must not discard a correct route mid-drive — the same reasoning as the
+ * two-fix confirmation on arrival detection.
+ */
+const OFF_ROUTE_CONFIRMATIONS = 2;
+
 const CARTO_DAY = 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json';
 const CARTO_NIGHT = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 
@@ -67,6 +77,9 @@ type Props = {
   onMarkerPress?: (id: string) => void;
   onRecenter?: () => void;
   onOffRoute?: (lat: number, lng: number) => void;
+  /** Reported GPS uncertainty in metres. Widens the off-route threshold so a
+   *  poor fix cannot masquerade as leaving the route. */
+  locationAccuracy?: number;
   hideControls?: boolean;
   /** Bottom offset for recenter/compass so they ride above visible panels. */
   controlsBottomOffset?: number;
@@ -85,6 +98,8 @@ const lineFeature = (coords: Array<{ latitude: number; longitude: number }>) => 
 const MapLibreNative = forwardRef((props: Props, ref: any) => {
   const cameraRef = useRef<any>(null);
   const [styleFailed, setStyleFailed] = React.useState(false);
+  // Consecutive fixes seen off the route (see off-route detection below).
+  const offRouteHits = useRef(0);
 
   // Opening viewport, best available first: a live fix, else where the user was
   // last time, else the country-wide fallback. The country view is a last
@@ -307,13 +322,35 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
       const py = ay + t * dy;
       const d = px * px + py * py;
       if (d < minSq) minSq = d;
-      if (minSq < 400) return; // already within 20m — on route, stop early
+      if (minSq < 400) { offRouteHits.current = 0; return; } // within 20m — on route
     }
-    if (Math.sqrt(minSq) > 50) {
-      console.log(`[Map] Off-route by ~${Math.round(Math.sqrt(minSq))}m — requesting reroute`);
-      propsRef.current.onOffRoute?.(u.lat, u.lng);
+
+    const offBy = Math.sqrt(minSq);
+
+    // Scale the threshold with GPS quality rather than using a flat 50m. A fix
+    // reported to ±60m can read 60m off the road while the car is dead centre
+    // on it — a flat threshold turns that into a spurious "Rerouting" callout
+    // and a wasted request. Widening with uncertainty keeps rerouting honest
+    // without ever disabling it (as a hard accuracy gate would in an urban
+    // canyon, where poor fixes can persist for minutes).
+    const acc = props.locationAccuracy ?? 0;
+    const threshold = Math.max(OFF_ROUTE_BASE_M, acc * 2);
+
+    if (offBy > threshold) {
+      // Require consecutive confirmations, like the arrival geofence. A single
+      // stray fix must not tear up a correct route mid-drive.
+      offRouteHits.current += 1;
+      if (offRouteHits.current >= OFF_ROUTE_CONFIRMATIONS) {
+        offRouteHits.current = 0;
+        console.log(
+          `[Map] Off-route by ~${Math.round(offBy)}m (threshold ${Math.round(threshold)}m, acc ${Math.round(acc)}m) — requesting reroute`
+        );
+        propsRef.current.onOffRoute?.(u.lat, u.lng);
+      }
+    } else {
+      offRouteHits.current = 0;
     }
-  }, [props.userLocation, props.isActiveNavigation, routeSig]);
+  }, [props.userLocation, props.isActiveNavigation, props.locationAccuracy, routeSig]);
   const altGeos = React.useMemo(
     () => (propsRef.current.altRoutes || []).filter((a) => a.coords?.length >= 2).map((a) => lineFeature(a.coords)),
     [altSig]

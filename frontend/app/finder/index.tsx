@@ -52,6 +52,9 @@ export default function FinderDashboard() {
   // True when the last nearby-spots fetch failed. Lets the UI say "couldn't
   // refresh" instead of silently implying there are no spots.
   const [nearbyFetchFailed, setNearbyFetchFailed] = useState(false);
+  // Latest GPS uncertainty in metres. Passed to the map so off-route detection
+  // can widen its threshold when the fix is poor instead of rerouting falsely.
+  const [locationAccuracy, setLocationAccuracy] = useState<number>(0);
   const [step, setStep] = useState<AppStep>('home');
   const [navCountdown, setNavCountdown] = useState<number | null>(null);
   const [showUPIInline, setShowUPIInline] = useState(false);
@@ -1131,6 +1134,7 @@ export default function FinderDashboard() {
             // better fix within the last 10 seconds.
             if (acc > 35 && q && q.acc < acc / 2 && Date.now() - q.t < 10000) return;
             lastFixQuality.current = { acc, t: Date.now() };
+            setLocationAccuracy(acc);
             const newCoords = { lat: l.coords.latitude, lng: l.coords.longitude };
             setUserLocation(newCoords);
             saveLastLocation(newCoords);
@@ -2471,6 +2475,7 @@ export default function FinderDashboard() {
             speed={navigationData.speed}
             heading={['en_route', 'navigating', 'arriving'].includes(step) ? navigationData.heading : deviceHeading}
             userLocation={(simulatedLocation || userLocation) || undefined}
+            locationAccuracy={locationAccuracy}
             isFollowing={isFollowing}
             onMapInteraction={() => setIsFollowing(false)}
             isActiveNavigation={['en_route', 'navigating', 'arriving'].includes(step)}
@@ -2507,10 +2512,22 @@ export default function FinderDashboard() {
                       setNextTurnPreview({ turn: '', icon: '' });
                       setIsFollowing(true);
                       console.log(`[NAV] Rerouted! ${route.geometry.coordinates.length} points`);
+                    } else {
+                      // Server answered but gave us nothing usable — treat it
+                      // as a failure so the cooldown is released and we retry.
+                      throw new Error('reroute returned no usable route');
                     }
+                  } else {
+                    throw new Error('reroute request unsuccessful');
                   }
                 } catch (e) {
-                  console.warn('[NAV] Reroute failed', e);
+                  console.warn('[NAV] Reroute failed — will retry on next fix', e);
+                  // Release the cooldown. It was claimed BEFORE the request, so
+                  // leaving it set after a failure would strand the driver on a
+                  // stale route for a further 10s — and if the failures persist
+                  // (a network drop, or the 429 storm), they would never get a
+                  // new route at all. Back off briefly instead of fully.
+                  lastRerouteTime.current = Date.now() - 8000;
                 }
               })();
             }}
