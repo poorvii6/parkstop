@@ -92,6 +92,7 @@ function validateEnv() {
     { name: 'OLA_MAPS_API_KEY', feature: 'Maps search/routing (falls back to Nominatim/OSRM)' },
     { name: 'STRIPE_SECRET_KEY', feature: 'Stripe payments' },
     { name: 'RAZORPAY_ACCOUNT_NUMBER', feature: 'Razorpay payouts' },
+    { name: 'REDIS_URL', feature: 'Durable payout/notification queues (falls back to inline execution with NO retry)' },
   ];
 
   const missing = [];

@@ -102,11 +102,22 @@ app.get('/health', async (req, res) => {
   try {
     const prisma = require('./config/prisma');
     await prisma.$queryRaw`SELECT 1`;
-    
+
+    // Report degraded subsystems rather than a bare "ok". The payout queue can
+    // silently fall back to inline execution with no retry, which is invisible
+    // until a payout quietly fails — so it is reported here explicitly.
+    const { queueMode } = require('./jobs/queues');
+    const degraded = [];
+    if (queueMode === 'inline') {
+      degraded.push('payout_queue: running inline with no retry (REDIS_URL unset)');
+    }
+
     res.json({
       success: true,
       environment: config.env,
       database: 'connected',
+      payout_queue: queueMode,
+      degraded: degraded.length ? degraded : undefined,
     });
   } catch (error) {
     res.status(500).json({
