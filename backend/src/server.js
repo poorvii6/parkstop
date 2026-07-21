@@ -47,12 +47,29 @@ if (process.env.NODE_ENV === 'production') {
 app.use(compression());
 
 // Rate limiting
-// General API limiter
+// General API limiter.
+//
+// 100/15min was far too low for a live navigation app and was the real source
+// of the 429s users hit while simply using the map. A single session spends
+// requests fast: /spots/nearby on location changes, /maps/route on every ~30m
+// of movement, /maps/style, /bookings/my-bookings, /auth/switch-role on open.
+// A few minutes of driving exhausted the budget — and because this limiter is
+// global (app.use), blowing it made EVERY endpoint 429, including sign-in.
+// That is why signing in as Spotter failed after using the map for a while.
+//
+// The endpoints that actually need tight limits have their own, closer to the
+// thing being protected: login (20 failures/5min), OTP send/verify, and the
+// per-IP caps inside routes/maps.js (30 routes/min). This one exists only to
+// stop a single host hammering the API, so it is sized for a real session.
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100,                  // 100 requests per window
+  windowMs: 15 * 60 * 1000,
+  max: 1000,
+  standardHeaders: true,
+  legacyHeaders: false,
   message: { success: false, message: 'Too many requests, please try again later.' },
-  skip: () => process.env.IGNORE_RATE_LIMITS === 'true'
+  // Never rate limit the health check — it is how we diagnose the service, and
+  // it must not fail because a user was busy.
+  skip: (req) => process.env.IGNORE_RATE_LIMITS === 'true' || req.path === '/health'
 });
 
 // Strict limiter for auth endpoints
