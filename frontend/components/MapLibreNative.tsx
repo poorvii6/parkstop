@@ -24,6 +24,14 @@ const MLGeoJSONSource = MLGL.GeoJSONSource;
 const MLLayer = MLGL.Layer;
 const MLImages = MLGL.Images;
 
+/**
+ * Duration of each follow-camera ease. Deliberately equal to the position
+ * watcher's `timeInterval` (1000ms in app/finder/index.tsx) so consecutive
+ * eases butt up against each other and the camera never sits still between
+ * fixes. Changing one without the other reintroduces follow stutter.
+ */
+const FOLLOW_EASE_MS = 1000;
+
 const CARTO_DAY = 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json';
 const CARTO_NIGHT = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 
@@ -174,15 +182,20 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
     // Grace period: never fight a gesture the user made in the last 2s,
     // even if the isFollowing prop hasn't flipped yet.
     if (Date.now() - lastInteraction.current < 2000) return;
-    markProgrammatic(700);
+    markProgrammatic(FOLLOW_EASE_MS + 200);
     if (props.isActiveNavigation) {
       bearingRef.current = props.heading || 0; // we set the bearing — track it
+      // Ease over the SAME interval the position watcher ticks at (1s). A
+      // shorter ease (this was 700ms) finishes early, leaves the camera parked
+      // for the remaining 300ms, then lurches on the next fix — read as
+      // stutter. Matching the tick keeps the camera continuously in motion so
+      // one ease hands off to the next.
       cameraRef.current.easeTo({
         center: [props.userLocation.lng, props.userLocation.lat],
         zoom: 17.5,
         pitch: 55,
         bearing: props.heading || 0,
-        duration: 700,
+        duration: FOLLOW_EASE_MS,
       });
     } else {
       // Outside navigation: re-center, turning toward the direction of travel
@@ -196,12 +209,12 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
         cameraRef.current.easeTo({
           center: [props.userLocation.lng, props.userLocation.lat],
           bearing: h,
-          duration: 500,
+          duration: FOLLOW_EASE_MS,
         });
       } else {
         cameraRef.current.easeTo({
           center: [props.userLocation.lng, props.userLocation.lat],
-          duration: 500,
+          duration: FOLLOW_EASE_MS,
         });
       }
     }

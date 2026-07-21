@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { View, Text, StyleSheet, Platform, TouchableOpacity, TextInput, Dimensions, Modal, Alert, ScrollView, Linking, Keyboard, ActivityIndicator, BackHandler, AppState, Image, Animated, KeyboardAvoidingView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -20,6 +20,7 @@ import apiClient from '../../api/client';
 import { startBackgroundLocation, stopBackgroundLocation, onBackgroundLocation } from '../../services/backgroundLocation';
 import { cacheRouteCorridor, clearOfflinePack } from '../../services/offlineTileCache';
 import { saveLastLocation, loadLastLocation } from '../../services/lastLocation';
+import { pickBestRoute, otherRoutes } from '../../utils/routeSelection';
 import { Spot, PricingBreakdown, AppStep } from '../../types/finder';
 import SkeletonCard from '../../components/SkeletonCard';
 
@@ -573,10 +574,13 @@ export default function FinderDashboard() {
             const now = Date.now();
             if (now - lastRouteFetch.current > 60000 && remainingKm > 0.3) {
               lastRouteFetch.current = now;
-              apiClient.get(`/maps/route?start=${coords.lng},${coords.lat}&end=${spot.lng},${spot.lat}&alternatives=false`)
+              apiClient.get(`/maps/route?start=${coords.lng},${coords.lat}&end=${spot.lng},${spot.lat}&alternatives=true`)
                 .then((rRes: any) => {
                   if (rRes.data.success) {
-                    const rRoute = rRes.data.data.routes?.[0];
+                    // Same selection rule as everywhere else — this used to
+                    // take routes[0] blindly and could disagree with the route
+                    // drawn by the main fetch.
+                    const rRoute = pickBestRoute(rRes.data.data.routes || []);
                     if (rRoute?.legs?.[0]?.steps) {
                       routeStepsRef.current = rRoute.legs[0].steps;
                       // Update traffic segments
@@ -950,15 +954,18 @@ export default function FinderDashboard() {
         try {
           console.log(`[API] Fetching route from ${userLocation.lat},${userLocation.lng} to ${destination.lat},${destination.lng}`);
           const isNav = ['en_route', 'navigating', 'arriving'].includes(step);
-          const res = await apiClient.get(`/maps/route?start=${userLocation.lng},${userLocation.lat}&end=${destination.lng},${destination.lat}&alternatives=${!isNav}`);
+          // Alternatives are requested even while navigating. Previously this
+          // was `alternatives=${!isNav}`, so during navigation the provider
+          // returned exactly ONE route and there was nothing to choose from —
+          // whatever detour it picked was what you drove. Responses are cached
+          // server-side for 10 minutes and refetch is movement-gated, so the
+          // extra candidates cost little.
+          const res = await apiClient.get(`/maps/route?start=${userLocation.lng},${userLocation.lat}&end=${destination.lng},${destination.lat}&alternatives=true`);
           if (res.data.success) {
             const routes = res.data.data.routes || [];
-            // Never trust provider ordering blindly: pick the FASTEST route
-            // (min duration; ties broken by distance) — the rest stay as
-            // selectable grey alternatives.
-            const route = [...routes].sort(
-              (a: any, b: any) => (a.duration - b.duration) || (a.distance - b.distance)
-            )[0];
+            // Shortest sensible route, not merely the fastest — see
+            // utils/routeSelection.ts for why those differ.
+            const route = pickBestRoute(routes);
             if (!route) return;
             console.log(`[API] Route found! ${route.geometry.coordinates.length} points. ${routes.length} alternatives. Best: ${(route.distance / 1000).toFixed(1)}km/${Math.ceil(route.duration / 60)}min`);
             setRouteCoords(route.geometry.coordinates.map((p: any) => ({ latitude: p[1], longitude: p[0] })));
@@ -985,9 +992,13 @@ export default function FinderDashboard() {
               if (firstLaneStep) setLaneGuidance(firstLaneStep.lanes);
               else setLaneGuidance([]);
             }
-            // Store alternative routes (skip first — that's the primary)
-            if (!isNav && routes.length > 1) {
-              setAltRoutes(routes.slice(1).map((r: any) => ({
+            // Alternatives = everything EXCEPT the route we actually drew.
+            // The old `routes.slice(1)` assumed the primary was always
+            // routes[0]; once selection started choosing a different one, the
+            // primary was ALSO painted underneath as a grey alternative while
+            // the provider's first route disappeared from the list entirely.
+            if (!isNav) {
+              setAltRoutes(otherRoutes(routes, route).map((r: any) => ({
                 coords: r.geometry.coordinates.map((p: any) => ({ latitude: p[1], longitude: p[0] })),
                 duration: r.duration,
                 distance: r.distance,
@@ -1931,6 +1942,18 @@ export default function FinderDashboard() {
   // selected), booking, and ALL navigation phases including final approach.
   const showRoute = ['spot_booking', 'booking_confirm', 'home', 'navigating', 'en_route', 'arriving'].includes(step);
 
+  // The un-driven remainder of the route. Memoised because this slice copies
+  // the whole coordinate array, and it sat inline in JSX — so it reallocated on
+  // EVERY render of this (very large) screen, including the many renders that
+  // have nothing to do with the route. Now it only rebuilds when the route or
+  // the driver's progress along it actually changes.
+  const visibleRouteCoords = useMemo(
+    () => (showRoute
+      ? routeCoords.slice(Math.min(currentRouteIndex, Math.max(0, routeCoords.length - 2)))
+      : []),
+    [showRoute, routeCoords, currentRouteIndex]
+  );
+
   // Removed welcome auto-transition
 
 
@@ -2344,7 +2367,7 @@ export default function FinderDashboard() {
             ref={mapRef}
             viewportHint={viewportHint}
             markers={spots}
-            routeCoords={showRoute ? routeCoords.slice(Math.min(currentRouteIndex, Math.max(0, routeCoords.length - 2))) : []}
+            routeCoords={visibleRouteCoords}
             altRoutes={showRoute ? altRoutes : []}
             onSelectAltRoute={(index: number) => {
               const alt = altRoutes[index];
@@ -2396,9 +2419,12 @@ export default function FinderDashboard() {
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
               (async () => {
                 try {
-                  const res = await apiClient.get(`/maps/route?start=${lng},${lat}&end=${dest.lng},${dest.lat}&alternatives=false`);
+                  // Rerouting after going off-route: ask for candidates so the
+                  // recovery route is also the shortest sensible one, rather
+                  // than whatever the provider happens to return first.
+                  const res = await apiClient.get(`/maps/route?start=${lng},${lat}&end=${dest.lng},${dest.lat}&alternatives=true`);
                   if (res.data.success) {
-                    const route = res.data.data.routes?.[0];
+                    const route = pickBestRoute(res.data.data.routes || []);
                     if (route) {
                       setRouteCoords(route.geometry.coordinates.map((p: any) => ({ latitude: p[1], longitude: p[0] })));
                       setDistanceInfo({ km: (route.distance / 1000).toFixed(1), mins: Math.ceil(route.duration / 60).toString() });

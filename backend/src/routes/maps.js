@@ -460,7 +460,13 @@ router.get('/route', async (req, res) => {
             const p = s.split(',');
             return `${parseFloat(p[0]).toFixed(3)},${parseFloat(p[1]).toFixed(3)}`;
         });
-        routeCacheKey = `${parts[0]}|${parts[1]}|${waypoints || ''}`;
+        // `alternatives` and `overview` MUST be part of the key. Without them an
+        // alternatives=false response (a single route) is served to a later
+        // alternatives=true request, so the client silently gets nothing to
+        // choose between and always draws the provider's default route.
+        const altKey = alternatives === 'true' ? 'alt' : 'noalt';
+        const ovKey = ['full', 'simplified', 'false'].includes(overview) ? overview : 'full';
+        routeCacheKey = `${parts[0]}|${parts[1]}|${waypoints || ''}|${altKey}|${ovKey}`;
     }
 
     try {
