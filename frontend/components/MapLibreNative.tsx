@@ -86,6 +86,140 @@ type Props = {
   style?: any;
 };
 
+/** Shortest signed angular difference a→b in degrees, range (-180, 180]. */
+function angleDelta(a: number, b: number) {
+  return ((b - a + 540) % 360) - 180;
+}
+
+/**
+ * AnimatedUserMarker — interpolates the user puck between GPS fixes.
+ *
+ * WHY THIS EXISTS. GPS fixes arrive ~once per second, and a marker bound
+ * directly to the raw fix teleports on each one — the single biggest reason the
+ * map "felt jumpy" during navigation. This component holds an internal render
+ * position that glides toward the newest fix at display frame rate, so the puck
+ * moves continuously along the road (the way Google/Uber do it) instead of
+ * hopping.
+ *
+ * ISOLATION. The animation lives entirely inside this child, so only the puck
+ * re-renders each frame — the parent map, route line, and spot markers do not.
+ * That is deliberate: driving the whole map tree at 60fps would cost far more
+ * than it buys.
+ */
+function AnimatedUserMarker(props: {
+  target: { lat: number; lng: number };
+  heading?: number;
+  cameraBearing: number;
+  isNav: boolean;
+}) {
+  const MLMarker = MLGL.Marker;
+
+  // Current on-screen position/heading. Refs hold the truth; state exists only
+  // to trigger the marker re-render each frame.
+  const cur = useRef({ lat: props.target.lat, lng: props.target.lng });
+  const curHeading = useRef(props.heading || 0);
+
+  const from = useRef({ ...cur.current });
+  const to = useRef({ lat: props.target.lat, lng: props.target.lng });
+  const headFrom = useRef(curHeading.current);
+  const headTo = useRef(props.heading || 0);
+
+  const startTs = useRef(0);
+  const durMs = useRef(1000);
+  const lastFixTs = useRef(0);
+  const raf = useRef(0);
+
+  const [, force] = React.useState(0);
+
+  // New position fix → start a fresh interpolation leg from wherever the puck
+  // visually is right now (not from the previous RAW fix, which would rubber-band).
+  React.useEffect(() => {
+    const now = Date.now();
+
+    // Distance of the jump, metres (equirectangular is plenty at this scale).
+    const cosLat = Math.cos((props.target.lat * Math.PI) / 180);
+    const dx = (props.target.lng - cur.current.lng) * 111320 * cosLat;
+    const dy = (props.target.lat - cur.current.lat) * 110540;
+    const jump = Math.sqrt(dx * dx + dy * dy);
+
+    // A large jump is a GPS teleport or the very first fix — snap, don't glide
+    // a slow slide across the map.
+    if (jump > 120) {
+      cur.current = { lat: props.target.lat, lng: props.target.lng };
+      from.current = { ...cur.current };
+      to.current = { ...cur.current };
+      lastFixTs.current = now;
+      force((n) => n + 1);
+      return;
+    }
+
+    // Duration = the actual gap between fixes, clamped. Matching the animation
+    // to the real cadence is what keeps the glide continuous rather than
+    // finishing early and pausing.
+    const gap = lastFixTs.current ? now - lastFixTs.current : 1000;
+    lastFixTs.current = now;
+    durMs.current = Math.min(1600, Math.max(500, gap));
+
+    from.current = { ...cur.current };
+    to.current = { lat: props.target.lat, lng: props.target.lng };
+    startTs.current = now;
+
+    if (!raf.current) raf.current = requestAnimationFrame(tick);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.target.lat, props.target.lng]);
+
+  // Heading updates independently of position — keep its own target so a compass
+  // tick doesn't restart the position leg.
+  React.useEffect(() => {
+    headFrom.current = curHeading.current;
+    headTo.current = props.heading || 0;
+    startTs.current = startTs.current || Date.now();
+    if (!raf.current) raf.current = requestAnimationFrame(tick);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.heading]);
+
+  const tick = () => {
+    const now = Date.now();
+    const t = Math.min(1, (now - startTs.current) / durMs.current);
+
+    cur.current = {
+      lat: from.current.lat + (to.current.lat - from.current.lat) * t,
+      lng: from.current.lng + (to.current.lng - from.current.lng) * t,
+    };
+    // Heading eases over a fixed short window so turns rotate smoothly instead
+    // of snapping; shortest-path so it never spins the long way round.
+    curHeading.current = headFrom.current + angleDelta(headFrom.current, headTo.current) * t;
+
+    force((n) => (n + 1) % 1000000);
+
+    if (t < 1) {
+      raf.current = requestAnimationFrame(tick);
+    } else {
+      raf.current = 0;
+    }
+  };
+
+  React.useEffect(() => () => { if (raf.current) cancelAnimationFrame(raf.current); }, []);
+
+  const p = cur.current;
+
+  if (!props.isNav) {
+    return (
+      <MLMarker id="user" lngLat={[p.lng, p.lat]} anchor="center">
+        <View style={styles.userDotOuter}><View style={styles.userDot} /></View>
+      </MLMarker>
+    );
+  }
+
+  return (
+    <MLMarker id="user-nav" lngLat={[p.lng, p.lat]} anchor="center">
+      <View style={[styles.navArrowWrap, { transform: [{ rotate: `${curHeading.current - props.cameraBearing}deg` }] }]}>
+        <View style={styles.navArrow} />
+      </View>
+    </MLMarker>
+  );
+}
+
 const lineFeature = (coords: Array<{ latitude: number; longitude: number }>) => ({
   type: 'Feature' as const,
   properties: {},
@@ -536,28 +670,20 @@ const MapLibreNative = forwardRef((props: Props, ref: any) => {
             "map" means the GPU rotates it WITH the map — always correct
             relative to the road, exactly like Google/Uber, with no dependence
             on JS bearing events. */}
-        {props.userLocation && !props.isActiveNavigation ? (
-          <MLMarker id="user" lngLat={[props.userLocation.lng, props.userLocation.lat]} anchor="center">
-            <View style={styles.userDotOuter}>
-              <View style={styles.userDot} />
-            </View>
-          </MLMarker>
-        ) : null}
-        {props.userLocation && props.isActiveNavigation ? (
-          <MLMarker id="user-nav" lngLat={[props.userLocation.lng, props.userLocation.lat]} anchor="center">
-            {/* Arrow rotation = travel heading minus the camera bearing WE set
-                (tracked in bearingRef by our own easeTo calls). While the
-                camera follows the heading this is ~0 → arrow points up, exactly
-                like Google navigation. */}
-            <View
-              style={[
-                styles.navArrowWrap,
-                { transform: [{ rotate: `${(props.heading || 0) - bearingRef.current}deg` }] },
-              ]}
-            >
-              <View style={styles.navArrow} />
-            </View>
-          </MLMarker>
+        {/* Live location. AnimatedUserMarker interpolates between GPS fixes so
+            the puck glides instead of teleporting once a second. Keyed on nav
+            state so switching modes fully remounts it (blue dot <-> arrow) and
+            resets the interpolation cleanly. Arrow rotation = travel heading
+            minus the camera bearing we set; while following, that is ~0 so the
+            arrow points up, exactly like Google navigation. */}
+        {props.userLocation ? (
+          <AnimatedUserMarker
+            key={props.isActiveNavigation ? 'nav' : 'idle'}
+            target={props.userLocation}
+            heading={props.heading}
+            cameraBearing={bearingRef.current}
+            isNav={!!props.isActiveNavigation}
+          />
         ) : null}
 
         {/* Parking spots — memoized; only rebuild when content actually changes */}
