@@ -1,4 +1,27 @@
 const router = require('express').Router();
+const { authenticate } = require('../middleware/auth');
+
+/**
+ * SECURITY: every /maps/* endpoint requires a signed-in user.
+ *
+ * These endpoints proxy Ola Maps, which is a PAID service billed to us, and
+ * /style additionally hands out OLA_MAPS_API_KEY so the client can sign its own
+ * tile/sprite/glyph requests. With the router unauthenticated, anyone on the
+ * internet could:
+ *   - curl /maps/style and walk off with the API key, then bill Ola directly
+ *     against our account until the quota (and therefore our maps) died, and
+ *   - use /search, /route, /geocode, /snap-to-road, /nearby-pois as a free
+ *     proxy to the same paid API.
+ *
+ * The per-IP limits further down are volume control, not access control — they
+ * do nothing against a distributed caller. Authentication is the actual gate.
+ *
+ * NOTE: the key is still handed to authenticated mobile clients because
+ * MapLibre must sign its own tile requests; it cannot be kept secret in an app.
+ * This raises the bar from "anyone" to "someone with a valid account". Pair it
+ * with a package/referrer restriction on the key in the Ola console.
+ */
+router.use(authenticate);
 
 // Haversine formula to calculate distance in km
 function getDistance(lat1, lon1, lat2, lon2) {
