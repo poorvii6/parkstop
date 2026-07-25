@@ -41,13 +41,29 @@ class RazorpayAdapter {
    * We verify the signature server-side to confirm the payment is genuine.
    */
   verifyPaymentSignature(orderId, paymentId, signature) {
+    if (typeof signature !== 'string' || !signature) return false;
+
     const body = orderId + '|' + paymentId;
     const expectedSignature = crypto
       .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
       .update(body)
       .digest('hex');
 
-    return expectedSignature === signature;
+    // Constant-time comparison. `===` short-circuits at the first differing
+    // character, so how long it takes leaks how much of the signature was
+    // correct — an attacker can in principle recover a valid signature one
+    // character at a time by timing responses. Remote timing attacks over a
+    // network are hard in practice, but this is a payment authorisation check
+    // and the constant-time version costs nothing.
+    const expectedBuf = Buffer.from(expectedSignature, 'utf8');
+    const providedBuf = Buffer.from(signature, 'utf8');
+
+    // timingSafeEqual throws unless both buffers are the same length. Bailing
+    // out here leaks only the length, which is fixed for a SHA-256 hex digest
+    // and therefore public knowledge.
+    if (expectedBuf.length !== providedBuf.length) return false;
+
+    return crypto.timingSafeEqual(expectedBuf, providedBuf);
   }
 
   /**
