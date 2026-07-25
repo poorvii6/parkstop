@@ -340,32 +340,15 @@ export default function FinderDashboard() {
   } | null>(null);
   const [isUPIModalVisible, setIsUPIModalVisible] = useState(false);
   const [isUPIProcessing, setIsUPIProcessing] = useState(false);
-  const [mockSimulatorApp, setMockSimulatorApp] = useState<'gpay' | 'phonepe' | 'paytm' | 'upi' | null>(null);
-  const [mockSimulatorOrderId, setMockSimulatorOrderId] = useState<string | null>(null);
+  // Preselect UPI in Razorpay Checkout when the user tapped a UPI app.
+  const [preferUpiCheckout, setPreferUpiCheckout] = useState(false);
 
-  const executeUPIVerification = async (orderId: string) => {
-    setIsUPIProcessing(true);
-    setMockSimulatorApp(null);
-    try {
-      const verification = await razorpayService.verifyPayment({
-        bookingId: Number(bookingDetails?.id),
-        razorpay_order_id: orderId,
-        razorpay_payment_id: `pay_mock_upi_${Date.now()}`,
-        razorpay_signature: 'mock_upi_intent',
-      });
-      if (verification.success) {
-        setStep('receipt');
-      } else {
-        Alert.alert('Verification Failed', 'Could not confirm payment signature.');
-      }
-    } catch (verErr: any) {
-      Alert.alert('Verification Error', verErr.message || 'Failed to verify payment with server.');
-    } finally {
-      setIsLoading(false);
-      setIsUPIProcessing(false);
-      setMockSimulatorOrderId(null);
-    }
-  };
+  // REMOVED: executeUPIVerification + the mock UPI simulator.
+  //
+  // They existed only to send `mock_upi_intent` — a fake signature that asked
+  // the server to mark a booking paid with no money moving. The server now
+  // refuses it outright, and the UPI flow goes through Razorpay Checkout, which
+  // produces a real, verifiable payment against the order.
 
   const [spots, setSpots] = useState<Spot[]>([]);
   const [socket, setSocket] = useState<Socket | null>(null);
@@ -1770,52 +1753,27 @@ export default function FinderDashboard() {
         throw new Error('Failed to initiate secure checkout session');
       }
       
-      const orderId = res.data.order_id;
-      const amountInRupees = (res.data.amount / 100).toFixed(2);
-      
-      const upiId = 'parkstop@razorpay';
-      const pn = 'ParkStop';
-      const upiQuery = `pa=${upiId}&pn=${encodeURIComponent(pn)}&am=${amountInRupees}&cu=INR&tr=${orderId}&tn=ParkStop%20Booking%20${bookingDetails?.id}`;
-      
-      let upiUrl = '';
-      if (app === 'gpay') {
-        upiUrl = `gpay://upi/pay?${upiQuery}`;
-      } else if (app === 'phonepe') {
-        upiUrl = `phonepe://upi/pay?${upiQuery}`;
-      } else if (app === 'paytm') {
-        upiUrl = `paytmmp://upi/pay?${upiQuery}`;
-      } else {
-        upiUrl = `upi://pay?${upiQuery}`;
-      }
-
-      console.log(`[UPI Launch] Opening deep-link: ${upiUrl}`);
-      
-      let canOpen = false;
-      try {
-        canOpen = await Linking.canOpenURL(upiUrl);
-      } catch (e) {
-        console.log("canOpenURL check failed", e);
-      }
-
-      if (canOpen) {
-        try {
-          await Linking.openURL(upiUrl);
-          // Wait 3.5 seconds to simulate returning to app after checkout
-          setIsUPIProcessing(true);
-          setTimeout(() => {
-            executeUPIVerification(orderId);
-          }, 3500);
-        } catch (err) {
-          console.log("openURL failed despite canOpen=true", err);
-          setMockSimulatorOrderId(orderId);
-          setMockSimulatorApp(app);
-        }
-      } else {
-        // Mock fallback simulator
-        console.log("UPI App not installed. Triggering Mock Simulator.");
-        setMockSimulatorOrderId(orderId);
-        setMockSimulatorApp(app);
-      }
+      // Hand off to Razorpay Checkout with UPI preselected.
+      //
+      // This previously built a RAW peer-to-peer UPI deep link to a hardcoded
+      // VPA and then, 3.5s later, told the server the booking was paid using a
+      // fake `mock_upi_intent` signature — without checking anything. Money
+      // sent that way never touched the Razorpay ORDER, so Razorpay had no
+      // record of it and the signature could never be verified. (Confirmed: no
+      // UPI payment ever reached the Razorpay dashboard.)
+      //
+      // Checkout creates a real payment against the order and emits its own
+      // upi:// intent, which RazorpayCheckout forwards to GPay/PhonePe/Paytm —
+      // so the app-switch feel is preserved — and returns a genuine signature
+      // that the backend verifies against order, amount and captured status.
+      setRazorpayOrder({
+        orderId: res.data.order_id,
+        amount: res.data.amount,
+        currency: res.data.currency || 'INR',
+        keyId: res.data.key_id,
+      });
+      setPreferUpiCheckout(true);
+      setIsRazorpayVisible(true);
 
     } catch (e: any) {
       Alert.alert('UPI Payment Error', e.message || 'Failed to process UPI payment');
@@ -1915,6 +1873,7 @@ export default function FinderDashboard() {
     razorpay_signature: string;
   }) => {
     setIsRazorpayVisible(false);
+    setPreferUpiCheckout(false);
     setIsLoading(true);
     try {
       const verification = await razorpayService.verifyPayment({
@@ -1939,12 +1898,14 @@ export default function FinderDashboard() {
 
   const handleRazorpayCancel = () => {
     setIsRazorpayVisible(false);
+    setPreferUpiCheckout(false);
     setRazorpayOrder(null);
     Alert.alert('Payment Cancelled', 'You cancelled the payment transaction.');
   };
 
   const handleRazorpayFailure = (error: string) => {
     setIsRazorpayVisible(false);
+    setPreferUpiCheckout(false);
     setRazorpayOrder(null);
     Alert.alert('Payment Failed', error || 'Failed to complete transaction.');
   };
@@ -3714,45 +3675,6 @@ export default function FinderDashboard() {
 
 
       {/* 📱 MOCK SIMULATOR MODAL */}
-      <Modal visible={!!mockSimulatorApp} transparent animationType="slide">
-        <View style={{ flex: 1, backgroundColor: mockSimulatorApp === 'phonepe' ? '#5f259f' : mockSimulatorApp === 'paytm' ? '#00baf2' : mockSimulatorApp === 'gpay' ? '#1A73E8' : '#0f172a', justifyContent: 'center', padding: 20 }}>
-          <View style={{ alignItems: 'center', marginBottom: 40 }}>
-            {mockSimulatorApp === 'phonepe' && <Text style={{ color: '#fff', fontSize: 48, fontWeight: '900', marginBottom: 10 }}>पे</Text>}
-            {mockSimulatorApp === 'paytm' && <Text style={{ color: '#0f172a', fontSize: 32, fontWeight: '900', fontStyle: 'italic', backgroundColor: '#fff', paddingHorizontal: 16, paddingVertical: 4, borderRadius: 8, overflow: 'hidden' }}>Pay<Text style={{ color: '#00baf2' }}>tm</Text></Text>}
-            {mockSimulatorApp === 'gpay' && <Image source={{ uri: 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/c1/Google_%22G%22_logo.svg/120px-Google_%22G%22_logo.svg.png' }} style={{ width: 60, height: 60, backgroundColor: '#fff', borderRadius: 30, marginBottom: 10 }} />}
-            {mockSimulatorApp === 'upi' && <Text style={{ color: '#fff', fontSize: 36, fontWeight: '900', fontStyle: 'italic' }}>UPI</Text>}
-            <Text style={{ color: '#fff', fontSize: 24, fontWeight: '700', marginTop: 20 }}>Test Environment</Text>
-            <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 16, textAlign: 'center', marginTop: 10 }}>The app {mockSimulatorApp} is not installed or unavailable. You are viewing the mock simulator fallback.</Text>
-          </View>
-          
-          <View style={{ backgroundColor: '#fff', borderRadius: 24, padding: 24, elevation: 10 }}>
-            <Text style={{ color: '#64748b', fontSize: 14, fontWeight: '600', textAlign: 'center' }}>Amount to Pay</Text>
-            <Text style={{ color: '#0f172a', fontSize: 40, fontWeight: '900', textAlign: 'center', marginVertical: 10 }}>₹{bookingDetails?.totalPrice || bookingDetails?.total_price || bookingDetails?.pricing?.finalPrice || '0.00'}</Text>
-            
-            <TouchableOpacity 
-              style={{ backgroundColor: mockSimulatorApp === 'phonepe' ? '#5f259f' : mockSimulatorApp === 'paytm' ? '#00baf2' : mockSimulatorApp === 'gpay' ? '#1A73E8' : '#16a34a', paddingVertical: 18, borderRadius: 16, alignItems: 'center', marginTop: 20 }}
-              onPress={() => {
-                if (mockSimulatorOrderId) {
-                  executeUPIVerification(mockSimulatorOrderId);
-                }
-              }}
-            >
-              <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Complete Mock Payment</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={{ paddingVertical: 18, alignItems: 'center', marginTop: 10 }}
-              onPress={() => {
-                setMockSimulatorApp(null);
-                setMockSimulatorOrderId(null);
-                setIsLoading(false);
-              }}
-            >
-              <Text style={{ color: '#64748b', fontSize: 16, fontWeight: '700' }}>Cancel Payment</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
 
       {/* 🔄 UPI PROCESSING OVERLAY */}
       <Modal visible={isUPIProcessing} transparent animationType="fade">
@@ -3773,6 +3695,7 @@ export default function FinderDashboard() {
           amount={razorpayOrder.amount}
           currency={razorpayOrder.currency}
           keyId={razorpayOrder.keyId}
+          preferUpi={preferUpiCheckout}
           onSuccess={handleRazorpaySuccess}
           onCancel={handleRazorpayCancel}
           onFailure={handleRazorpayFailure}

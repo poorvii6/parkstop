@@ -16,6 +16,14 @@ interface RazorpayCheckoutProps {
   }) => void;
   onCancel: () => void;
   onFailure: (error: string) => void;
+  /**
+   * Preselect UPI in Checkout. Set when the user tapped a UPI app (GPay /
+   * PhonePe / Paytm) so they land straight on UPI rather than the method list.
+   * Checkout then emits a upi:// intent, which onShouldStartLoadWithRequest
+   * below hands to the real app — so the app-switch UX is preserved while the
+   * payment stays a genuine Razorpay order payment.
+   */
+  preferUpi?: boolean;
 }
 
 export default function RazorpayCheckout({
@@ -27,6 +35,7 @@ export default function RazorpayCheckout({
   onSuccess,
   onCancel,
   onFailure,
+  preferUpi = false,
 }: RazorpayCheckoutProps) {
   const [loading, setLoading] = useState(true);
 
@@ -96,6 +105,7 @@ export default function RazorpayCheckout({
           "prefill": {
             "name": "ParkStop User",
             "email": "user@parkstop.com"
+            ${preferUpi ? ',"method": "upi"' : ''}
           },
           "theme": {
             "color": "#6366f1"

@@ -60,13 +60,38 @@ class PaymentService {
         return { success: true, paymentId: booking.payment_id };
       }
 
-      // 2. Verify signature
-      const isValid = (signature === 'mock_upi_intent' && process.env.NODE_ENV !== 'production')
+      // 2. Verify signature.
+      //
+      // `mock_upi_intent` marks a booking PAID without any money moving. It is
+      // a local-testing shim, and the only thing that ever stood between it and
+      // free parking was NODE_ENV — one misconfigured variable away from a
+      // production hole, exactly like the IGNORE_RATE_LIMITS gap.
+      //
+      // Now it needs TWO independent conditions, and neither is satisfiable in
+      // production: an explicit opt-in flag AND a hard NODE_ENV check. Setting
+      // ALLOW_MOCK_PAYMENTS on the production service does nothing.
+      const isMockSignature = signature === 'mock_upi_intent';
+      const mockAllowed =
+        process.env.NODE_ENV !== 'production' &&
+        process.env.ALLOW_MOCK_PAYMENTS === 'true';
+
+      if (isMockSignature && !mockAllowed) {
+        logger.error(
+          `REJECTED mock payment signature for booking ${bookingId} — mock payments are not enabled in this environment`
+        );
+        throw new Error('Payment signature verification failed.');
+      }
+
+      const isValid = (isMockSignature && mockAllowed)
         ? true
         : razorpayAdapter.verifyPaymentSignature(orderId, paymentId, signature);
-      
+
       if (!isValid) {
         throw new Error('Payment signature verification failed.');
+      }
+
+      if (isMockSignature && mockAllowed) {
+        logger.warn(`Booking ${bookingId} settled with a MOCK payment (no money moved)`);
       }
 
       // 3. Fetch payment details from Razorpay
@@ -75,7 +100,7 @@ class PaymentService {
       const arrears = (user && user.balance < 0) ? Math.abs(Number(user.balance)) : 0;
       const expectedAmountPaise = Math.round((Number(booking.total_price) + arrears) * 100);
 
-      if (signature === 'mock_upi_intent' && process.env.NODE_ENV !== 'production') {
+      if (isMockSignature && mockAllowed) {
         paymentDetails = {
           status: 'captured',
           amount: expectedAmountPaise

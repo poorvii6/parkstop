@@ -144,6 +144,20 @@ function validateEnv() {
     );
   }
 
+  if (isProduction && process.env.ALLOW_MOCK_PAYMENTS === 'true') {
+    console.warn(
+      '🚨 ALLOW_MOCK_PAYMENTS is set in production and is being IGNORED. ' +
+      'Mock payments mark bookings paid without money moving. Remove it.'
+    );
+  }
+
+  if (!isProduction && process.env.ALLOW_MOCK_PAYMENTS === 'true') {
+    console.warn(
+      '⚠️  ALLOW_MOCK_PAYMENTS is enabled — bookings can be settled without ' +
+      'real payment. Intended for local testing only.'
+    );
+  }
+
   console.log('✅ Environment variables validated');
 }
 
