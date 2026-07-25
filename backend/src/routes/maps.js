@@ -214,6 +214,19 @@ router.get('/search', async (req, res) => {
                     // whose name exactly matches a blended city are dropped as
                     // lookalike noise (e.g. a Bangalore bus stop named "Hubli").
                     const cityMatches = await cityPromise;
+                    // Give each blended city the Ola place_id of the matching prediction, so the
+                    // app resolves it to Ola's exact centre via place-details. Ola's free-text
+                    // geocode is unreliable for city names (it can land tens of km away), whereas
+                    // place-details is precise.
+                    const olaPidByName = new Map();
+                    for (const m of mappedData) {
+                        const f = (m.display_name || '').split(',')[0].trim().toLowerCase();
+                        if (m.place_id && !olaPidByName.has(f)) olaPidByName.set(f, m.place_id);
+                    }
+                    for (const c of cityMatches) {
+                        const f = (c.display_name || '').split(',')[0].trim().toLowerCase();
+                        if (olaPidByName.has(f)) c.place_id = olaPidByName.get(f);
+                    }
                     const cityNames = new Set(cityMatches.map(c => (c.display_name || '').split(',')[0].trim().toLowerCase()));
     const filteredOla = mappedData.filter(m => {
                         const first = (m.display_name || '').split(',')[0].trim().toLowerCase();

@@ -1429,22 +1429,10 @@ export default function FinderDashboard() {
         // path (Enter key) that kept landing everything in Bangalore.
         let rLat = NaN;
         let rLon = NaN;
-        // The user typed a place NAME, so resolve that name canonically FIRST
-        // through the geocoder, which has no location bias. This is their actual
-        // intent and stops the pin snapping to a nearby look-alike POI — e.g. a
-        // petrol pump on "Mysore Road" in Bangalore when they searched "Mysore".
-        try {
-          const geo = await apiClient.get(`/maps/geocode?q=${encodeURIComponent(searchQuery)}`);
-          if (geo.data?.success && geo.data.data) {
-            rLat = parseFloat(geo.data.data.lat);
-            rLon = parseFloat(geo.data.data.lon);
-            console.log(`[Search] (submit) Resolved "${searchQuery}" via geocode -> ${rLat},${rLon}`);
-          }
-        } catch (err) {
-          console.log('[Search] (submit) Geocode failed:', (err as any)?.message);
-        }
-        // Fallbacks: the exact place via its id, then the blended city coordinate.
-        if ((isNaN(rLat) || isNaN(rLon) || !rLat || !rLon) && top.place_id) {
+        // 1) Exact, canonical coordinate via the Ola place_id (place-details).
+        //    Reliable for both POIs and cities — unlike Ola's free-text geocode,
+        //    which can land a city name tens of km away.
+        if (top.place_id) {
           try {
             const det = await apiClient.get(`/maps/place-details?place_id=${encodeURIComponent(top.place_id)}`);
             if (det.data?.success && det.data.data) {
@@ -1456,9 +1444,24 @@ export default function FinderDashboard() {
             console.log('[Search] (submit) Place details failed:', (err as any)?.message);
           }
         }
-        if ((isNaN(rLat) || isNaN(rLon) || !rLat || !rLon) && top.verified) {
+        // 2) A blended city carries an authoritative coordinate — use it.
+        if ((isNaN(rLat) || isNaN(rLon) || !rLat || !rLon) && top.verified && top.lat && top.lon) {
           rLat = parseFloat(top.lat);
           rLon = parseFloat(top.lon);
+          console.log(`[Search] (submit) Resolved "${top.display_name}" via city coord -> ${rLat},${rLon}`);
+        }
+        // 3) Last resort only: geocode the typed text.
+        if (isNaN(rLat) || isNaN(rLon) || !rLat || !rLon) {
+          try {
+            const geo = await apiClient.get(`/maps/geocode?q=${encodeURIComponent(searchQuery)}`);
+            if (geo.data?.success && geo.data.data) {
+              rLat = parseFloat(geo.data.data.lat);
+              rLon = parseFloat(geo.data.data.lon);
+              console.log(`[Search] (submit) Resolved "${searchQuery}" via geocode -> ${rLat},${rLon}`);
+            }
+          } catch (err) {
+            console.log('[Search] (submit) Geocode failed:', (err as any)?.message);
+          }
         }
         if (isNaN(rLat) || isNaN(rLon) || !rLat || !rLon) {
           throw new Error('No results');
@@ -1598,11 +1601,11 @@ export default function FinderDashboard() {
           console.log('[Search] Place details failed:', (e as any)?.message);
         }
       }
-      if (!resolved) {
-        // Geocode the SHORT primary name (e.g. "Mysuru"), not the long
-        // comma-heavy display string. The verbose admin tail (taluk, district,
-        // state, pincode) confuses the geocoder and lands the pin on a nearby
-        // node — the same short-query approach is why typing + Enter is accurate.
+      // A blended city (no place_id) already carries an authoritative coordinate
+      // in item.lat/lon, so keep it. Ola's free-text geocode is unreliable for
+      // names (a city can land tens of km off), so only geocode as a last resort
+      // when there is no usable coordinate at all.
+      if (!resolved && (!lat || !lon || isNaN(lat) || isNaN(lon))) {
         const geoQuery = (item.address?.name || (name || '').split(',')[0] || name).trim();
         try {
           const geo = await apiClient.get(`/maps/geocode?q=${encodeURIComponent(geoQuery)}`);
