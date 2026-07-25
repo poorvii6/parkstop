@@ -1437,20 +1437,9 @@ export default function FinderDashboard() {
           rLon = parseFloat(top.lon);
           console.log(`[Search] (submit) Resolved "${top.display_name}" via place coord -> ${rLat},${rLon}`);
         }
-        // 2) A specific place (POI) — resolve its exact coordinate by id.
-        if ((isNaN(rLat) || isNaN(rLon) || !rLat || !rLon) && top.place_id) {
-          try {
-            const det = await apiClient.get(`/maps/place-details?place_id=${encodeURIComponent(top.place_id)}`);
-            if (det.data?.success && det.data.data) {
-              rLat = parseFloat(det.data.data.lat);
-              rLon = parseFloat(det.data.data.lon);
-              console.log(`[Search] (submit) Resolved "${top.display_name}" via place_id -> ${rLat},${rLon}`);
-            }
-          } catch (err) {
-            console.log('[Search] (submit) Place details failed:', (err as any)?.message);
-          }
-        }
-        // 3) Last resort only: geocode the typed text.
+        // 2) Otherwise geocode the typed text (OpenStreetMap, importance-ranked).
+        //    Correct for cities/states/localities the user typed, and it does NOT
+        //    snap to a nearby biased POI the user never actually chose.
         if (isNaN(rLat) || isNaN(rLon) || !rLat || !rLon) {
           try {
             const geo = await apiClient.get(`/maps/geocode?q=${encodeURIComponent(searchQuery)}`);
@@ -1461,6 +1450,19 @@ export default function FinderDashboard() {
             }
           } catch (err) {
             console.log('[Search] (submit) Geocode failed:', (err as any)?.message);
+          }
+        }
+        // 3) Last resort: the top result's exact place id.
+        if ((isNaN(rLat) || isNaN(rLon) || !rLat || !rLon) && top.place_id) {
+          try {
+            const det = await apiClient.get(`/maps/place-details?place_id=${encodeURIComponent(top.place_id)}`);
+            if (det.data?.success && det.data.data) {
+              rLat = parseFloat(det.data.data.lat);
+              rLon = parseFloat(det.data.data.lon);
+              console.log(`[Search] (submit) Resolved "${top.display_name}" via place_id -> ${rLat},${rLon}`);
+            }
+          } catch (err) {
+            console.log('[Search] (submit) Place details failed:', (err as any)?.message);
           }
         }
         if (isNaN(rLat) || isNaN(rLon) || !rLat || !rLon) {
