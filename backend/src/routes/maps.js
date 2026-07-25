@@ -378,6 +378,25 @@ router.get('/geocode', async (req, res) => {
         const cached = getCached(cacheKey);
         if (cached) return res.json({ success: true, data: cached, cached: true });
 
+        // Resolve a place NAME via OpenStreetMap (Nominatim) FIRST. Ola's
+        // free-text geocode is unreliable for administrative names — it has
+        // dropped city/state searches tens or hundreds of km away (e.g. "Mysuru"
+        // ~30km off, "Jammu and Kashmir" onto Ludhiana). Nominatim is
+        // importance-ranked and returns the correct city / state / locality.
+        try {
+            const nomUrl = `https://nominatim.openstreetmap.org/search?format=json&countrycodes=in&limit=1&q=${encodeURIComponent(q)}`;
+            const nomRes = await fetch(nomUrl, { headers: { 'User-Agent': 'ParkStop-App' } });
+            const nomData = await nomRes.json();
+            if (Array.isArray(nomData) && nomData.length > 0 && nomData[0].lat && nomData[0].lon) {
+                const result = { lat: nomData[0].lat, lon: nomData[0].lon };
+                setCached(cacheKey, result);
+                return res.json({ success: true, data: result });
+            }
+        } catch (nomErr) {
+            console.error('[API ERROR] Nominatim geocode failed, trying Ola:', nomErr.message);
+        }
+
+        // Last resort: Ola's free-text geocode.
         const apiKey = process.env.OLA_MAPS_API_KEY;
         if (apiKey) {
             try {
@@ -393,18 +412,8 @@ router.get('/geocode', async (req, res) => {
                     }
                 }
             } catch (olaError) {
-                console.error('[API ERROR] Ola geocode failed, falling back to Nominatim:', olaError.message);
+                console.error('[API ERROR] Ola geocode failed:', olaError.message);
             }
-        }
-
-        // Nominatim fallback — always returns coordinates for a resolvable place.
-        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=1`;
-        const response = await fetch(url, { headers: { 'User-Agent': 'ParkStop-App' } });
-        const data = await response.json();
-        if (Array.isArray(data) && data.length > 0 && data[0].lat && data[0].lon) {
-            const result = { lat: data[0].lat, lon: data[0].lon };
-            setCached(cacheKey, result);
-            return res.json({ success: true, data: result });
         }
 
         return res.json({ success: false, message: 'Location not found' });

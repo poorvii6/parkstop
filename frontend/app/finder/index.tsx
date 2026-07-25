@@ -1429,10 +1429,16 @@ export default function FinderDashboard() {
         // path (Enter key) that kept landing everything in Bangalore.
         let rLat = NaN;
         let rLon = NaN;
-        // 1) Exact, canonical coordinate via the Ola place_id (place-details).
-        //    Reliable for both POIs and cities — unlike Ola's free-text geocode,
-        //    which can land a city name tens of km away.
-        if (top.place_id) {
+        // 1) A verified city / town / state / locality carries an authoritative
+        //    OpenStreetMap coordinate — the most reliable source for
+        //    administrative places (Ola's free-text geocode lands them wrong).
+        if (top.verified && top.lat && top.lon) {
+          rLat = parseFloat(top.lat);
+          rLon = parseFloat(top.lon);
+          console.log(`[Search] (submit) Resolved "${top.display_name}" via place coord -> ${rLat},${rLon}`);
+        }
+        // 2) A specific place (POI) — resolve its exact coordinate by id.
+        if ((isNaN(rLat) || isNaN(rLon) || !rLat || !rLon) && top.place_id) {
           try {
             const det = await apiClient.get(`/maps/place-details?place_id=${encodeURIComponent(top.place_id)}`);
             if (det.data?.success && det.data.data) {
@@ -1443,12 +1449,6 @@ export default function FinderDashboard() {
           } catch (err) {
             console.log('[Search] (submit) Place details failed:', (err as any)?.message);
           }
-        }
-        // 2) A blended city carries an authoritative coordinate — use it.
-        if ((isNaN(rLat) || isNaN(rLon) || !rLat || !rLon) && top.verified && top.lat && top.lon) {
-          rLat = parseFloat(top.lat);
-          rLon = parseFloat(top.lon);
-          console.log(`[Search] (submit) Resolved "${top.display_name}" via city coord -> ${rLat},${rLon}`);
         }
         // 3) Last resort only: geocode the typed text.
         if (isNaN(rLat) || isNaN(rLon) || !rLat || !rLon) {
@@ -1588,7 +1588,13 @@ export default function FinderDashboard() {
       // to its precise coordinate; if there's no id, geocode its name through
       // Ola (canonical) rather than trusting the biased autocomplete coordinate.
       let resolved = false;
-      if (item.place_id) {
+      // A verified city / town / state / locality carries an authoritative
+      // OpenStreetMap coordinate (item.lat/lon) — the most reliable source for
+      // administrative places, so use it as-is instead of Ola's shaky geocode.
+      if (item.verified && lat && lon && !isNaN(lat) && !isNaN(lon)) {
+        resolved = true;
+        console.log(`[Search] Resolved "${name}" via place coord -> ${lat},${lon}`);
+      } else if (item.place_id) {
         try {
           const det = await apiClient.get(`/maps/place-details?place_id=${encodeURIComponent(item.place_id)}`);
           if (det.data?.success && det.data.data) {
