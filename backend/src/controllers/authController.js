@@ -327,15 +327,41 @@ class AuthController {
         });
       }
 
+      // 1. Primary lookup: firebase_uid, the stable and secure identifier.
       let user = await prisma.users.findUnique({
         where: { firebase_uid: firebaseUid }
       });
 
       if (!user) {
-        // Fallback email link
-        user = await prisma.users.findUnique({
+        // 2. Fallback: an account already exists under this email, but with a
+        //    DIFFERENT (or no) Firebase identity. Linking here is only safe if
+        //    Firebase has actually verified that the caller controls the
+        //    address — otherwise anyone who can mint a Firebase identity
+        //    carrying a victim's email (e.g. an email/password signup that was
+        //    never verified) would be silently adopted into the victim's
+        //    ParkStop account, taking over their bookings, wallet and payouts.
+        const byEmail = await prisma.users.findUnique({
           where: { email: verifiedEmail }
         });
+
+        if (byEmail) {
+          if (decoded.email_verified === true) {
+            user = byEmail;
+          } else {
+            logger.warn(
+              `Refused to link firebase_uid ${firebaseUid} to existing user ${byEmail.id}: email ${verifiedEmail} is not verified`
+            );
+            // Explicit, non-500 answer. Falling through to the create branch
+            // would hit the unique-email constraint and surface a raw Prisma
+            // error, which is both confusing and leaks schema detail.
+            return res.status(409).json({
+              success: false,
+              code: 'EMAIL_NOT_VERIFIED',
+              message:
+                'An account already exists for this email. Please verify your email address, or sign in using the method you originally registered with.'
+            });
+          }
+        }
       }
 
       if (user) {
@@ -394,10 +420,13 @@ class AuthController {
       });
 
     } catch (error) {
+      // Log the detail, return a generic message. Echoing error.message leaked
+      // internals to the client (Prisma constraint names, column names, and so
+      // on) — useful to an attacker mapping the schema, useless to a user.
       logger.error('Profile synchronization error:', error);
       res.status(500).json({
         success: false,
-        message: 'Failed to synchronize profile: ' + error.message
+        message: 'Failed to synchronize profile. Please try again.'
       });
     }
   }
