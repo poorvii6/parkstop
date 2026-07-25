@@ -1429,12 +1429,22 @@ export default function FinderDashboard() {
         // path (Enter key) that kept landing everything in Bangalore.
         let rLat = NaN;
         let rLon = NaN;
-        if (top.verified) {
-          // Blended city result — coordinates are authoritative.
-          rLat = parseFloat(top.lat);
-          rLon = parseFloat(top.lon);
+        // The user typed a place NAME, so resolve that name canonically FIRST
+        // through the geocoder, which has no location bias. This is their actual
+        // intent and stops the pin snapping to a nearby look-alike POI — e.g. a
+        // petrol pump on "Mysore Road" in Bangalore when they searched "Mysore".
+        try {
+          const geo = await apiClient.get(`/maps/geocode?q=${encodeURIComponent(searchQuery)}`);
+          if (geo.data?.success && geo.data.data) {
+            rLat = parseFloat(geo.data.data.lat);
+            rLon = parseFloat(geo.data.data.lon);
+            console.log(`[Search] (submit) Resolved "${searchQuery}" via geocode -> ${rLat},${rLon}`);
+          }
+        } catch (err) {
+          console.log('[Search] (submit) Geocode failed:', (err as any)?.message);
         }
-        if ((isNaN(rLat) || !rLat) && top.place_id) {
+        // Fallbacks: the exact place via its id, then the blended city coordinate.
+        if ((isNaN(rLat) || isNaN(rLon) || !rLat || !rLon) && top.place_id) {
           try {
             const det = await apiClient.get(`/maps/place-details?place_id=${encodeURIComponent(top.place_id)}`);
             if (det.data?.success && det.data.data) {
@@ -1446,24 +1456,21 @@ export default function FinderDashboard() {
             console.log('[Search] (submit) Place details failed:', (err as any)?.message);
           }
         }
-        if (isNaN(rLat) || isNaN(rLon) || !rLat || !rLon) {
-          const geo = await apiClient.get(`/maps/geocode?q=${encodeURIComponent(top.display_name || searchQuery)}`);
-          if (geo.data?.success && geo.data.data) {
-            rLat = parseFloat(geo.data.data.lat);
-            rLon = parseFloat(geo.data.data.lon);
-            console.log(`[Search] (submit) Resolved "${top.display_name || searchQuery}" via geocode -> ${rLat},${rLon}`);
-          }
+        if ((isNaN(rLat) || isNaN(rLon) || !rLat || !rLon) && top.verified) {
+          rLat = parseFloat(top.lat);
+          rLon = parseFloat(top.lon);
         }
         if (isNaN(rLat) || isNaN(rLon) || !rLat || !rLon) {
           throw new Error('No results');
         }
 
-        setSearchedPlace({ lat: rLat, lng: rLon, title: top.display_name || searchQuery });
+        setSearchedPlace({ lat: rLat, lng: rLon, title: searchQuery });
         setStep('home');
+        setIsFollowing(false); // stop following the user so the camera settles on the searched place
         if (mapRef.current) {
           mapRef.current.animateCamera({
             center: { latitude: rLat, longitude: rLon },
-            zoom: 13
+            zoom: (top && top.verified) ? 12 : 15
           }, { duration: 1200 });
         }
         await fetchNearbySpots(rLat, rLon, 1000);
@@ -1573,28 +1580,36 @@ export default function FinderDashboard() {
     // unreliable (location-biased, sometimes pointing at nearby lookalikes,
     // e.g. "Mumbai" landing in Bangalore). Only internal parking spots keep
     // their own coordinates. Fallbacks: provided coords, then text geocode.
-    if (!item.isInternal && !item.verified) {
+    if (!item.isInternal) {
+      // Exact, canonical resolution — like Google: resolve the place's own id
+      // to its precise coordinate; if there's no id, geocode its name through
+      // Ola (canonical) rather than trusting the biased autocomplete coordinate.
+      let resolved = false;
       if (item.place_id) {
         try {
           const det = await apiClient.get(`/maps/place-details?place_id=${encodeURIComponent(item.place_id)}`);
           if (det.data?.success && det.data.data) {
             lat = parseFloat(det.data.data.lat);
             lon = parseFloat(det.data.data.lon);
+            resolved = true;
             console.log(`[Search] Resolved "${name}" via place_id -> ${lat},${lon}`);
           }
         } catch (e) {
           console.log('[Search] Place details failed:', (e as any)?.message);
         }
       }
-      // No place_id (or resolution failed): never trust the biased
-      // autocomplete coords — geocode the display text instead.
-      if (!item.place_id || !lat || !lon || isNaN(lat) || isNaN(lon)) {
+      if (!resolved) {
+        // Geocode the SHORT primary name (e.g. "Mysuru"), not the long
+        // comma-heavy display string. The verbose admin tail (taluk, district,
+        // state, pincode) confuses the geocoder and lands the pin on a nearby
+        // node — the same short-query approach is why typing + Enter is accurate.
+        const geoQuery = (item.address?.name || (name || '').split(',')[0] || name).trim();
         try {
-          const geo = await apiClient.get(`/maps/geocode?q=${encodeURIComponent(name)}`);
+          const geo = await apiClient.get(`/maps/geocode?q=${encodeURIComponent(geoQuery)}`);
           if (geo.data?.success && geo.data.data) {
             lat = parseFloat(geo.data.data.lat);
             lon = parseFloat(geo.data.data.lon);
-            console.log(`[Search] Resolved "${name}" via geocode -> ${lat},${lon}`);
+            console.log(`[Search] Resolved "${geoQuery}" via geocode -> ${lat},${lon}`);
           }
         } catch (e) {
           console.log('[Search] Geocode failed:', (e as any)?.message);
@@ -1610,20 +1625,21 @@ export default function FinderDashboard() {
 
     saveRecentSearch(item);
     ignoreNextQueryChange.current = true;
-    setSearchQuery(name);
+    setSearchQuery((item.address?.name || (name || '').split(',')[0] || name).trim());
     setSuggestions([]);
     setIsSearching(false);
     setSearchFocused(false);
     Keyboard.dismiss();
 
     // First: show the destination pin on the map
-    setSearchedPlace({ lat, lng: lon, title: name });
+    setSearchedPlace({ lat, lng: lon, title: (item.address?.name || (name || '').split(',')[0] || name).trim() });
     setStep('home');
     setIsFollowing(false);
+    const isArea = !!item && (item.verified || ['city', 'town', 'village', 'state', 'administrative', 'suburb', 'municipality', 'district', 'county', 'region'].includes(String(item.type || '').toLowerCase()));
     if (mapRef.current) {
       mapRef.current.animateCamera({
         center: { latitude: lat, longitude: lon },
-        zoom: 13
+        zoom: isArea ? 12 : 16
       }, { duration: 1200 });
     }
     // Then: fetch all available spots in that area

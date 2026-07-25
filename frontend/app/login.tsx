@@ -39,14 +39,9 @@ export default function LoginScreen() {
 
         const isDualUser = user.is_finder_registered && user.is_spotter_registered;
         await AsyncStorage.setItem('is_dual_user', isDualUser ? 'true' : 'false');
-        if (isDualUser) {
-          router.replace('/role-selection');
-        } else {
-          if (role === 'ADMIN') router.replace('/admin');
-          else if (role === 'SPOTTER') router.replace('/spotter');
-          else if (role === 'FINDER') router.replace('/finder');
-          else router.replace('/role-selection');
-        }
+        // After sign-in, returning users pick their role next
+        if (role === 'ADMIN') router.replace('/admin');
+        else router.replace('/role-selection');
       }
     } catch (error: any) {
       console.error('[AUTH] Login Error:', error.response?.data || error.message);
@@ -137,14 +132,9 @@ export default function LoginScreen() {
 
         const isDualUser = user.is_finder_registered && user.is_spotter_registered;
         await AsyncStorage.setItem('is_dual_user', isDualUser ? 'true' : 'false');
-        if (isDualUser) {
-          router.replace('/role-selection');
-        } else {
-          if (role === 'ADMIN') router.replace('/admin');
-          else if (role === 'SPOTTER') router.replace('/spotter');
-          else if (role === 'FINDER') router.replace('/finder');
-          else router.replace('/role-selection');
-        }
+        // After sign-in, returning users pick their role next
+        if (role === 'ADMIN') router.replace('/admin');
+        else router.replace('/role-selection');
       }
     } catch (error: any) {
       console.error('[SOCIAL AUTH] OAuth Error:', error);

@@ -13,7 +13,7 @@ export default function SpotterTabsLayout() {
     const checkRole = async () => {
       const role = await AsyncStorage.getItem('user_role');
       if (role?.toUpperCase() !== 'SPOTTER') {
-        router.replace('/welcome');
+        router.replace('/role-selection');
       } else {
         setCheckingAuth(false);
       }

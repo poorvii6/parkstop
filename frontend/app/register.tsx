@@ -15,6 +15,7 @@ export default function RegisterScreen() {
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<'FINDER' | 'SPOTTER'>('FINDER');
   const [loading, setLoading] = useState(false);
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
 
   // Email OTP States
   const [otpModalVisible, setOtpModalVisible] = useState(false);
@@ -57,6 +58,10 @@ export default function RegisterScreen() {
   };
 
   const handleSocialLogin = async (providerName: 'google') => {
+    if (!agreedToTerms) {
+      Alert.alert('Terms Required', 'Please accept the Terms of Service to continue.');
+      return;
+    }
     try {
       setLoading(true);
       if (__DEV__) console.log(`[SOCIAL AUTH] Triggering Firebase Google Sign-In...`);
@@ -133,15 +138,8 @@ export default function RegisterScreen() {
 
         const isDualUser = user.is_finder_registered && user.is_spotter_registered;
         await AsyncStorage.setItem('is_dual_user', isDualUser ? 'true' : 'false');
-        if (isDualUser) {
-          router.replace('/role-selection');
-        } else {
-          const r = user.role ? user.role.toUpperCase() : '';
-          if (r === 'ADMIN') router.replace('/admin');
-          else if (r === 'SPOTTER') router.replace('/spotter');
-          else if (r === 'FINDER') router.replace('/finder');
-          else router.replace('/role-selection');
-        }
+        // Continue to role selection
+        router.replace('/role-selection');
       }
     } catch (error: any) {
       console.error('[SOCIAL AUTH] OAuth Error:', error);
@@ -155,6 +153,11 @@ export default function RegisterScreen() {
     // 1. Basic empty check
     if (!name || !email || !password || !phone) {
       return Alert.alert('Oops', 'Please fill out everything');
+    }
+
+    // Require Terms acceptance
+    if (!agreedToTerms) {
+      return Alert.alert('Terms Required', 'Please accept the Terms of Service to continue.');
     }
 
     // 2. Gmail format validation
@@ -265,15 +268,8 @@ export default function RegisterScreen() {
 
           const isDualUser = user.is_finder_registered && user.is_spotter_registered;
           await AsyncStorage.setItem('is_dual_user', isDualUser ? 'true' : 'false');
-          if (isDualUser) {
-            router.replace('/role-selection');
-          } else {
-            const r = user.role ? user.role.toUpperCase() : '';
-            if (r === 'ADMIN') router.replace('/admin');
-            else if (r === 'SPOTTER') router.replace('/spotter');
-            else if (r === 'FINDER') router.replace('/finder');
-            else router.replace('/role-selection');
-          }
+          // New account -> continue to role selection
+          router.replace('/role-selection');
         }
       } catch (backendError: any) {
         console.error('[AUTH] Backend register failed, rolling back Firebase user:', backendError.response?.data || backendError.message);
@@ -318,20 +314,7 @@ export default function RegisterScreen() {
             <Text style={styles.subtitle}>Join the network and start parking.</Text>
           </View>
 
-          <View style={styles.roleContainer}>
-            <TouchableOpacity
-              style={[styles.roleButton, role === 'FINDER' && styles.roleButtonActive]}
-              onPress={() => setRole('FINDER')}
-            >
-              <Text style={[styles.roleText, role === 'FINDER' && styles.roleTextActive]}>Finder</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.roleButton, role === 'SPOTTER' && styles.roleButtonActive]}
-              onPress={() => setRole('SPOTTER')}
-            >
-              <Text style={[styles.roleText, role === 'SPOTTER' && styles.roleTextActive]}>Spot Owner</Text>
-            </TouchableOpacity>
-          </View>
+          {/* Role is chosen after account creation, on the role-selection screen */}
 
           <View style={styles.inputSection}>
             <View style={styles.inputWrapper}>
@@ -381,14 +364,25 @@ export default function RegisterScreen() {
           </View>
 
           <View style={styles.footer}>
-            <TouchableOpacity style={BlueprintTheme.buttonPrimary} onPress={handleRegister} disabled={loading}>
+            {/* Terms agreement — required before creating an account */}
+            <TouchableOpacity style={styles.termsRow} onPress={() => setAgreedToTerms((v) => !v)} activeOpacity={0.8}>
+              <View style={[styles.checkbox, agreedToTerms && styles.checkboxChecked]}>
+                {agreedToTerms && <Text style={styles.checkboxMark}>✓</Text>}
+              </View>
+              <Text style={styles.termsLabel}>
+                I agree to the{' '}
+                <Text style={styles.termsLink} onPress={() => router.push('/terms')}>Terms of Service & Privacy Policy</Text>
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={[BlueprintTheme.buttonPrimary, (!agreedToTerms || loading) && styles.btnDisabled]} onPress={handleRegister} disabled={loading || !agreedToTerms}>
               {loading ? <ActivityIndicator color="#FFFFFF" /> : <Text style={BlueprintTheme.buttonPrimaryText}>Sign Up</Text>}
             </TouchableOpacity>
 
             <TouchableOpacity 
               style={[styles.googleBtn, { backgroundColor: '#FFFFFF' }]} 
               onPress={() => handleSocialLogin('google')}
-              disabled={loading}
+              disabled={loading || !agreedToTerms}
             >
               <Text style={[styles.googleBtnText, { color: '#000000' }]}>Continue with Google</Text>
             </TouchableOpacity>
@@ -521,6 +515,13 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.1)'
   },
   googleBtnText: { color: '#FFFFFF', fontWeight: '700', fontSize: 16 },
+  btnDisabled: { opacity: 0.4 },
+  termsRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 8, paddingHorizontal: 2 },
+  checkbox: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: BlueprintColors.primaryAccent, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.05)', marginTop: 1 },
+  checkboxChecked: { backgroundColor: BlueprintColors.primaryAccent, borderColor: BlueprintColors.primaryAccent },
+  checkboxMark: { color: '#FFFFFF', fontSize: 13, fontWeight: 'bold' },
+  termsLabel: { flex: 1, color: BlueprintColors.textSecondary, fontSize: 13, lineHeight: 19 },
+  termsLink: { color: BlueprintColors.primaryAccent, fontWeight: '700' },
   // OTP Modal Styles
   modalOverlay: {
     flex: 1,
