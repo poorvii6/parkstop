@@ -1429,31 +1429,26 @@ export default function FinderDashboard() {
         // path (Enter key) that kept landing everything in Bangalore.
         let rLat = NaN;
         let rLon = NaN;
-        // 1) A verified city / town / state: prefer Ola's curated place centre
-        //    (place-details), then its OpenStreetMap coordinate. Both beat Ola's
-        //    free-text geocode, which lands administrative names wildly wrong.
-        if (top.verified) {
-          if (top.place_id) {
-            try {
-              const det = await apiClient.get(`/maps/place-details?place_id=${encodeURIComponent(top.place_id)}`);
-              if (det.data?.success && det.data.data) {
-                rLat = parseFloat(det.data.data.lat);
-                rLon = parseFloat(det.data.data.lon);
-                console.log(`[Search] (submit) Resolved "${top.display_name}" via place_id -> ${rLat},${rLon}`);
-              }
-            } catch (err) {
-              console.log('[Search] (submit) Place details failed:', (err as any)?.message);
+        // Resolve the top suggestion by its Ola place_id -> exact coordinate
+        // (place-details). This is the accurate, Google-style path.
+        if (top.place_id) {
+          try {
+            const det = await apiClient.get(`/maps/place-details?place_id=${encodeURIComponent(top.place_id)}`);
+            if (det.data?.success && det.data.data) {
+              rLat = parseFloat(det.data.data.lat);
+              rLon = parseFloat(det.data.data.lon);
+              console.log(`[Search] (submit) Resolved "${top.display_name}" via place_id -> ${rLat},${rLon}`);
             }
-          }
-          if ((isNaN(rLat) || isNaN(rLon) || !rLat || !rLon) && top.lat && top.lon) {
-            rLat = parseFloat(top.lat);
-            rLon = parseFloat(top.lon);
-            console.log(`[Search] (submit) Resolved "${top.display_name}" via place coord -> ${rLat},${rLon}`);
+          } catch (err) {
+            console.log('[Search] (submit) Place details failed:', (err as any)?.message);
           }
         }
-        // 2) Otherwise geocode the typed text (OpenStreetMap, importance-ranked).
-        //    Correct for cities/states/localities the user typed, and it does NOT
-        //    snap to a nearby biased POI the user never actually chose.
+        // Safety net only, if place-details is unavailable: the result's own
+        // coordinate when valid, otherwise a plain text geocode.
+        if ((isNaN(rLat) || isNaN(rLon) || !rLat || !rLon) && top.lat && top.lon && parseFloat(top.lat) !== 0) {
+          rLat = parseFloat(top.lat);
+          rLon = parseFloat(top.lon);
+        }
         if (isNaN(rLat) || isNaN(rLon) || !rLat || !rLon) {
           try {
             const geo = await apiClient.get(`/maps/geocode?q=${encodeURIComponent(searchQuery)}`);
@@ -1464,19 +1459,6 @@ export default function FinderDashboard() {
             }
           } catch (err) {
             console.log('[Search] (submit) Geocode failed:', (err as any)?.message);
-          }
-        }
-        // 3) Last resort: the top result's exact place id.
-        if ((isNaN(rLat) || isNaN(rLon) || !rLat || !rLon) && top.place_id) {
-          try {
-            const det = await apiClient.get(`/maps/place-details?place_id=${encodeURIComponent(top.place_id)}`);
-            if (det.data?.success && det.data.data) {
-              rLat = parseFloat(det.data.data.lat);
-              rLon = parseFloat(det.data.data.lon);
-              console.log(`[Search] (submit) Resolved "${top.display_name}" via place_id -> ${rLat},${rLon}`);
-            }
-          } catch (err) {
-            console.log('[Search] (submit) Place details failed:', (err as any)?.message);
           }
         }
         if (isNaN(rLat) || isNaN(rLon) || !rLat || !rLon) {
@@ -1604,27 +1586,8 @@ export default function FinderDashboard() {
       // to its precise coordinate; if there's no id, geocode its name through
       // Ola (canonical) rather than trusting the biased autocomplete coordinate.
       let resolved = false;
-      if (item.verified) {
-        // Verified city/town/state: prefer Ola's curated place centre, then its
-        // OpenStreetMap coordinate. Both beat Ola's shaky free-text geocode.
-        if (item.place_id) {
-          try {
-            const det = await apiClient.get(`/maps/place-details?place_id=${encodeURIComponent(item.place_id)}`);
-            if (det.data?.success && det.data.data) {
-              lat = parseFloat(det.data.data.lat);
-              lon = parseFloat(det.data.data.lon);
-              resolved = true;
-              console.log(`[Search] Resolved "${name}" via place_id -> ${lat},${lon}`);
-            }
-          } catch (e) {
-            console.log('[Search] Place details failed:', (e as any)?.message);
-          }
-        }
-        if (!resolved && lat && lon && !isNaN(lat) && !isNaN(lon)) {
-          resolved = true;
-          console.log(`[Search] Resolved "${name}" via place coord -> ${lat},${lon}`);
-        }
-      } else if (item.place_id) {
+      // Resolve the selected place by its Ola place_id -> exact coordinate.
+      if (item.place_id) {
         try {
           const det = await apiClient.get(`/maps/place-details?place_id=${encodeURIComponent(item.place_id)}`);
           if (det.data?.success && det.data.data) {
@@ -1637,10 +1600,8 @@ export default function FinderDashboard() {
           console.log('[Search] Place details failed:', (e as any)?.message);
         }
       }
-      // A blended city (no place_id) already carries an authoritative coordinate
-      // in item.lat/lon, so keep it. Ola's free-text geocode is unreliable for
-      // names (a city can land tens of km off), so only geocode as a last resort
-      // when there is no usable coordinate at all.
+      // Safety net only, if place-details is unavailable: the result's own valid
+      // coordinate, else a plain text geocode.
       if (!resolved && (!lat || !lon || isNaN(lat) || isNaN(lon))) {
         const geoQuery = (item.address?.name || (name || '').split(',')[0] || name).trim();
         try {

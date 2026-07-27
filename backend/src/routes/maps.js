@@ -163,8 +163,6 @@ router.get('/search', async (req, res) => {
 
         if (apiKey) {
             try {
-                // City lookup runs in PARALLEL with Ola — no added latency.
-                const cityPromise = q.length >= 3 ? fetchIndianCityMatches(q) : Promise.resolve([]);
                 // No location bias: this is a DESTINATION search, so suggestions
                 // must rank by how well they match the typed text — not by how
                 // close they are to the user, which was dragging locality searches
@@ -211,45 +209,24 @@ router.get('/search', async (req, res) => {
                         };
                     });
 
-                    // Blend authoritative city/town matches on TOP of Ola's
-                    // results (Google-style): real cities always appear even
-                    // when Ola's biased autocomplete omits them. Ola entries
-                    // whose name exactly matches a blended city are dropped as
-                    // lookalike noise (e.g. a Bangalore bus stop named "Hubli").
-                    const cityMatches = await cityPromise;
-                    // Give each blended city the Ola place_id of the matching prediction, so the
-                    // app resolves it to Ola's exact centre via place-details. Ola's free-text
-                    // geocode is unreliable for city names (it can land tens of km away), whereas
-                    // place-details is precise.
-                    const olaPidByName = new Map();
-                    for (const m of mappedData) {
-                        const f = (m.display_name || '').split(',')[0].trim().toLowerCase();
-                        if (m.place_id && !olaPidByName.has(f)) olaPidByName.set(f, m.place_id);
-                    }
-                    for (const c of cityMatches) {
-                        const f = (c.display_name || '').split(',')[0].trim().toLowerCase();
-                        if (olaPidByName.has(f)) c.place_id = olaPidByName.get(f);
-                    }
-                    const cityNames = new Set(cityMatches.map(c => (c.display_name || '').split(',')[0].trim().toLowerCase()));
-    const filteredOla = mappedData.filter(m => {
-                        const first = (m.display_name || '').split(',')[0].trim().toLowerCase();
-                        return !cityNames.has(first);
-                    });
-                    // Groom: results whose primary name STARTS WITH the typed
-                    // query rank above loose lookalikes (stable within groups).
+                    // Pure Ola: return the autocomplete predictions directly. Each
+                    // carries a place_id, and the app resolves the SELECTED one via
+                    // place-details for an exact coordinate — no OSM blend and no
+                    // free-text geocode (both were the source of wrong pins).
+                    // Results whose primary name starts with the query float up.
                     const ql = q.toLowerCase();
                     const prefixRank = (m) => ((m.display_name || '').split(',')[0].trim().toLowerCase().startsWith(ql) ? 0 : 1);
-                    filteredOla.sort((a, b) => prefixRank(a) - prefixRank(b));
-                    const merged = [...cityMatches, ...filteredOla].slice(0, 10);
+                    const results = mappedData
+                        .filter(m => m.place_id)
+                        .sort((a, b) => prefixRank(a) - prefixRank(b))
+                        .slice(0, 10);
 
-                    // Annotate distance for display only — NEVER re-sort by it
-                    // (distance-sorting is what buried real cities under nearby
-                    // lookalikes in the first place).
+                    // Annotate distance for display only — never re-sort by it.
                     if (lat && lon) {
                         const userLat = parseFloat(lat);
                         const userLon = parseFloat(lon);
                         if (!isNaN(userLat) && !isNaN(userLon) && userLat !== 0 && userLon !== 0) {
-                            merged.forEach(item => {
+                            results.forEach(item => {
                                 const itemLat = parseFloat(item.lat);
                                 const itemLon = parseFloat(item.lon);
                                 if (!isNaN(itemLat) && !isNaN(itemLon) && itemLat !== 0 && itemLon !== 0) {
@@ -259,8 +236,8 @@ router.get('/search', async (req, res) => {
                         }
                     }
 
-                    setCached(cacheKey, merged);
-                    return res.json({ success: true, data: merged });
+                    setCached(cacheKey, results);
+                    return res.json({ success: true, data: results });
             } catch (olaError) {
                 console.error('[API ERROR] Ola Maps search failed, falling back to Nominatim:', olaError.message);
             }
