@@ -75,16 +75,22 @@ class LRUCache {
 // blended to the top of suggestions with authoritative coordinates.
 async function fetchIndianCityMatches(q) {
     try {
-        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=5&addressdetails=0&countrycodes=in`;
+        // Broad coverage from tier-1 cities down to villages. Ask for more
+        // results and accept every populated-place + administrative type.
+        // Nominatim returns them importance-ranked, so the most significant
+        // match (e.g. "Andheri" -> Andheri, Mumbai) surfaces first regardless
+        // of where the user currently is.
+        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=12&addressdetails=1&countrycodes=in`;
         const r = await fetch(url, { headers: { 'User-Agent': 'ParkStop-App' } });
         if (!r.ok) return [];
         const data = await r.json();
+        const PLACE_TYPES = ['city', 'town', 'village', 'hamlet', 'municipality', 'suburb', 'neighbourhood', 'quarter', 'city_district', 'locality'];
         return (Array.isArray(data) ? data : [])
             .filter(it =>
-                (it.class === 'place' && ['city', 'town', 'village', 'municipality', 'suburb'].includes(it.type)) ||
+                (it.class === 'place' && PLACE_TYPES.includes(it.type)) ||
                 (it.class === 'boundary' && it.type === 'administrative')
             )
-            .slice(0, 3)
+            .slice(0, 6)
             .map(it => ({
                 display_name: it.display_name,
                 lat: it.lat,
