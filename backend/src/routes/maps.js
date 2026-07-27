@@ -165,14 +165,11 @@ router.get('/search', async (req, res) => {
             try {
                 // City lookup runs in PARALLEL with Ola — no added latency.
                 const cityPromise = q.length >= 3 ? fetchIndianCityMatches(q) : Promise.resolve([]);
-                let url = `https://api.olamaps.io/places/v1/autocomplete?input=${encodeURIComponent(q)}&api_key=${apiKey}`;
-                if (lat && lon) {
-                    const l = parseFloat(lat);
-                    const n = parseFloat(lon);
-                    if (!isNaN(l) && !isNaN(n) && l !== 0 && n !== 0) {
-                        url += `&location=${l},${n}`;
-                    }
-                }
+                // No location bias: this is a DESTINATION search, so suggestions
+                // must rank by how well they match the typed text — not by how
+                // close they are to the user, which was dragging locality searches
+                // (e.g. "Nagarbhavi") toward wherever the user happened to be.
+                const url = `https://api.olamaps.io/places/v1/autocomplete?input=${encodeURIComponent(q)}&api_key=${apiKey}`;
 
                 const response = await fetch(url, {
                     headers: { 'X-Request-Id': `req-${Date.now()}` }
