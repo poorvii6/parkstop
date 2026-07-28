@@ -59,7 +59,16 @@ type Props = {
  */
 function SpotMarker({ m, onPress }: { m: { id: string; lat: number; lng: number; price: number; available: boolean }; onPress: () => void }) {
   const [track, setTrack] = useState(true);
-  useEffect(() => { setTrack(true); }, [m.price, m.available]);
+  const timer = useRef<any>(null);
+  // Every layout pass re-arms the snapshot window, so when the text finishes
+  // measuring (widening the pill), the FULL-WIDTH pill is what gets rasterised.
+  // This kills the clipped "P ₹" bug for good.
+  const arm = () => {
+    setTrack(true);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setTrack(false), 650);
+  };
+  useEffect(() => { arm(); return () => { if (timer.current) clearTimeout(timer.current); }; }, [m.price, m.available]);
   return (
     <Marker
       identifier={String(m.id)}
@@ -68,12 +77,10 @@ function SpotMarker({ m, onPress }: { m: { id: string; lat: number; lng: number;
       tracksViewChanges={track}
       onPress={onPress}
     >
-      <View
-        style={[styles.spotPill, !m.available && styles.spotPillUnavailable]}
-        onLayout={() => setTimeout(() => setTrack(false), 400)}
-      >
-        <View style={styles.spotPBadge}><Text style={styles.spotPLetter}>P</Text></View>
-        <Text style={styles.spotPillText} numberOfLines={1}>₹{m.price}<Text style={styles.spotPillPerHr}>/hr</Text></Text>
+      <View style={[styles.spotPill, !m.available && styles.spotPillUnavailable]} onLayout={arm}>
+        <View style={styles.spotPBadge}><Text style={styles.spotPLetter} allowFontScaling={false}>P</Text></View>
+        <Text style={styles.spotPillText} numberOfLines={1} allowFontScaling={false}>₹{m.price}</Text>
+        <Text style={styles.spotPillPerHr} numberOfLines={1} allowFontScaling={false}>/hr</Text>
       </View>
     </Marker>
   );
@@ -266,15 +273,22 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
 
   // A user gesture (pan / pinch-zoom / rotate) releases the follow-camera so it
   // stops re-centering under the user's fingers. Google reports isGesture here.
+  // Live-read the map's rotation for the compass, throttled so gestures stay smooth.
+  const lastHeadingRead = useRef(0);
+  const readHeading = () => {
+    const now = Date.now();
+    if (now - lastHeadingRead.current < 90) return;
+    lastHeadingRead.current = now;
+    mapRef.current?.getCamera?.().then((cam: any) => {
+      if (cam && typeof cam.heading === 'number') setMapHeading(cam.heading);
+    }).catch(() => {});
+  };
   const handleRegionChangeComplete = (_region: any, details?: any) => {
     if (details?.isGesture) {
       lastInteraction.current = Date.now();
       if (propsRef.current.isFollowing) propsRef.current.onMapInteraction?.();
     }
-    // Keep the custom compass in sync with the map's rotation.
-    mapRef.current?.getCamera?.().then((cam: any) => {
-      if (cam && typeof cam.heading === 'number') setMapHeading(cam.heading);
-    }).catch(() => {});
+    readHeading();
   };
 
   // Stepwise zoom for the +/- buttons (Google-style controls).
@@ -353,6 +367,7 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
         onPress={handlePress}
         onPanDrag={handlePanDrag}
         onRegionChangeComplete={handleRegionChangeComplete}
+        onRegionChange={readHeading}
         onUserLocationChange={handleUserLocationChange}
         // Push Google's native controls (My Location button, compass) below the
         // search bar and above the bottom sheet, and lift the Google logo clear.
@@ -427,8 +442,10 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
             onPress={() => { markProgrammatic(500); mapRef.current?.animateCamera({ heading: 0 }, { duration: 350 }); setMapHeading(0); }}
             activeOpacity={0.85}
           >
-            <View style={{ transform: [{ rotate: `${-mapHeading}deg` }] }}>
-              <Ionicons name="compass" size={26} color="#EA4335" />
+            <View style={[styles.compassNeedle, { transform: [{ rotate: `${-mapHeading}deg` }] }]}>
+              <View style={styles.compassN} />
+              <View style={styles.compassS} />
+              {Math.abs(mapHeading) > 1 ? <Text style={styles.compassNLabel}>N</Text> : null}
             </View>
           </TouchableOpacity>
 
@@ -471,12 +488,12 @@ const styles = StyleSheet.create({
   userDotCore: { width: 15, height: 15, borderRadius: 7.5, backgroundColor: '#1a73e8' },
   // Fixed-size pieces so Android measures the marker correctly (no clipping):
   // a white "P" badge + price on a rounded blue pill with a soft shadow.
-  spotPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#4285F4', paddingLeft: 4, paddingRight: 10, paddingVertical: 4, borderRadius: 16, borderWidth: 2, borderColor: '#fff', shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 4 },
+  spotPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#4285F4', paddingLeft: 4, paddingRight: 12, paddingVertical: 4, borderRadius: 16, borderWidth: 2, borderColor: '#fff' },
   spotPillUnavailable: { backgroundColor: '#9aa0a6' },
   spotPBadge: { width: 17, height: 17, borderRadius: 8.5, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', marginRight: 5 },
   spotPLetter: { color: '#4285F4', fontWeight: '900', fontSize: 11, lineHeight: 13 },
   spotPillText: { color: '#fff', fontWeight: '800', fontSize: 12, lineHeight: 14 },
-  spotPillPerHr: { color: 'rgba(255,255,255,0.85)', fontWeight: '600', fontSize: 10 },
+  spotPillPerHr: { color: 'rgba(255,255,255,0.85)', fontWeight: '600', fontSize: 10, marginLeft: 1 },
   navArrowWrap: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#1a73e8', borderWidth: 3, borderColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 6 },
   navArrow: { width: 0, height: 0, borderLeftWidth: 9, borderRightWidth: 9, borderBottomWidth: 18, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: '#fff', marginTop: -3 },
   recenterBtn: { position: 'absolute', right: 16, width: 48, height: 48, borderRadius: 24, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 6, shadowOffset: { width: 0, height: 3 }, elevation: 6 },
@@ -484,6 +501,10 @@ const styles = StyleSheet.create({
   zoomPill: { position: 'absolute', right: 16, width: 46, borderRadius: 23, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', paddingVertical: 2, shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 6 },
   zoomBtn: { width: 46, height: 42, alignItems: 'center', justifyContent: 'center' },
   zoomDivider: { width: 24, height: 1, backgroundColor: 'rgba(0,0,0,0.08)' },
+  compassNeedle: { width: 20, height: 24, alignItems: 'center', justifyContent: 'center' },
+  compassN: { width: 0, height: 0, borderLeftWidth: 6, borderRightWidth: 6, borderBottomWidth: 11, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: '#EA4335' },
+  compassS: { width: 0, height: 0, borderLeftWidth: 6, borderRightWidth: 6, borderTopWidth: 11, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderTopColor: '#c1c7cd' },
+  compassNLabel: { position: 'absolute', top: -8, color: '#EA4335', fontSize: 8, fontWeight: '900' },
   destPinWrap: { alignItems: 'center' },
   destPinHead: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#EA4335', borderWidth: 2.5, borderColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 5, zIndex: 2 },
   destPinInner: { width: 9, height: 9, borderRadius: 4.5, backgroundColor: '#fff' },
