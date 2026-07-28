@@ -1646,6 +1646,34 @@ export default function FinderDashboard() {
     await fetchNearbySpots(lat, lon, 1000);
   };
 
+  // "Directions" from the place card: route to the nearest available parking
+  // near the searched place, opening its route + booking card (Option B — you
+  // navigate to a spot near the destination, not the destination itself).
+  const handleDirectionsToNearest = () => {
+    if (!searchedPlace) return;
+    const withCoords = spots.filter((s: any) => s.lat && s.lng);
+    const pool = withCoords.filter((s: any) => s.available);
+    const cand = pool.length > 0 ? pool : withCoords;
+    if (cand.length === 0) {
+      Alert.alert('No parking found', 'No parking spots are available near this place yet.');
+      return;
+    }
+    const d2 = (s: any) => {
+      const a = s.lat - searchedPlace.lat;
+      const b = (s.lng - searchedPlace.lng) * Math.cos((searchedPlace.lat * Math.PI) / 180);
+      return a * a + b * b;
+    };
+    const nearest = cand.reduce((best: any, s: any) => (d2(s) < d2(best) ? s : best), cand[0]);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setIsFollowing(false);
+    setSelectedSpotId(nearest.id);
+    fetchSlots(nearest.id);
+    setStep('spot_booking');
+    if (mapRef.current) {
+      mapRef.current.animateCamera({ center: { latitude: nearest.lat - 0.0012, longitude: nearest.lng }, zoom: 17 }, { duration: 1000 });
+    }
+  };
+
 
   const centerRoute = () => {
     if (userLocation && selectedSpotId) {
@@ -2250,6 +2278,37 @@ export default function FinderDashboard() {
             )}
           </View>
 
+          {/* Google-style place card — after a place is selected, before a
+              spot is chosen. Directions routes to the nearest parking (Option B). */}
+          {searchedPlace && !selectedSpotId && suggestions.length === 0 && (
+            <View style={{ position: 'absolute', top: Platform.OS === 'ios' ? 82 : 74, left: 16, right: 16, zIndex: 95, backgroundColor: '#fff', borderRadius: 16, paddingVertical: 12, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 12, elevation: 8 }}>
+              <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(234,67,53,0.12)', alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
+                <Ionicons name="location" size={20} color="#EA4335" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: '#202124', fontSize: 14, fontWeight: '700' }} numberOfLines={1}>{searchedPlace.title}</Text>
+                <Text style={{ color: '#5f6368', fontSize: 12, marginTop: 2 }} numberOfLines={1}>
+                  {(() => {
+                    let d = '';
+                    if (userLocation) {
+                      const R = 6371;
+                      const dLat = (searchedPlace.lat - userLocation.lat) * Math.PI / 180;
+                      const dLng = (searchedPlace.lng - userLocation.lng) * Math.PI / 180;
+                      const a = Math.sin(dLat / 2) ** 2 + Math.cos(userLocation.lat * Math.PI / 180) * Math.cos(searchedPlace.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+                      const km = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                      d = km < 1 ? `${Math.round(km * 1000)} m away` : `${km.toFixed(1)} km away`;
+                    }
+                    const n = spots.filter((s: any) => s.available).length;
+                    return [d, n > 0 ? `${n} parking nearby` : 'searching parking…'].filter(Boolean).join(' • ');
+                  })()}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={handleDirectionsToNearest} activeOpacity={0.85} style={{ backgroundColor: '#1a73e8', borderRadius: 22, paddingHorizontal: 16, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', marginLeft: 8 }}>
+                <Ionicons name="navigate" size={15} color="#fff" style={{ marginRight: 5 }} />
+                <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>Directions</Text>
+              </TouchableOpacity>
+            </View>
+          )}
           {/* Nearby Spots Bottom Sheet */}
           <View style={{ 
             position: 'absolute', bottom: 0, left: 0, right: 0, 
