@@ -1646,31 +1646,29 @@ export default function FinderDashboard() {
     await fetchNearbySpots(lat, lon, 1000);
   };
 
-  // "Directions" from the place card: route to the nearest available parking
-  // near the searched place, opening its route + booking card (Option B — you
-  // navigate to a spot near the destination, not the destination itself).
-  const handleDirectionsToNearest = () => {
-    if (!searchedPlace) return;
-    const withCoords = spots.filter((s: any) => s.lat && s.lng);
-    const pool = withCoords.filter((s: any) => s.available);
-    const cand = pool.length > 0 ? pool : withCoords;
-    if (cand.length === 0) {
-      Alert.alert('No parking found', 'No parking spots are available near this place yet.');
+  // "Directions" from the place card: draw the route to the EXACT place the
+  // user searched (always accurate) — the nearby parking spots stay listed
+  // for booking. No more auto-jumping to a spot that may be far away.
+  const handleDirectionsToPlace = async () => {
+    if (!searchedPlace || !userLocation) {
+      Alert.alert('Location needed', 'We need your current location to show directions.');
       return;
     }
-    const d2 = (s: any) => {
-      const a = s.lat - searchedPlace.lat;
-      const b = (s.lng - searchedPlace.lng) * Math.cos((searchedPlace.lat * Math.PI) / 180);
-      return a * a + b * b;
-    };
-    const nearest = cand.reduce((best: any, s: any) => (d2(s) < d2(best) ? s : best), cand[0]);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setIsFollowing(false);
-    setSelectedSpotId(nearest.id);
-    fetchSlots(nearest.id);
-    setStep('spot_booking');
-    if (mapRef.current) {
-      mapRef.current.animateCamera({ center: { latitude: nearest.lat - 0.0012, longitude: nearest.lng }, zoom: 17 }, { duration: 1000 });
+    try {
+      const res = await apiClient.get(`/maps/route?start=${userLocation.lng},${userLocation.lat}&end=${searchedPlace.lng},${searchedPlace.lat}&alternatives=true`);
+      if (res.data?.success) {
+        const route = pickBestRoute(res.data.data.routes || []);
+        if (route && route.geometry?.coordinates?.length) {
+          setRouteCoords(route.geometry.coordinates.map((p: any) => ({ latitude: p[1], longitude: p[0] })));
+          setDistanceInfo({ km: (route.distance / 1000).toFixed(1), mins: Math.ceil(route.duration / 60).toString() });
+          setIsFollowing(false);
+          return;
+        }
+      }
+      Alert.alert('No route', 'Could not find a route to that place right now.');
+    } catch (e) {
+      Alert.alert('Directions failed', 'Could not fetch directions right now. Please try again.');
     }
   };
 
@@ -2281,13 +2279,13 @@ export default function FinderDashboard() {
           {/* Google-style place card — after a place is selected, before a
               spot is chosen. Directions routes to the nearest parking (Option B). */}
           {searchedPlace && !selectedSpotId && suggestions.length === 0 && (
-            <View style={{ position: 'absolute', top: Platform.OS === 'ios' ? 82 : 74, left: 16, right: 16, zIndex: 95, backgroundColor: '#fff', borderRadius: 16, paddingVertical: 12, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 12, elevation: 8 }}>
+            <View style={{ position: 'absolute', top: Platform.OS === 'ios' ? 82 : 74, left: 16, right: 16, zIndex: 95, backgroundColor: '#0f172a', borderRadius: 16, paddingVertical: 12, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 16, elevation: 12 }}>
               <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(234,67,53,0.12)', alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
                 <Ionicons name="location" size={20} color="#EA4335" />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={{ color: '#202124', fontSize: 14, fontWeight: '700' }} numberOfLines={1}>{searchedPlace.title}</Text>
-                <Text style={{ color: '#5f6368', fontSize: 12, marginTop: 2 }} numberOfLines={1}>
+                <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }} numberOfLines={1}>{searchedPlace.title}</Text>
+                <Text style={{ color: '#94a3b8', fontSize: 12, marginTop: 2 }} numberOfLines={1}>
                   {(() => {
                     let d = '';
                     if (userLocation) {
@@ -2303,7 +2301,7 @@ export default function FinderDashboard() {
                   })()}
                 </Text>
               </View>
-              <TouchableOpacity onPress={handleDirectionsToNearest} activeOpacity={0.85} style={{ backgroundColor: '#1a73e8', borderRadius: 22, paddingHorizontal: 16, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', marginLeft: 8 }}>
+              <TouchableOpacity onPress={handleDirectionsToPlace} activeOpacity={0.85} style={{ backgroundColor: '#1a73e8', borderRadius: 22, paddingHorizontal: 16, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', marginLeft: 8 }}>
                 <Ionicons name="navigate" size={15} color="#fff" style={{ marginRight: 5 }} />
                 <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>Directions</Text>
               </TouchableOpacity>
