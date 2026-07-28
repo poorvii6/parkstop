@@ -2161,12 +2161,12 @@ export default function FinderDashboard() {
         <View style={{ flex: 1, backgroundColor: 'transparent' }} pointerEvents="box-none">
           {/* Search Bar */}
           <View style={{ position: 'absolute', top: Platform.OS === 'ios' ? 20 : 12, left: 16, right: 16, zIndex: 100 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#1E293B', borderRadius: 20, paddingHorizontal: 16, height: 52, borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.15)', shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 15, elevation: 12 }}>
-              <Ionicons name="search" size={18} color="#94a3b8" style={{ marginRight: 10 }} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#ffffff', borderRadius: 26, paddingHorizontal: 16, height: 50, borderWidth: 0, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 10, elevation: 6 }}>
+              <Ionicons name="search" size={20} color="#5f6368" style={{ marginRight: 10 }} />
               <TextInput
-                style={{ flex: 1, color: '#fff', fontSize: 15, fontWeight: '600' }}
-                placeholder="Search for a destination..."
-                placeholderTextColor="#94a3b8"
+                style={{ flex: 1, color: '#202124', fontSize: 16, fontWeight: '500' }}
+                placeholder="Search here"
+                placeholderTextColor="#5f6368"
                 value={searchQuery}
                 onChangeText={setSearchQuery}
                 onSubmitEditing={handleSearch}
@@ -2176,12 +2176,12 @@ export default function FinderDashboard() {
               />
               {searchQuery.length > 0 && (
                 <TouchableOpacity onPress={() => { setSearchQuery(''); setSuggestions([]); setSearchedPlace(null); setSearchFocused(false); }} style={{ padding: 6, marginRight: 6 }}>
-                  <Text style={{ color: '#94a3b8', fontSize: 16 }}>✕</Text>
+                  <Text style={{ color: '#5f6368', fontSize: 18 }}>✕</Text>
                 </TouchableOpacity>
               )}
               {isSearching && <ActivityIndicator size="small" color="#6366f1" style={{ marginRight: 10 }} />}
               
-              {/* Subtle Sign Out Button in Search Bar */}
+              {/* Account avatar — tap to sign out */}
               <TouchableOpacity 
                 onPress={async () => {
                   Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
@@ -2202,15 +2202,15 @@ export default function FinderDashboard() {
                     }
                   ]);
                 }}
-                style={{ padding: 6, borderLeftWidth: 1, borderLeftColor: 'rgba(255,255,255,0.1)', paddingLeft: 12, marginLeft: 6 }}
+                style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: '#e8eaed', alignItems: 'center', justifyContent: 'center', marginLeft: 8 }}
               >
-                <Ionicons name="log-out-outline" size={20} color="#94a3b8" />
+                <Ionicons name="person" size={18} color="#5f6368" />
               </TouchableOpacity>
             </View>
 
             {/* Search Suggestions / Recent Searches */}
             {(suggestions.length > 0 || (searchFocused && searchQuery.length === 0 && recentSearches.length > 0)) && (
-              <View style={{ backgroundColor: '#0f172a', borderRadius: 20, paddingVertical: 8, marginTop: 8, maxHeight: 300, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 20, elevation: 20 }}>
+              <View style={{ backgroundColor: '#ffffff', borderRadius: 16, paddingVertical: 6, marginTop: 8, maxHeight: 320, borderWidth: 0, shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 16, elevation: 12 }}>
                 {searchQuery.length === 0 && recentSearches.length > 0 && suggestions.length === 0 && (
                   <View style={{ paddingHorizontal: 16, paddingVertical: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
                     <Text style={{ color: '#64748b', fontSize: 12, fontWeight: '800', letterSpacing: 0.5 }}>RECENT</Text>
@@ -2227,14 +2227,14 @@ export default function FinderDashboard() {
                     return (
                       <TouchableOpacity
                         key={idx}
-                        style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.04)' }}
+                        style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 13, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.06)' }}
                         onPress={() => selectSuggestion(item)}
                       >
-                        <View style={{ width: 36, height: 36, backgroundColor: isInternal ? 'rgba(66,133,244,0.15)' : 'rgba(255,255,255,0.05)', borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
-                          <Ionicons name={isRecent ? 'time-outline' : isInternal ? 'car-outline' : 'location-outline'} size={18} color={isInternal ? '#4285F4' : '#94a3b8'} />
+                        <View style={{ width: 36, height: 36, backgroundColor: isInternal ? 'rgba(66,133,244,0.12)' : '#f1f3f4', borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+                          <Ionicons name={isRecent ? 'time-outline' : isInternal ? 'car-outline' : 'location-outline'} size={18} color={isInternal ? '#4285F4' : '#5f6368'} />
                         </View>
                         <View style={{ flex: 1 }}>
-                          <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }} numberOfLines={1}>{item.display_name?.split(',')[0] || item.display_name}</Text>
+                          <Text style={{ color: '#202124', fontSize: 15, fontWeight: '600' }} numberOfLines={1}>{item.display_name?.split(',')[0] || item.display_name}</Text>
                           <Text style={{ color: '#64748b', fontSize: 12, marginTop: 2 }} numberOfLines={1}>{item.display_name}</Text>
                         </View>
                         {distKm !== null && (

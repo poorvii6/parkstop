@@ -51,6 +51,34 @@ type Props = {
   [key: string]: any; // tolerate the extra nav props finder passes through
 };
 
+/**
+ * One parking marker. react-native-maps rasterises a custom marker to a bitmap;
+ * if it snapshots before the text lays out, the pill clips (the "half ₹" bug).
+ * So this keeps tracksViewChanges ON until the pill has measured (onLayout),
+ * then a beat longer for font paint — and re-arms whenever the price changes.
+ */
+function SpotMarker({ m, onPress }: { m: { id: string; lat: number; lng: number; price: number; available: boolean }; onPress: () => void }) {
+  const [track, setTrack] = useState(true);
+  useEffect(() => { setTrack(true); }, [m.price, m.available]);
+  return (
+    <Marker
+      identifier={String(m.id)}
+      coordinate={{ latitude: m.lat, longitude: m.lng }}
+      anchor={{ x: 0.5, y: 1 }}
+      tracksViewChanges={track}
+      onPress={onPress}
+    >
+      <View
+        style={[styles.spotPill, !m.available && styles.spotPillUnavailable]}
+        onLayout={() => setTimeout(() => setTrack(false), 400)}
+      >
+        <View style={styles.spotPBadge}><Text style={styles.spotPLetter}>P</Text></View>
+        <Text style={styles.spotPillText} numberOfLines={1}>₹{m.price}<Text style={styles.spotPillPerHr}>/hr</Text></Text>
+      </View>
+    </Marker>
+  );
+}
+
 const GoogleMapNative = forwardRef((props: Props, ref: any) => {
   const mapRef = useRef<MapView>(null);
   const propsRef = useRef(props);
@@ -94,20 +122,25 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
   // arrives AFTER mount, snap once to it — unless the screen already has a
   // destination/searched place to frame.
   const didInitialPosition = useRef(false);
-  useEffect(() => {
+  const mapReady = useRef(false);
+  const positionOnFirstFix = useCallback(() => {
     if (didInitialPosition.current) return;
-    if (!props.userLocation || !mapRef.current) return;
+    // Wait for BOTH the native map to be ready AND a real fix. animateCamera
+    // called before onMapReady silently no-ops — which was leaving the camera
+    // parked on the country-wide fallback (the "whole India on register" bug).
+    if (!mapReady.current || !props.userLocation || !mapRef.current) return;
     if (props.destination || props.searchedPlace) {
       didInitialPosition.current = true;
       return;
     }
     didInitialPosition.current = true;
-    markProgrammatic(500);
+    markProgrammatic(900);
     mapRef.current.animateCamera(
       { center: { latitude: props.userLocation.lat, longitude: props.userLocation.lng }, zoom: USER_MAP_ZOOM, pitch: 0, heading: 0 },
-      { duration: 0 }
+      { duration: 600 }
     );
   }, [props.userLocation, props.destination, props.searchedPlace]);
+  useEffect(() => { positionOnFirstFix(); }, [positionOnFirstFix]);
 
   // ── Camera follow ─────────────────────────────────────────────
   useEffect(() => {
@@ -228,6 +261,31 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
     props.onRecenter?.();
   };
 
+  // A user gesture (pan / pinch-zoom / rotate) releases the follow-camera so it
+  // stops re-centering under the user's fingers. Google reports isGesture here.
+  const handleRegionChangeComplete = (_region: any, details?: any) => {
+    if (details?.isGesture) {
+      lastInteraction.current = Date.now();
+      if (propsRef.current.isFollowing) propsRef.current.onMapInteraction?.();
+    }
+  };
+
+  // The map's OWN first location fix (the one drawing the native blue dot).
+  // We snap the camera to it independently of the app's userLocation prop,
+  // which can lag — this is what reliably kills the "whole India" open view.
+  const handleUserLocationChange = (e: any) => {
+    const c = e?.nativeEvent?.coordinate;
+    if (!c || typeof c.latitude !== 'number') return;
+    if (didInitialPosition.current || !mapReady.current || !mapRef.current) return;
+    if (propsRef.current.destination || propsRef.current.searchedPlace) { didInitialPosition.current = true; return; }
+    didInitialPosition.current = true;
+    markProgrammatic(900);
+    mapRef.current.animateCamera(
+      { center: { latitude: c.latitude, longitude: c.longitude }, zoom: USER_MAP_ZOOM, pitch: 0, heading: 0 },
+      { duration: 600 }
+    );
+  };
+
   // ── Route polylines ───────────────────────────────────────────
   const altPolylines = useMemo(
     () =>
@@ -255,23 +313,10 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
         // pill so two markers don't stack on the same point (Google does this).
         const isActive = !!dest && Math.abs(dest.lat - m.lat) < 0.001 && Math.abs(dest.lng - m.lng) < 0.001;
         if (isActive) return null;
-        return (
-          <Marker
-            key={m.id}
-            identifier={String(m.id)}
-            coordinate={{ latitude: m.lat, longitude: m.lng }}
-            anchor={{ x: 0.5, y: 1 }}
-            tracksViewChanges={track}
-            onPress={() => propsRef.current.onMarkerPress?.(m.id)}
-          >
-            <View style={[styles.spotPill, !m.available && styles.spotPillUnavailable]}>
-              <Text style={styles.spotPillText}>🅿️ ₹{m.price}</Text>
-            </View>
-          </Marker>
-        );
+        return <SpotMarker key={m.id} m={m} onPress={() => propsRef.current.onMarkerPress?.(m.id)} />;
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [markerSig, destKey, track]
+    [markerSig, destKey]
   );
 
   return (
@@ -287,12 +332,22 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
           zoom: initialZoom,
           altitude: 0,
         }}
+        onMapReady={() => { mapReady.current = true; positionOnFirstFix(); }}
         onPress={handlePress}
         onPanDrag={handlePanDrag}
-        showsUserLocation={false}
-        showsMyLocationButton={false}
+        onRegionChangeComplete={handleRegionChangeComplete}
+        onUserLocationChange={handleUserLocationChange}
+        // Push Google's native controls (My Location button, compass) below the
+        // search bar and above the bottom sheet, and lift the Google logo clear.
+        mapPadding={{ top: 100, right: 6, bottom: props.controlsBottomOffset ?? 210, left: 6 }}
+        // Authentic Google location dot + controls when idle; during navigation
+        // we hide them and draw the directional arrow puck instead.
+        showsUserLocation={!props.isActiveNavigation}
+        showsMyLocationButton={!props.isActiveNavigation && !props.hideControls}
         showsCompass
         toolbarEnabled={false}
+        zoomEnabled
+        scrollEnabled
         rotateEnabled
         pitchEnabled
       >
@@ -307,35 +362,23 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
           </>
         ) : null}
 
-        {/* Live location — blue dot idle; heading arrow while navigating.
-            `flat` markers rotate in the map frame, so rotation=heading always
-            points along the road, exactly like Google/Uber navigation. */}
-        {props.userLocation ? (
-          props.isActiveNavigation ? (
-            <Marker
-              key="user-nav"
-              coordinate={{ latitude: props.userLocation.lat, longitude: props.userLocation.lng }}
-              anchor={{ x: 0.5, y: 0.5 }}
-              flat
-              rotation={props.heading || 0}
-              tracksViewChanges={track}
-              zIndex={10}
-            >
-              <View style={styles.navArrowWrap}>
-                <View style={styles.navArrow} />
-              </View>
-            </Marker>
-          ) : (
-            <Marker
-              key="user-idle"
-              coordinate={{ latitude: props.userLocation.lat, longitude: props.userLocation.lng }}
-              anchor={{ x: 0.5, y: 0.5 }}
-              tracksViewChanges={track}
-              zIndex={10}
-            >
-              <View style={styles.userDotOuter}><View style={styles.userDot} /></View>
-            </Marker>
-          )
+        {/* During navigation, a directional arrow puck (flat markers rotate in
+            the map frame, so rotation=heading points along the road like
+            Google/Uber). Idle location is Google's own native blue dot. */}
+        {props.userLocation && props.isActiveNavigation ? (
+          <Marker
+            key="user-nav"
+            coordinate={{ latitude: props.userLocation.lat, longitude: props.userLocation.lng }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            flat
+            rotation={props.heading || 0}
+            tracksViewChanges={track}
+            zIndex={10}
+          >
+            <View style={styles.navArrowWrap}>
+              <View style={styles.navArrow} />
+            </View>
+          </Marker>
         ) : null}
 
         {/* Parking spots */}
@@ -358,8 +401,9 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
         ) : null}
       </MapView>
 
-      {/* Recenter — blue while following, grey once panned away */}
-      {!props.hideControls ? (
+      {/* Recenter (navigation only — Google's native My Location button
+          handles idle recentering). */}
+      {!props.hideControls && props.isActiveNavigation ? (
         <TouchableOpacity
           style={[styles.recenterBtn, { bottom: props.controlsBottomOffset ?? 210 }]}
           onPress={handleRecenter}
@@ -379,11 +423,19 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
 GoogleMapNative.displayName = 'GoogleMapNative';
 
 const styles = StyleSheet.create({
-  userDotOuter: { width: 24, height: 24, borderRadius: 12, backgroundColor: 'rgba(26,115,232,0.25)', alignItems: 'center', justifyContent: 'center' },
-  userDot: { width: 14, height: 14, borderRadius: 7, backgroundColor: '#1a73e8', borderWidth: 2.5, borderColor: '#fff' },
-  spotPill: { backgroundColor: '#4285F4', paddingHorizontal: 9, paddingVertical: 4, borderRadius: 14, borderWidth: 2, borderColor: 'rgba(255,255,255,0.9)' },
+  // Google-style location indicator: translucent accuracy halo -> white ring
+  // with a soft shadow -> solid blue core. Crisp and professional.
+  userAccuracy: { width: 34, height: 34, borderRadius: 17, backgroundColor: 'rgba(66,133,244,0.18)', alignItems: 'center', justifyContent: 'center' },
+  userDotRing: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 4 },
+  userDotCore: { width: 15, height: 15, borderRadius: 7.5, backgroundColor: '#1a73e8' },
+  // Fixed-size pieces so Android measures the marker correctly (no clipping):
+  // a white "P" badge + price on a rounded blue pill with a soft shadow.
+  spotPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#4285F4', paddingLeft: 4, paddingRight: 10, paddingVertical: 4, borderRadius: 16, borderWidth: 2, borderColor: '#fff', shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 3, shadowOffset: { width: 0, height: 1 }, elevation: 4 },
   spotPillUnavailable: { backgroundColor: '#9aa0a6' },
-  spotPillText: { color: '#fff', fontWeight: '800', fontSize: 12 },
+  spotPBadge: { width: 17, height: 17, borderRadius: 8.5, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', marginRight: 5 },
+  spotPLetter: { color: '#4285F4', fontWeight: '900', fontSize: 11, lineHeight: 13 },
+  spotPillText: { color: '#fff', fontWeight: '800', fontSize: 12, lineHeight: 14 },
+  spotPillPerHr: { color: 'rgba(255,255,255,0.85)', fontWeight: '600', fontSize: 10 },
   navArrowWrap: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#1a73e8', borderWidth: 3, borderColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 6 },
   navArrow: { width: 0, height: 0, borderLeftWidth: 9, borderRightWidth: 9, borderBottomWidth: 18, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: '#fff', marginTop: -3 },
   recenterBtn: { position: 'absolute', right: 16, width: 48, height: 48, borderRadius: 24, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 6, shadowOffset: { width: 0, height: 3 }, elevation: 6 },
