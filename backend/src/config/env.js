@@ -89,6 +89,7 @@ function validateEnv() {
     { name: 'CLOUDINARY_CLOUD_NAME', feature: 'Image uploads' },
     { name: 'CLOUDINARY_API_KEY', feature: 'Image uploads' },
     { name: 'CLOUDINARY_API_SECRET', feature: 'Image uploads' },
+    { name: 'GOOGLE_MAPS_API_KEY', feature: 'Google Places search (primary; falls back to Ola/Nominatim)' },
     { name: 'OLA_MAPS_API_KEY', feature: 'Maps search/routing (falls back to Nominatim/OSRM)' },
     { name: 'STRIPE_SECRET_KEY', feature: 'Stripe payments' },
     { name: 'RAZORPAY_ACCOUNT_NUMBER', feature: 'Razorpay payouts' },

@@ -159,6 +159,55 @@ router.get('/search', async (req, res) => {
             return res.json({ success: true, data: cached, cached: true });
         }
 
+        // ── Google Places Autocomplete (New) — PRIMARY ──────────────────
+        // Google-grade accuracy: each prediction carries a placeId, and the
+        // selected one resolves to its EXACT coordinate via /place-details.
+        // Autocomplete (New) is text-only (no coords) — resolution is by ID.
+        const googleKey = process.env.GOOGLE_MAPS_API_KEY;
+        if (googleKey) {
+            try {
+                const body = { input: q, includedRegionCodes: ['in'] };
+                const sessiontoken = (req.query.sessiontoken || '').toString().trim();
+                if (sessiontoken) body.sessionToken = sessiontoken;
+
+                const gRes = await fetch('https://places.googleapis.com/v1/places:autocomplete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': googleKey },
+                    body: JSON.stringify(body),
+                });
+                if (!gRes.ok) {
+                    const errText = await gRes.text();
+                    console.error(`[GOOGLE PLACES] Autocomplete status ${gRes.status}. ${errText}`);
+                    throw new Error(`Google autocomplete ${gRes.status}`);
+                }
+
+                const gData = await gRes.json();
+                const suggestions = gData.suggestions || [];
+                const results = suggestions
+                    .map(s => s.placePrediction)
+                    .filter(p => p && p.placeId)
+                    .map(p => {
+                        const main = p.structuredFormat?.mainText?.text || '';
+                        const secondary = p.structuredFormat?.secondaryText?.text || '';
+                        return {
+                            display_name: p.text?.text || [main, secondary].filter(Boolean).join(', '),
+                            lat: '0',
+                            lon: '0',
+                            place_id: p.placeId,
+                            class: 'place',
+                            type: 'city',
+                            address: { name: main, city: secondary },
+                        };
+                    })
+                    .slice(0, 10);
+
+                setCached(cacheKey, results);
+                return res.json({ success: true, data: results });
+            } catch (gErr) {
+                console.error('[API ERROR] Google autocomplete failed, falling back to Ola:', gErr.message);
+            }
+        }
+
         const apiKey = process.env.OLA_MAPS_API_KEY;
 
         if (apiKey) {
@@ -313,6 +362,45 @@ router.get('/place-details', async (req, res) => {
         const cacheKey = `placedetails:${placeId}`;
         const cached = getCached(cacheKey);
         if (cached) return res.json({ success: true, data: cached, cached: true });
+
+        // ── Google Place Details (New) — PRIMARY ────────────────────
+        // Essentials field mask ONLY (id, location, formattedAddress) — the
+        // cheapest SKU. The place NAME comes from the tapped suggestion, so we
+        // deliberately skip the pricier displayName (Pro) field.
+        const googleKey = process.env.GOOGLE_MAPS_API_KEY;
+        if (googleKey) {
+            try {
+                let dUrl = `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`;
+                const sessiontoken = (req.query.sessiontoken || '').toString().trim();
+                if (sessiontoken) dUrl += `?sessionToken=${encodeURIComponent(sessiontoken)}`;
+                const gRes = await fetch(dUrl, {
+                    headers: {
+                        'X-Goog-Api-Key': googleKey,
+                        'X-Goog-FieldMask': 'id,location,formattedAddress',
+                    },
+                });
+                if (gRes.ok) {
+                    const gData = await gRes.json();
+                    const loc = gData.location;
+                    if (loc && loc.latitude != null && loc.longitude != null) {
+                        const addr = gData.formattedAddress || '';
+                        const result = {
+                            lat: loc.latitude.toString(),
+                            lon: loc.longitude.toString(),
+                            name: (addr.split(',')[0] || '').trim(),
+                            address: addr,
+                        };
+                        setCached(cacheKey, result);
+                        return res.json({ success: true, data: result });
+                    }
+                } else {
+                    const errText = await gRes.text();
+                    console.error(`[GOOGLE PLACES] Place details status ${gRes.status}. ${errText}`);
+                }
+            } catch (gErr) {
+                console.error('[API ERROR] Google place details failed, falling back to Ola:', gErr.message);
+            }
+        }
 
         const apiKey = process.env.OLA_MAPS_API_KEY;
         if (!apiKey) {
