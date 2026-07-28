@@ -99,6 +99,9 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
     programmaticUntil.current = Date.now() + durationMs + 400;
   };
 
+  // Current map rotation (deg), so the custom compass button can reflect it.
+  const [mapHeading, setMapHeading] = useState(0);
+
   // ── Imperative ref: the finder drives the whole map through animateCamera ──
   useImperativeHandle(ref, () => ({
     animateCamera: (cfg: any, opts?: any) => {
@@ -268,6 +271,20 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
       lastInteraction.current = Date.now();
       if (propsRef.current.isFollowing) propsRef.current.onMapInteraction?.();
     }
+    // Keep the custom compass in sync with the map's rotation.
+    mapRef.current?.getCamera?.().then((cam: any) => {
+      if (cam && typeof cam.heading === 'number') setMapHeading(cam.heading);
+    }).catch(() => {});
+  };
+
+  // Stepwise zoom for the +/- buttons (Google-style controls).
+  const zoomBy = async (delta: number) => {
+    try {
+      const cam = await mapRef.current?.getCamera?.();
+      if (!cam) return;
+      markProgrammatic(400);
+      mapRef.current?.animateCamera({ zoom: Math.max(3, Math.min(20, (cam.zoom || 15) + delta)) }, { duration: 220 });
+    } catch {}
   };
 
   // The map's OWN first location fix (the one drawing the native blue dot).
@@ -343,8 +360,8 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
         // Authentic Google location dot + controls when idle; during navigation
         // we hide them and draw the directional arrow puck instead.
         showsUserLocation={!props.isActiveNavigation}
-        showsMyLocationButton={!props.isActiveNavigation && !props.hideControls}
-        showsCompass
+        showsMyLocationButton={false}
+        showsCompass={false}
         toolbarEnabled={false}
         zoomEnabled
         scrollEnabled
@@ -401,20 +418,44 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
         ) : null}
       </MapView>
 
-      {/* Recenter (navigation only — Google's native My Location button
-          handles idle recentering). */}
-      {!props.hideControls && props.isActiveNavigation ? (
-        <TouchableOpacity
-          style={[styles.recenterBtn, { bottom: props.controlsBottomOffset ?? 210 }]}
-          onPress={handleRecenter}
-          activeOpacity={0.8}
-        >
-          <Ionicons
-            name={props.isFollowing ? 'locate' : 'locate-outline'}
-            size={22}
-            color={props.isFollowing ? '#1a73e8' : '#5f6368'}
-          />
-        </TouchableOpacity>
+      {/* Google-style control cluster, bottom-right: compass, zoom, my-location */}
+      {!props.hideControls ? (
+        <>
+          {/* Compass — rotates with the map; tap to snap back to north */}
+          <TouchableOpacity
+            style={[styles.mapCtrlBtn, { bottom: (props.controlsBottomOffset ?? 210) + 168 }]}
+            onPress={() => { markProgrammatic(500); mapRef.current?.animateCamera({ heading: 0 }, { duration: 350 }); setMapHeading(0); }}
+            activeOpacity={0.85}
+          >
+            <View style={{ transform: [{ rotate: `${-mapHeading}deg` }] }}>
+              <Ionicons name="compass" size={26} color="#EA4335" />
+            </View>
+          </TouchableOpacity>
+
+          {/* Zoom + / - pill */}
+          <View style={[styles.zoomPill, { bottom: (props.controlsBottomOffset ?? 210) + 60 }]}>
+            <TouchableOpacity style={styles.zoomBtn} onPress={() => zoomBy(1)} activeOpacity={0.7}>
+              <Ionicons name="add" size={24} color="#3c4043" />
+            </TouchableOpacity>
+            <View style={styles.zoomDivider} />
+            <TouchableOpacity style={styles.zoomBtn} onPress={() => zoomBy(-1)} activeOpacity={0.7}>
+              <Ionicons name="remove" size={24} color="#3c4043" />
+            </TouchableOpacity>
+          </View>
+
+          {/* My Location / recenter */}
+          <TouchableOpacity
+            style={[styles.recenterBtn, { bottom: props.controlsBottomOffset ?? 210 }]}
+            onPress={handleRecenter}
+            activeOpacity={0.8}
+          >
+            <Ionicons
+              name={props.isFollowing ? 'locate' : 'locate-outline'}
+              size={22}
+              color={props.isFollowing ? '#1a73e8' : '#5f6368'}
+            />
+          </TouchableOpacity>
+        </>
       ) : null}
     </View>
   );
@@ -439,6 +480,10 @@ const styles = StyleSheet.create({
   navArrowWrap: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#1a73e8', borderWidth: 3, borderColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 6 },
   navArrow: { width: 0, height: 0, borderLeftWidth: 9, borderRightWidth: 9, borderBottomWidth: 18, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: '#fff', marginTop: -3 },
   recenterBtn: { position: 'absolute', right: 16, width: 48, height: 48, borderRadius: 24, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 6, shadowOffset: { width: 0, height: 3 }, elevation: 6 },
+  mapCtrlBtn: { position: 'absolute', right: 16, width: 46, height: 46, borderRadius: 23, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 6 },
+  zoomPill: { position: 'absolute', right: 16, width: 46, borderRadius: 23, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', paddingVertical: 2, shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 6 },
+  zoomBtn: { width: 46, height: 42, alignItems: 'center', justifyContent: 'center' },
+  zoomDivider: { width: 24, height: 1, backgroundColor: 'rgba(0,0,0,0.08)' },
   destPinWrap: { alignItems: 'center' },
   destPinHead: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#EA4335', borderWidth: 2.5, borderColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 4, shadowOffset: { width: 0, height: 2 }, elevation: 5, zIndex: 2 },
   destPinInner: { width: 9, height: 9, borderRadius: 4.5, backgroundColor: '#fff' },
