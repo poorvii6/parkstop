@@ -11,6 +11,11 @@ import React, { useEffect, useRef, useState, useImperativeHandle, useCallback, u
 import { View, StyleSheet, TouchableOpacity, Text, Platform, Animated as RNAnimated } from 'react-native';
 import { WebView } from 'react-native-webview';
 import MapLibreNative from './MapLibreNative';
+import GoogleMapNative from './GoogleMapNative';
+
+// Stage 2 basemap switch. Google (react-native-maps) is now the map surface;
+// MapLibre stays wired as an instant fallback — set this to false to revert.
+const USE_GOOGLE_MAPS = true;
 
 // Try to load native MapLibre
 let MapLibreGL: any = null;
@@ -385,8 +390,11 @@ const MapLibreView = React.forwardRef((props: MapProps, ref: any) => {
     return <WebViewFallback {...props} ref={ref} />;
   }
 
-  // Native MapLibre v11 (Track 1 migration). The legacy native branch below is
-  // kept for reference during the migration but is no longer rendered.
+  // Map surface. Google (react-native-maps) is the Stage-2 basemap; the legacy
+  // native branch below is kept for reference but is no longer rendered.
+  if (USE_GOOGLE_MAPS) {
+    return <GoogleMapNative {...props} ref={ref} />;
+  }
   return <MapLibreNative {...props} ref={ref} />;
 
   const {
