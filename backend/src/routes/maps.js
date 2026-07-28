@@ -608,6 +608,93 @@ router.get('/route', async (req, res) => {
         const overviewVal = ['full', 'simplified', 'false'].includes(overview) ? overview : 'full';
         const alternativesVal = alternatives === 'true';
 
+        // ── Google Routes API (computeRoutes) — PRIMARY ─────────────────────
+        // Google-grade, traffic-aware routing to match Google Maps. Falls back
+        // to Ola/OSRM below if the key is unset or the call fails.
+        const googleKey = process.env.GOOGLE_MAPS_API_KEY;
+        if (googleKey) {
+            try {
+                const body = {
+                    origin: { location: { latLng: { latitude: startCoords.lat, longitude: startCoords.lng } } },
+                    destination: { location: { latLng: { latitude: endCoords.lat, longitude: endCoords.lng } } },
+                    travelMode: 'DRIVE',
+                    routingPreference: 'TRAFFIC_AWARE',
+                    computeAlternativeRoutes: alternativesVal,
+                    polylineEncoding: 'ENCODED_POLYLINE',
+                    languageCode: 'en-IN',
+                    units: 'METRIC',
+                };
+                const gWpts = waypoints ? parseWaypoints(waypoints) : null;
+                if (gWpts && gWpts.length > 0) {
+                    body.intermediates = gWpts.map(w => ({ location: { latLng: { latitude: w.lat, longitude: w.lng } } }));
+                }
+                const gRes = await fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-Goog-Api-Key': googleKey,
+                        'X-Goog-FieldMask': 'routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline,routes.legs.steps.navigationInstruction,routes.legs.steps.distanceMeters,routes.legs.steps.staticDuration,routes.legs.steps.polyline,routes.legs.steps.startLocation',
+                    },
+                    body: JSON.stringify(body),
+                });
+                if (!gRes.ok) {
+                    const errText = await gRes.text();
+                    console.error(`[GOOGLE ROUTES] status ${gRes.status}. ${errText}`);
+                    throw new Error(`Google Routes ${gRes.status}`);
+                }
+                const gData = await gRes.json();
+                if (!gData.routes || gData.routes.length === 0) throw new Error('Google Routes: no routes');
+                const parseSecs = (d) => (typeof d === 'number' ? d : (typeof d === 'string' ? (parseInt(d.replace('s', ''), 10) || 0) : 0));
+                const mapManeuver = (mnv, instr) => {
+                    const s = `${mnv || ''} ${instr || ''}`.toLowerCase();
+                    let type = 'continue', modifier = 'straight';
+                    if (s.includes('uturn') || s.includes('u-turn')) { type = 'turn'; modifier = 'uturn'; }
+                    else if (s.includes('roundabout')) { type = 'roundabout'; }
+                    else if (s.includes('destination') || s.includes('arrive')) { type = 'arrive'; }
+                    else if (s.includes('left')) { type = 'turn'; modifier = 'left'; }
+                    else if (s.includes('right')) { type = 'turn'; modifier = 'right'; }
+                    if (s.includes('sharp') && s.includes('left')) modifier = 'sharp left';
+                    else if (s.includes('sharp') && s.includes('right')) modifier = 'sharp right';
+                    else if (s.includes('slight') && s.includes('left')) modifier = 'slight left';
+                    else if (s.includes('slight') && s.includes('right')) modifier = 'slight right';
+                    return { type, modifier };
+                };
+                const routesG = gData.routes.map(r => {
+                    const coords = r.polyline?.encodedPolyline ? decodePolyline(r.polyline.encodedPolyline) : [];
+                    const gSteps = (r.legs || []).flatMap(lg => lg.steps || []);
+                    const steps = gSteps.map(st => {
+                        const instr = st.navigationInstruction?.instructions || '';
+                        const mnv = st.navigationInstruction?.maneuver || '';
+                        const mm = mapManeuver(mnv, instr);
+                        const stepCoords = st.polyline?.encodedPolyline ? decodePolyline(st.polyline.encodedPolyline) : [];
+                        const loc = st.startLocation?.latLng;
+                        return {
+                            maneuver: { location: loc ? [loc.longitude, loc.latitude] : [0, 0], type: mm.type, modifier: mm.modifier },
+                            name: instr,
+                            duration: parseSecs(st.staticDuration),
+                            distance: st.distanceMeters || 0,
+                            geometry: stepCoords.length > 0 ? { coordinates: stepCoords, type: 'LineString' } : null,
+                        };
+                    });
+                    const dur = parseSecs(r.duration);
+                    const dist = r.distanceMeters || 0;
+                    return {
+                        geometry: { coordinates: coords, type: 'LineString' },
+                        legs: [{ steps, summary: '', weight: dur, duration: dur, distance: dist }],
+                        weight_name: 'routability', weight: dur, duration: dur, distance: dist,
+                    };
+                });
+                const googleData = { code: 'Ok', routes: routesG, waypoints: [
+                    { hint: '', distance: 0, name: '', location: [startCoords.lng, startCoords.lat] },
+                    { hint: '', distance: 0, name: '', location: [endCoords.lng, endCoords.lat] },
+                ] };
+                routeCache.set(routeCacheKey, googleData);
+                return res.json({ success: true, data: googleData });
+            } catch (gErr) {
+                console.error('[API ERROR] Google Routes failed, falling back to Ola/OSRM:', gErr.message);
+            }
+        }
+
         if (!apiKey) {
             // Fallback to OSRM if OLA_MAPS_API_KEY is not set
             const response = await fetch(`https://router.project-osrm.org/route/v1/driving/${start};${end}?overview=${overviewVal}&alternatives=${alternativesVal}&geometries=geojson&steps=true`);
