@@ -19,6 +19,7 @@ import React, { forwardRef, useImperativeHandle, useRef, useMemo, useEffect, use
 import { StyleSheet, View, Text, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import * as Location from 'expo-location';
 import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM, USER_MAP_ZOOM, HINT_MAP_ZOOM } from '../constants/mapDefaults';
 
 const FOLLOW_EASE_MS = 1000;
@@ -132,25 +133,40 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
   // arrives AFTER mount, snap once to it — unless the screen already has a
   // destination/searched place to frame.
   const didInitialPosition = useRef(false);
-  const mapReady = useRef(false);
-  const positionOnFirstFix = useCallback(() => {
-    if (didInitialPosition.current) return;
-    // Wait for BOTH the native map to be ready AND a real fix. animateCamera
-    // called before onMapReady silently no-ops — which was leaving the camera
-    // parked on the country-wide fallback (the "whole India on register" bug).
-    if (!mapReady.current || !props.userLocation || !mapRef.current) return;
-    if (props.destination || props.searchedPlace) {
-      didInitialPosition.current = true;
-      return;
-    }
+  // mapReady is STATE (not a ref) so the positioning effect below actually
+  // re-runs when the map becomes ready — a ref change never re-triggers it,
+  // which is why the camera kept getting stuck on the country-wide view.
+  const [mapReady, setMapReady] = useState(false);
+  // A guaranteed device fix for the opening camera, independent of the app's
+  // userLocation prop (which can lag) and of native-event ordering. This is the
+  // safety net that ensures we never open on the whole-India fallback.
+  const [selfLoc, setSelfLoc] = useState<{ lat: number; lng: number } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const last = await Location.getLastKnownPositionAsync();
+        if (alive && last?.coords) setSelfLoc({ lat: last.coords.latitude, lng: last.coords.longitude });
+        const cur = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        if (alive && cur?.coords) setSelfLoc({ lat: cur.coords.latitude, lng: cur.coords.longitude });
+      } catch {}
+    })();
+    return () => { alive = false; };
+  }, []);
+  // Open on the user as soon as BOTH the map is ready AND we have a fix (prop or
+  // our own lookup). Re-runs when either arrives, so it can never stay stuck.
+  useEffect(() => {
+    if (didInitialPosition.current || !mapReady || !mapRef.current) return;
+    const u = props.userLocation || selfLoc;
+    if (!u) return;
+    if (props.destination || props.searchedPlace) { didInitialPosition.current = true; return; }
     didInitialPosition.current = true;
     markProgrammatic(900);
     mapRef.current.animateCamera(
-      { center: { latitude: props.userLocation.lat, longitude: props.userLocation.lng }, zoom: USER_MAP_ZOOM, pitch: 0, heading: 0 },
-      { duration: 600 }
+      { center: { latitude: u.lat, longitude: u.lng }, zoom: USER_MAP_ZOOM, pitch: 0, heading: 0 },
+      { duration: 500 }
     );
-  }, [props.userLocation, props.destination, props.searchedPlace]);
-  useEffect(() => { positionOnFirstFix(); }, [positionOnFirstFix]);
+  }, [mapReady, props.userLocation, selfLoc, props.destination, props.searchedPlace]);
 
   // ── Camera follow ─────────────────────────────────────────────
   useEffect(() => {
@@ -307,7 +323,7 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
   const handleUserLocationChange = (e: any) => {
     const c = e?.nativeEvent?.coordinate;
     if (!c || typeof c.latitude !== 'number') return;
-    if (didInitialPosition.current || !mapReady.current || !mapRef.current) return;
+    if (didInitialPosition.current || !mapReady || !mapRef.current) return;
     if (propsRef.current.destination || propsRef.current.searchedPlace) { didInitialPosition.current = true; return; }
     didInitialPosition.current = true;
     markProgrammatic(900);
@@ -363,7 +379,7 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
           zoom: initialZoom,
           altitude: 0,
         }}
-        onMapReady={() => { mapReady.current = true; positionOnFirstFix(); }}
+        onMapReady={() => setMapReady(true)}
         onPress={handlePress}
         onPanDrag={handlePanDrag}
         onRegionChangeComplete={handleRegionChangeComplete}
