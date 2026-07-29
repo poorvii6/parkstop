@@ -9,6 +9,11 @@ const router = express.Router();
 /**
  * 💳 INITIATE CHECKOUT
  */
+// Razorpay webhook — NO auth middleware: it is authenticated by HMAC signature
+// (see PaymentController.razorpayWebhook). Must be registered before the
+// authenticated routes so nothing intercepts it.
+router.post('/webhook', PaymentController.razorpayWebhook);
+
 router.post(
   '/checkout',
   authenticate,

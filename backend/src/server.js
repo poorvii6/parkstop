@@ -104,7 +104,10 @@ app.use(cors({
 }));
 
 // Body parsing with limits
-app.use(express.json({ limit: '10kb' }));
+// verify hook captures the RAW body — the Razorpay webhook signature is an
+// HMAC of the exact bytes sent, so it must be checked against the raw body,
+// not a re-serialisation of the parsed JSON.
+app.use(express.json({ limit: '10kb', verify: (req, _res, buf) => { req.rawBody = buf; } }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 
 // Logging

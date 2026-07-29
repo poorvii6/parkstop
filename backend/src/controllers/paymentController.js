@@ -180,9 +180,14 @@ class PaymentController {
    */
   static async withdrawEarnings(req, res) {
     try {
-      const { methodId, amount } = req.body;
-      if (!methodId || !amount) {
-        return res.status(400).json({ success: false, message: 'Method and amount required' });
+      const { methodId } = req.body;
+      // STRICT amount validation. `!amount` alone let a NEGATIVE amount through,
+      // and decrementing a negative amount INCREASES the wallet balance — a
+      // free-money exploit. Must be a finite positive number, sane bounds,
+      // normalised to 2dp.
+      const amount = Math.round(Number(req.body.amount) * 100) / 100;
+      if (!methodId || !Number.isFinite(amount) || amount <= 0 || amount > 1000000) {
+        return res.status(400).json({ success: false, message: 'A valid positive amount and method are required' });
       }
 
       // Use a transaction to prevent race conditions
@@ -279,6 +284,46 @@ class PaymentController {
     } catch (error) {
       logger.error('Razorpay Create Order error:', error);
       res.status(500).json({ success: false, message: 'Failed to initiate Razorpay checkout' });
+    }
+  }
+
+  /**
+   * 🔔 RAZORPAY WEBHOOK (server-to-server, no auth — authenticated by HMAC)
+   * Authoritative payment confirmation: settles bookings even if the app died
+   * right after the user paid. Razorpay retries non-2xx responses, so we only
+   * 2xx after handling (or deliberately ignoring) the event.
+   */
+  static async razorpayWebhook(req, res) {
+    try {
+      if (!process.env.RAZORPAY_WEBHOOK_SECRET) {
+        logger.error('Webhook received but RAZORPAY_WEBHOOK_SECRET is not configured');
+        return res.status(500).json({ success: false });
+      }
+
+      const signature = req.headers['x-razorpay-signature'];
+      const rawBody = req.rawBody; // captured by express.json verify hook
+      const razorpayAdapter = require('../services/payments/RazorpayAdapter');
+      if (!razorpayAdapter.verifyWebhookSignature(rawBody, signature)) {
+        logger.warn('Webhook REJECTED: invalid signature');
+        return res.status(400).json({ success: false, message: 'Invalid signature' });
+      }
+
+      const event = req.body?.event;
+      if (event === 'payment.captured') {
+        const entity = req.body?.payload?.payment?.entity;
+        const result = await PaymentService.settleFromWebhook(entity);
+        return res.json({ received: true, ...result });
+      }
+
+      // Acknowledge everything else so Razorpay stops retrying events we
+      // deliberately don't act on (payment.failed, order.paid, etc.).
+      logger.info(`Webhook event ignored: ${event}`);
+      return res.json({ received: true, ignored: event });
+    } catch (error) {
+      logger.error('Razorpay webhook error:', error);
+      // Non-2xx => Razorpay retries with backoff — exactly what we want for
+      // transient DB/network failures.
+      return res.status(500).json({ success: false });
     }
   }
 

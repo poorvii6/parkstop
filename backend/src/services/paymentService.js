@@ -40,6 +40,92 @@ class PaymentService {
   }
 
   /**
+   * Shared settlement: atomically claim the booking's paid transition, then
+   * clear arrears and trigger the spotter payout. Returns null if another
+   * caller already settled it (idempotent). Used by BOTH the client verify
+   * path and the webhook, so their side-effects can never diverge or double.
+   */
+  static async _finalizeClaimedBooking(bookingId, paymentId) {
+    const claimed = await prisma.bookings.updateMany({
+      where: { id: parseInt(bookingId), payment_status: { not: 'paid' } },
+      data: {
+        payment_id: paymentId,
+        payment_status: 'paid',
+        updated_at: new Date()
+      }
+    });
+    if (claimed.count === 0) return null;
+
+    const updatedBooking = await prisma.bookings.findUnique({
+      where: { id: parseInt(bookingId) },
+      include: { parking_spots: true, users: true }
+    });
+
+    // Clear any arrears the Finder had, since they just paid for them in the combined Order
+    if (updatedBooking.users && updatedBooking.users.balance < 0) {
+      const arrearsToClear = Math.abs(Number(updatedBooking.users.balance));
+      await prisma.users.update({
+        where: { id: updatedBooking.user_id },
+        data: { balance: { increment: arrearsToClear } }
+      });
+      logger.info(`Cleared ₹${arrearsToClear} arrears for user ${updatedBooking.user_id} during checkout of booking ${bookingId}`);
+    }
+
+    // Trigger online payout to Spotter
+    try {
+      if (updatedBooking && updatedBooking.parking_spots) {
+        const PayoutService = require('./payments/PayoutService');
+        const spotterEarning = updatedBooking.spotter_earning || 0;
+        const spotterId = updatedBooking.parking_spots.spotter_id;
+        if (spotterId && spotterEarning > 0) {
+          await PayoutService.processBookingPayout(bookingId, spotterEarning, spotterId);
+          logger.info(`Payout processed: ₹${spotterEarning} to spotter ${spotterId} for booking ${bookingId}`);
+        }
+      }
+    } catch (payoutErr) {
+      logger.error(`Failed to process payout for booking ${bookingId} after settlement:`, payoutErr);
+    }
+
+    return updatedBooking;
+  }
+
+  /**
+   * ✅ WEBHOOK SETTLEMENT (server-to-server, authoritative)
+   * Called for Razorpay's `payment.captured` events. Does NOT trust anything
+   * from the app: the payment entity comes from a signature-verified webhook,
+   * the booking is recovered from the ORDER's notes (set at order creation),
+   * and the captured amount must equal the order amount. Idempotent with the
+   * client verify path via the shared atomic claim.
+   */
+  static async settleFromWebhook(paymentEntity) {
+    if (!paymentEntity || paymentEntity.status !== 'captured') {
+      return { handled: false, reason: 'not captured' };
+    }
+
+    const order = await razorpayAdapter.fetchOrder(paymentEntity.order_id);
+    const bookingId = order?.notes?.booking_id;
+    if (!bookingId || bookingId === 'wallet_topup') {
+      logger.info(`Webhook: payment ${paymentEntity.id} is not a booking payment (notes: ${JSON.stringify(order?.notes || {})}) — skipping`);
+      return { handled: false, reason: 'no booking' };
+    }
+
+    // The captured amount must be exactly what the order was created for.
+    if (Number(paymentEntity.amount) !== Number(order.amount)) {
+      logger.error(`Webhook AMOUNT MISMATCH for booking ${bookingId}: order ${order.amount} vs captured ${paymentEntity.amount}`);
+      throw new Error('Webhook amount mismatch');
+    }
+
+    const updatedBooking = await PaymentService._finalizeClaimedBooking(bookingId, paymentEntity.id);
+    if (!updatedBooking) {
+      logger.info(`Webhook: booking ${bookingId} already settled — idempotent ack`);
+      return { handled: true, alreadySettled: true };
+    }
+
+    logger.info(`Webhook settled booking ${bookingId} via payment ${paymentEntity.id}`);
+    return { handled: true };
+  }
+
+  /**
    * ✅ VERIFY RAZORPAY PAYMENT
    * Validates the payment signature and marks the booking as paid.
    */
@@ -120,44 +206,16 @@ class PaymentService {
         throw new Error(`Amount mismatch: expected ${expectedAmountPaise} paise, got ${actualAmountPaise} paise`);
       }
 
-      // 6. Mark the booking as paid
-      const updatedBooking = await prisma.bookings.update({
-        where: { id: parseInt(bookingId) },
-        data: {
-          payment_id: paymentId,
-          payment_status: 'paid',
-          updated_at: new Date()
-        },
-        include: {
-          parking_spots: true,
-          users: true
-        }
-      });
-
-      // Clear any arrears the Finder had, since they just paid for it in the combined Order
-      if (updatedBooking.users && updatedBooking.users.balance < 0) {
-        const arrearsToClear = Math.abs(Number(updatedBooking.users.balance));
-        await prisma.users.update({
-          where: { id: updatedBooking.user_id },
-          data: { balance: { increment: arrearsToClear } }
-        });
-        logger.info(`Cleared ₹${arrearsToClear} arrears for user ${updatedBooking.user_id} during checkout of booking ${bookingId}`);
+      // 6. Mark the booking as paid — ATOMIC CLAIM. The conditional updateMany
+      // means exactly ONE caller (client verify or webhook, even concurrently)
+      // wins the transition to 'paid'; everyone else sees count 0 and returns
+      // idempotently. This closes the double-settlement race.
+      const updatedBooking = await PaymentService._finalizeClaimedBooking(bookingId, paymentId);
+      if (!updatedBooking) {
+        logger.info(`Booking ${bookingId} was settled concurrently — idempotent return`);
+        return { success: true, paymentId };
       }
 
-      // Trigger online payout to Spotter
-      try {
-        if (updatedBooking && updatedBooking.parking_spots) {
-          const PayoutService = require('./payments/PayoutService');
-          const spotterEarning = updatedBooking.spotter_earning || 0;
-          const spotterId = updatedBooking.parking_spots.spotter_id;
-          if (spotterId && spotterEarning > 0) {
-            await PayoutService.processBookingPayout(bookingId, spotterEarning, spotterId);
-            logger.info(`Payout processed: ₹${spotterEarning} to spotter ${spotterId} for booking ${bookingId}`);
-          }
-        }
-      } catch (payoutErr) {
-        logger.error(`Failed to process payout for booking ${bookingId} after Razorpay verification:`, payoutErr);
-      }
 
       return { success: true, paymentId };
     } catch (error) {

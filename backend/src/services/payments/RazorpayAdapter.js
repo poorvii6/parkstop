@@ -67,6 +67,41 @@ class RazorpayAdapter {
   }
 
   /**
+   * VERIFY WEBHOOK SIGNATURE
+   * Razorpay signs webhook deliveries with HMAC-SHA256 of the RAW request body
+   * using the webhook secret (a separate secret from the API key). Timing-safe
+   * comparison for the same reason as verifyPaymentSignature above.
+   */
+  verifyWebhookSignature(rawBody, signature) {
+    const secret = process.env.RAZORPAY_WEBHOOK_SECRET;
+    if (!secret || !rawBody || typeof signature !== 'string' || !signature) return false;
+
+    const expectedSignature = crypto
+      .createHmac('sha256', secret)
+      .update(rawBody)
+      .digest('hex');
+
+    const expectedBuf = Buffer.from(expectedSignature, 'utf8');
+    const providedBuf = Buffer.from(signature, 'utf8');
+    if (expectedBuf.length !== providedBuf.length) return false;
+    return crypto.timingSafeEqual(expectedBuf, providedBuf);
+  }
+
+  /**
+   * FETCH ORDER
+   * Used by the webhook to recover our metadata (booking_id/user_id notes)
+   * from the order the captured payment belongs to.
+   */
+  async fetchOrder(orderId) {
+    try {
+      return await razorpay.orders.fetch(orderId);
+    } catch (error) {
+      logger.error('Razorpay Fetch Order Error:', error);
+      throw error;
+    }
+  }
+
+  /**
    * FETCH PAYMENT DETAILS
    * Retrieve full payment details from Razorpay after verification.
    */
