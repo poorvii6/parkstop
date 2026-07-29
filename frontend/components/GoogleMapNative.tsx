@@ -77,6 +77,12 @@ function SpotMarker({ m, onPress }: { m: { id: string; lat: number; lng: number;
       anchor={{ x: 0.5, y: 1 }}
       tracksViewChanges
       onPress={onPress}
+      // Fabric (RN 0.81): the native marker view must be given its size
+      // EXPLICITLY on the Marker itself — otherwise it keeps a stale small
+      // bitmap and crops the children to the top-left corner (the clipping
+      // that survived every child-level fix). Documented react-native-maps
+      // new-architecture workaround.
+      style={{ width: rootW, height: rootH }}
     >
       <View collapsable={false} style={{ width: rootW, height: rootH, alignItems: 'center' }}>
         {/* Balloon */}
