@@ -59,39 +59,26 @@ type Props = {
  * then a beat longer for font paint — and re-arms whenever the price changes.
  */
 function SpotMarker({ m, onPress }: { m: { id: string; lat: number; lng: number; price: number; available: boolean }; onPress: () => void }) {
-  const [track, setTrack] = useState(true);
-  const timer = useRef<any>(null);
-  // Every layout pass re-arms the snapshot window, so when the text finishes
-  // measuring (widening the pill), the FULL-WIDTH pill is what gets rasterised.
-  // This kills the clipped "P ₹" bug for good.
-  const arm = () => {
-    setTrack(true);
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => setTrack(false), 1500);
-  };
-  useEffect(() => { arm(); return () => { if (timer.current) clearTimeout(timer.current); }; }, [m.price, m.available]);
-  // The pill's whole VIEW was being measured too narrow by react-native-maps on
-  // Android (the blue background cut off right after "₹"). An EXPLICIT width the
-  // marker can't shrink is the deterministic fix — sized generously per digit.
-  const pillW = 84 + String(m.price ?? '').length * 10;
+  // SIMPLEST POSSIBLE MARKER. Every previous attempt nested Views (badge + two
+  // Texts, borders, wrappers) and Android's marker rasteriser kept measuring the
+  // row too narrow, slicing the pill after the "P". A SINGLE Text node with its
+  // own background has nothing to mis-measure. tracksViewChanges stays true —
+  // with a handful of spots the redraw cost is negligible and correctness wins.
+  const label = `P  ₹${m.price}/hr`;
   return (
     <Marker
       identifier={String(m.id)}
       coordinate={{ latitude: m.lat, longitude: m.lng }}
       anchor={{ x: 0.5, y: 1 }}
-      tracksViewChanges={track}
+      tracksViewChanges
       onPress={onPress}
     >
-      {/* Plain oversized wrapper: Android clips a marker's ROOT view when that
-          view has borderWidth/borderRadius, which was slicing the pill in half.
-          Keeping the root plain (no border/radius) and a few px wider fixes it. */}
-      <View style={{ width: pillW + 10, height: 40, alignItems: 'center', justifyContent: 'center' }} onLayout={arm}>
-        <View style={[styles.spotPill, !m.available && styles.spotPillUnavailable, { width: pillW }]}>
-          <View style={styles.spotPBadge}><Text style={styles.spotPLetter} allowFontScaling={false}>P</Text></View>
-          <Text style={styles.spotPillText} allowFontScaling={false}>₹{m.price}</Text>
-          <Text style={styles.spotPillPerHr} allowFontScaling={false}>/hr</Text>
-        </View>
-      </View>
+      <Text
+        allowFontScaling={false}
+        style={[styles.spotPillFlat, !m.available && styles.spotPillFlatUnavailable]}
+      >
+        {label}
+      </Text>
     </Marker>
   );
 }
@@ -525,6 +512,10 @@ const styles = StyleSheet.create({
   userDotCore: { width: 15, height: 15, borderRadius: 7.5, backgroundColor: '#1a73e8' },
   // Fixed-size pieces so Android measures the marker correctly (no clipping):
   // a white "P" badge + price on a rounded blue pill with a soft shadow.
+  // Single-node pill: background + padding live on the Text itself, so Android
+  // measures exactly one box and cannot clip it.
+  spotPillFlat: { backgroundColor: '#4285F4', color: '#fff', fontSize: 13, fontWeight: '800', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 15, overflow: 'hidden', textAlign: 'center' },
+  spotPillFlatUnavailable: { backgroundColor: '#9aa0a6' },
   spotPill: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#4285F4', paddingVertical: 4, borderRadius: 16, borderWidth: 2, borderColor: '#fff' },
   spotPillUnavailable: { backgroundColor: '#9aa0a6' },
   spotPBadge: { width: 17, height: 17, borderRadius: 8.5, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', marginRight: 5 },
