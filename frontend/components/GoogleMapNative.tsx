@@ -65,6 +65,10 @@ function SpotMarker({ m, onPress }: { m: { id: string; lat: number; lng: number;
   // own background has nothing to mis-measure. tracksViewChanges stays true —
   // with a handful of spots the redraw cost is negligible and correctness wins.
   const label = `P  ₹${m.price}/hr`;
+  // EXPLICIT width computed from the label so Android never measures the text
+  // at all — measurement is what kept locking the bitmap too narrow. ~9px per
+  // character at fontSize 13 plus horizontal padding, with generous slack.
+  const w = Math.ceil(24 + label.length * 9.5);
   return (
     <Marker
       identifier={String(m.id)}
@@ -75,7 +79,7 @@ function SpotMarker({ m, onPress }: { m: { id: string; lat: number; lng: number;
     >
       <Text
         allowFontScaling={false}
-        style={[styles.spotPillFlat, !m.available && styles.spotPillFlatUnavailable]}
+        style={[styles.spotPillFlat, !m.available && styles.spotPillFlatUnavailable, { width: w }]}
       >
         {label}
       </Text>
