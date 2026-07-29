@@ -82,10 +82,15 @@ function SpotMarker({ m, onPress }: { m: { id: string; lat: number; lng: number;
       tracksViewChanges={track}
       onPress={onPress}
     >
-      <View style={[styles.spotPill, !m.available && styles.spotPillUnavailable, { width: pillW }]} onLayout={arm}>
-        <View style={styles.spotPBadge}><Text style={styles.spotPLetter} allowFontScaling={false}>P</Text></View>
-        <Text style={styles.spotPillText} allowFontScaling={false}>₹{m.price}</Text>
-        <Text style={styles.spotPillPerHr} allowFontScaling={false}>/hr</Text>
+      {/* Plain oversized wrapper: Android clips a marker's ROOT view when that
+          view has borderWidth/borderRadius, which was slicing the pill in half.
+          Keeping the root plain (no border/radius) and a few px wider fixes it. */}
+      <View style={{ width: pillW + 10, height: 40, alignItems: 'center', justifyContent: 'center' }} onLayout={arm}>
+        <View style={[styles.spotPill, !m.available && styles.spotPillUnavailable, { width: pillW }]}>
+          <View style={styles.spotPBadge}><Text style={styles.spotPLetter} allowFontScaling={false}>P</Text></View>
+          <Text style={styles.spotPillText} allowFontScaling={false}>₹{m.price}</Text>
+          <Text style={styles.spotPillPerHr} allowFontScaling={false}>/hr</Text>
+        </View>
       </View>
     </Marker>
   );
@@ -374,7 +379,9 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
         // pill so two markers don't stack on the same point (Google does this).
         const isActive = !!dest && Math.abs(dest.lat - m.lat) < 0.001 && Math.abs(dest.lng - m.lng) < 0.001;
         if (isActive) return null;
-        return <SpotMarker key={m.id} m={m} onPress={() => propsRef.current.onMarkerPress?.(m.id)} />;
+        // Key includes price/availability so the marker fully re-creates instead
+        // of reusing a stale (too-narrow) bitmap.
+        return <SpotMarker key={`${m.id}:${m.price}:${m.available ? 1 : 0}`} m={m} onPress={() => propsRef.current.onMarkerPress?.(m.id)} />;
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [markerSig, destKey]
