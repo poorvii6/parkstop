@@ -70,9 +70,10 @@ function SpotMarker({ m, onPress }: { m: { id: string; lat: number; lng: number;
     timer.current = setTimeout(() => setTrack(false), 1500);
   };
   useEffect(() => { arm(); return () => { if (timer.current) clearTimeout(timer.current); }; }, [m.price, m.available]);
-  // NOTE: no numberOfLines on the texts — inside a marker that truncated the
-  // price to the too-narrow measured width. flexShrink:0 (in styles) also stops
-  // the row from squeezing them. This is what actually fixes the clipped "P ₹".
+  // The pill's whole VIEW was being measured too narrow by react-native-maps on
+  // Android (the blue background cut off right after "₹"). An EXPLICIT width the
+  // marker can't shrink is the deterministic fix — sized generously per digit.
+  const pillW = 84 + String(m.price ?? '').length * 10;
   return (
     <Marker
       identifier={String(m.id)}
@@ -81,7 +82,7 @@ function SpotMarker({ m, onPress }: { m: { id: string; lat: number; lng: number;
       tracksViewChanges={track}
       onPress={onPress}
     >
-      <View style={[styles.spotPill, !m.available && styles.spotPillUnavailable]} onLayout={arm}>
+      <View style={[styles.spotPill, !m.available && styles.spotPillUnavailable, { width: pillW }]} onLayout={arm}>
         <View style={styles.spotPBadge}><Text style={styles.spotPLetter} allowFontScaling={false}>P</Text></View>
         <Text style={styles.spotPillText} allowFontScaling={false}>₹{m.price}</Text>
         <Text style={styles.spotPillPerHr} allowFontScaling={false}>/hr</Text>
@@ -517,7 +518,7 @@ const styles = StyleSheet.create({
   userDotCore: { width: 15, height: 15, borderRadius: 7.5, backgroundColor: '#1a73e8' },
   // Fixed-size pieces so Android measures the marker correctly (no clipping):
   // a white "P" badge + price on a rounded blue pill with a soft shadow.
-  spotPill: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#4285F4', paddingLeft: 4, paddingRight: 12, paddingVertical: 4, borderRadius: 16, borderWidth: 2, borderColor: '#fff' },
+  spotPill: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#4285F4', paddingVertical: 4, borderRadius: 16, borderWidth: 2, borderColor: '#fff' },
   spotPillUnavailable: { backgroundColor: '#9aa0a6' },
   spotPBadge: { width: 17, height: 17, borderRadius: 8.5, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', marginRight: 5 },
   spotPLetter: { color: '#4285F4', fontWeight: '900', fontSize: 11, lineHeight: 13 },
