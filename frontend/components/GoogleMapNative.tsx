@@ -120,6 +120,77 @@ function SpotMarker({ m, onPress }: { m: { id: string; lat: number; lng: number;
   );
 }
 
+/**
+ * AnimatedNavPuck — glides the navigation chevron between GPS fixes.
+ *
+ * GPS arrives ~1/sec; binding the marker straight to the fix teleports it once
+ * a second (the "not smooth" complaint — same reason the MapLibre map had
+ * AnimatedUserMarker). This interpolates position AND heading (shortest arc)
+ * at display frame rate toward each new fix, over the actual gap between fixes,
+ * so the arrow slides along the road like Google/Uber. Only this component
+ * re-renders per frame; coordinate/rotation are native marker props, so the
+ * bitmap (captured once) is never re-rasterised.
+ */
+function AnimatedNavPuck({ lat, lng, heading }: { lat: number; lng: number; heading?: number }) {
+  const cur = useRef({ lat, lng, h: heading || 0 });
+  const from = useRef({ ...cur.current });
+  const to = useRef({ lat, lng, h: heading || 0 });
+  const startTs = useRef(0);
+  const dur = useRef(1000);
+  const lastFix = useRef(0);
+  const raf = useRef(0);
+  const [pos, setPos] = useState({ lat, lng, h: heading || 0 });
+  // Rasterise the chevron once, then animate natively.
+  const [track, setTrack] = useState(true);
+  useEffect(() => { const t = setTimeout(() => setTrack(false), 800); return () => clearTimeout(t); }, []);
+
+  useEffect(() => {
+    const now = Date.now();
+    // Ease over the real gap between fixes (clamped) so one glide hands off
+    // to the next with no stall and no lag buildup.
+    dur.current = Math.min(2000, Math.max(300, lastFix.current ? now - lastFix.current : 1000));
+    lastFix.current = now;
+    from.current = { ...cur.current };
+    const dh = (((heading || 0) - cur.current.h + 540) % 360) - 180; // shortest arc
+    to.current = { lat, lng, h: cur.current.h + dh };
+    startTs.current = now;
+    cancelAnimationFrame(raf.current);
+    const step = () => {
+      const t = Math.min(1, (Date.now() - startTs.current) / dur.current);
+      cur.current = {
+        lat: from.current.lat + (to.current.lat - from.current.lat) * t,
+        lng: from.current.lng + (to.current.lng - from.current.lng) * t,
+        h: from.current.h + (to.current.h - from.current.h) * t,
+      };
+      setPos({ lat: cur.current.lat, lng: cur.current.lng, h: ((cur.current.h % 360) + 360) % 360 });
+      if (t < 1) raf.current = requestAnimationFrame(step);
+    };
+    raf.current = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf.current);
+  }, [lat, lng, heading]);
+
+  return (
+    <Marker
+      coordinate={{ latitude: pos.lat, longitude: pos.lng }}
+      anchor={{ x: 0.5, y: 0.5 }}
+      flat
+      rotation={pos.h}
+      tracksViewChanges={track}
+      zIndex={10}
+      style={{ width: 56, height: 56 }}
+    >
+      <View collapsable={false} style={styles.navChevronWrap}>
+        <View style={styles.navChevronRot}>
+          <Ionicons name="navigate" size={46} color="#fff" />
+        </View>
+        <View style={[styles.navChevronRot, StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
+          <Ionicons name="navigate" size={34} color="#1a73e8" />
+        </View>
+      </View>
+    </Marker>
+  );
+}
+
 const GoogleMapNative = forwardRef((props: Props, ref: any) => {
   const mapRef = useRef<MapView>(null);
   const propsRef = useRef(props);
@@ -478,29 +549,12 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
             the map frame, so rotation=heading points along the road like
             Google/Uber). Idle location is Google's own native blue dot. */}
         {props.userLocation && props.isActiveNavigation ? (
-          <Marker
+          <AnimatedNavPuck
             key="user-nav"
-            coordinate={{ latitude: props.userLocation.lat, longitude: props.userLocation.lng }}
-            anchor={{ x: 0.5, y: 0.5 }}
-            flat
-            rotation={props.heading || 0}
-            tracksViewChanges
-            zIndex={10}
-            style={{ width: 56, height: 56 }}
-          >
-            {/* Google Maps-style nav puck: blue chevron with a white outline
-                (no enclosing circle). The glyph points up-right natively, so
-                rotate -45° to point up; the flat marker then rotates it with
-                the travel heading, exactly like Google navigation. */}
-            <View collapsable={false} style={styles.navChevronWrap}>
-              <View style={styles.navChevronRot}>
-                <Ionicons name="navigate" size={46} color="#fff" />
-              </View>
-              <View style={[styles.navChevronRot, StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
-                <Ionicons name="navigate" size={34} color="#1a73e8" />
-              </View>
-            </View>
-          </Marker>
+            lat={props.userLocation.lat}
+            lng={props.userLocation.lng}
+            heading={props.heading}
+          />
         ) : null}
 
         {/* Parking spots */}
