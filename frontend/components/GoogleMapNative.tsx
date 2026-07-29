@@ -33,6 +33,16 @@ const isNightHour = () => {
   return h >= 19 || h < 6;
 };
 
+/**
+ * Visually no-op DAY style. Play Services Maps 19+ defaults to following the
+ * phone's system dark mode; passing ANY custom style forces the classic light
+ * styled renderer instead. This keeps the map light during the day even on
+ * phones set to dark mode — night is governed by our own clock below.
+ */
+const GOOGLE_DAY_STYLE = [
+  { elementType: 'geometry', stylers: [{ saturation: 0 }] },
+];
+
 /** Google's official night-mode map style (maps platform styling reference). */
 const GOOGLE_NIGHT_STYLE = [
   { elementType: 'geometry', stylers: [{ color: '#242f3e' }] },
@@ -457,7 +467,7 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
           altitude: 0,
         }}
         onMapReady={() => setMapReady(true)}
-        customMapStyle={night ? GOOGLE_NIGHT_STYLE : []}
+        customMapStyle={night ? GOOGLE_NIGHT_STYLE : GOOGLE_DAY_STYLE}
         onPress={handlePress}
         onPanDrag={handlePanDrag}
         onRegionChangeComplete={handleRegionChangeComplete}
