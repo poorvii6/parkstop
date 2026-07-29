@@ -67,9 +67,12 @@ function SpotMarker({ m, onPress }: { m: { id: string; lat: number; lng: number;
   const arm = () => {
     setTrack(true);
     if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => setTrack(false), 650);
+    timer.current = setTimeout(() => setTrack(false), 1500);
   };
   useEffect(() => { arm(); return () => { if (timer.current) clearTimeout(timer.current); }; }, [m.price, m.available]);
+  // NOTE: no numberOfLines on the texts — inside a marker that truncated the
+  // price to the too-narrow measured width. flexShrink:0 (in styles) also stops
+  // the row from squeezing them. This is what actually fixes the clipped "P ₹".
   return (
     <Marker
       identifier={String(m.id)}
@@ -80,8 +83,8 @@ function SpotMarker({ m, onPress }: { m: { id: string; lat: number; lng: number;
     >
       <View style={[styles.spotPill, !m.available && styles.spotPillUnavailable]} onLayout={arm}>
         <View style={styles.spotPBadge}><Text style={styles.spotPLetter} allowFontScaling={false}>P</Text></View>
-        <Text style={styles.spotPillText} numberOfLines={1} allowFontScaling={false}>₹{m.price}</Text>
-        <Text style={styles.spotPillPerHr} numberOfLines={1} allowFontScaling={false}>/hr</Text>
+        <Text style={styles.spotPillText} allowFontScaling={false}>₹{m.price}</Text>
+        <Text style={styles.spotPillPerHr} allowFontScaling={false}>/hr</Text>
       </View>
     </Marker>
   );
@@ -518,8 +521,8 @@ const styles = StyleSheet.create({
   spotPillUnavailable: { backgroundColor: '#9aa0a6' },
   spotPBadge: { width: 17, height: 17, borderRadius: 8.5, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', marginRight: 5 },
   spotPLetter: { color: '#4285F4', fontWeight: '900', fontSize: 11, lineHeight: 13 },
-  spotPillText: { color: '#fff', fontWeight: '800', fontSize: 12, lineHeight: 14 },
-  spotPillPerHr: { color: 'rgba(255,255,255,0.85)', fontWeight: '600', fontSize: 10, marginLeft: 1 },
+  spotPillText: { color: '#fff', fontWeight: '800', fontSize: 12, lineHeight: 14, flexShrink: 0 },
+  spotPillPerHr: { color: 'rgba(255,255,255,0.85)', fontWeight: '600', fontSize: 10, marginLeft: 1, flexShrink: 0 },
   navArrowWrap: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#1a73e8', borderWidth: 3, borderColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 6 },
   navArrow: { width: 0, height: 0, borderLeftWidth: 9, borderRightWidth: 9, borderBottomWidth: 18, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: '#fff', marginTop: -3 },
   recenterBtn: { position: 'absolute', right: 16, width: 48, height: 48, borderRadius: 24, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 6, shadowOffset: { width: 0, height: 3 }, elevation: 6 },
