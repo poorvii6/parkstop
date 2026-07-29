@@ -32,7 +32,7 @@ type LatLng = { latitude: number; longitude: number };
 type Props = {
   userLocation?: { lat: number; lng: number };
   viewportHint?: { lat: number; lng: number } | null;
-  markers?: Array<{ id: string; lat: number; lng: number; price: number; available: boolean; title?: string }>;
+  markers?: Array<{ id: string; lat: number; lng: number; price: number; available: boolean; available_slots?: number; title?: string }>;
   routeCoords?: Array<LatLng>;
   altRoutes?: Array<{ coords: Array<LatLng>; duration: number; distance: number }>;
   searchedPlace?: { lat: number; lng: number; title: string } | null;
@@ -58,19 +58,18 @@ type Props = {
  * So this keeps tracksViewChanges ON until the pill has measured (onLayout),
  * then a beat longer for font paint — and re-arms whenever the price changes.
  */
-function SpotMarker({ m, onPress }: { m: { id: string; lat: number; lng: number; price: number; available: boolean }; onPress: () => void }) {
-  // SIMPLEST POSSIBLE MARKER. Every previous attempt nested Views (badge + two
-  // Texts, borders, wrappers) and Android's marker rasteriser kept measuring the
-  // row too narrow, slicing the pill after the "P". A SINGLE Text node with its
-  // own background has nothing to mis-measure. tracksViewChanges stays true —
-  // with a handful of spots the redraw cost is negligible and correctness wins.
-  const label = `P  ₹${m.price}/hr`;
-  const w = Math.ceil(24 + label.length * 9.5);
-  // RN 0.81 = Fabric (new architecture). Fabric FLATTENS plain views/texts, and
-  // react-native-maps rasterises the flattened marker at a stale narrow width —
-  // this is the documented cause of clipped custom markers on Fabric, and
-  // collapsable={false} on a fixed-size root view is the documented fix: it
-  // forces a real native view that the marker snapshots at its true size.
+function SpotMarker({ m, onPress }: { m: { id: string; lat: number; lng: number; price: number; available: boolean; available_slots?: number }; onPress: () => void }) {
+  // Google-style balloon marker (per design reference): colored balloon with a
+  // white rounded-square "P" badge, "₹price/hr" + "N available", a pointer tail,
+  // and an anchor dot sitting on the exact coordinate.
+  // Fabric-safe: collapsable={false} + explicit sizes everywhere (RN 0.81
+  // flattens plain views and the map rasterises them clipped otherwise).
+  const color = m.available ? '#2962FF' : '#9aa0a6';
+  const slots = typeof m.available_slots === 'number' ? m.available_slots : undefined;
+  const priceStr = `${m.price}`;
+  const balloonW = Math.max(128, 92 + priceStr.length * 13);
+  const rootW = balloonW + 8;
+  const rootH = 96;
   return (
     <Marker
       identifier={String(m.id)}
@@ -79,11 +78,27 @@ function SpotMarker({ m, onPress }: { m: { id: string; lat: number; lng: number;
       tracksViewChanges
       onPress={onPress}
     >
-      <View
-        collapsable={false}
-        style={[styles.spotPillBox, !m.available && styles.spotPillFlatUnavailable, { width: w }]}
-      >
-        <Text allowFontScaling={false} style={styles.spotPillBoxText}>{label}</Text>
+      <View collapsable={false} style={{ width: rootW, height: rootH, alignItems: 'center' }}>
+        {/* Balloon */}
+        <View collapsable={false} style={[styles.balloon, { backgroundColor: color, width: balloonW }]}>
+          <View style={styles.balloonBadge}>
+            <Text allowFontScaling={false} style={[styles.balloonBadgeP, { color }]}>P</Text>
+          </View>
+          <View style={{ marginLeft: 8 }}>
+            <Text allowFontScaling={false} style={styles.balloonPrice}>
+              ₹{priceStr}<Text style={styles.balloonPerHr}>/hr</Text>
+            </Text>
+            {slots !== undefined ? (
+              <Text allowFontScaling={false} style={styles.balloonSlots}>
+                {m.available ? `${slots} available` : 'Full'}
+              </Text>
+            ) : null}
+          </View>
+        </View>
+        {/* Tail */}
+        <View style={[styles.balloonTail, { borderTopColor: color }]} />
+        {/* Anchor dot on the exact coordinate */}
+        <View style={[styles.balloonDot, { backgroundColor: color }]} />
       </View>
     </Marker>
   );
@@ -261,7 +276,7 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
     : props.destination
       ? { lat: props.destination.lat, lng: props.destination.lng }
       : null;
-  const markerSig = (props.markers || []).map((m) => `${m.id}:${m.price}:${m.available ? 1 : 0}`).join('|');
+  const markerSig = (props.markers || []).map((m) => `${m.id}:${m.price}:${m.available ? 1 : 0}:${m.available_slots ?? ''}`).join('|');
   const destKey = dest ? `${dest.lat.toFixed(5)},${dest.lng.toFixed(5)}` : '';
   const [track, setTrack] = useState(true);
   useEffect(() => {
@@ -374,7 +389,7 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
         if (isActive) return null;
         // Key includes price/availability so the marker fully re-creates instead
         // of reusing a stale (too-narrow) bitmap.
-        return <SpotMarker key={`${m.id}:${m.price}:${m.available ? 1 : 0}`} m={m} onPress={() => propsRef.current.onMarkerPress?.(m.id)} />;
+        return <SpotMarker key={`${m.id}:${m.price}:${m.available ? 1 : 0}:${m.available_slots ?? ''}`} m={m} onPress={() => propsRef.current.onMarkerPress?.(m.id)} />;
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [markerSig, destKey]
@@ -522,8 +537,15 @@ const styles = StyleSheet.create({
   // measures exactly one box and cannot clip it.
   spotPillFlat: { backgroundColor: '#4285F4', color: '#fff', fontSize: 13, fontWeight: '800', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 15, overflow: 'hidden', textAlign: 'center' },
   spotPillFlatUnavailable: { backgroundColor: '#9aa0a6' },
-  spotPillBox: { height: 32, borderRadius: 16, backgroundColor: '#4285F4', alignItems: 'center', justifyContent: 'center' },
-  spotPillBoxText: { color: '#fff', fontSize: 13, fontWeight: '800' },
+  // Balloon marker (design reference): balloon + white P badge + tail + dot.
+  balloon: { flexDirection: 'row', alignItems: 'center', borderRadius: 14, paddingHorizontal: 10, paddingVertical: 8, height: 56 },
+  balloonBadge: { width: 36, height: 36, borderRadius: 9, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
+  balloonBadgeP: { fontSize: 22, fontWeight: '900', lineHeight: 26 },
+  balloonPrice: { color: '#fff', fontSize: 17, fontWeight: '900', lineHeight: 20 },
+  balloonPerHr: { color: 'rgba(255,255,255,0.85)', fontSize: 12, fontWeight: '700' },
+  balloonSlots: { color: 'rgba(255,255,255,0.92)', fontSize: 11, fontWeight: '600', marginTop: 1 },
+  balloonTail: { width: 0, height: 0, borderLeftWidth: 9, borderRightWidth: 9, borderTopWidth: 11, borderLeftColor: 'transparent', borderRightColor: 'transparent' },
+  balloonDot: { width: 13, height: 13, borderRadius: 6.5, borderWidth: 2.5, borderColor: '#fff', marginTop: 5 },
   spotPill: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#4285F4', paddingVertical: 4, borderRadius: 16, borderWidth: 2, borderColor: '#fff' },
   spotPillUnavailable: { backgroundColor: '#9aa0a6' },
   spotPBadge: { width: 17, height: 17, borderRadius: 8.5, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', marginRight: 5 },
