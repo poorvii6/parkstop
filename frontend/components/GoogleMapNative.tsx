@@ -177,27 +177,40 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
     })();
     return () => { alive = false; };
   }, []);
-  // Open on the user as soon as BOTH the map is ready AND we have a fix (prop or
-  // our own lookup). Re-runs when either arrives, so it can never stay stuck.
-  useEffect(() => {
-    if (didInitialPosition.current || !mapReady || !mapRef.current) return;
-    const u = props.userLocation || selfLoc;
+  // Open on the user with VERIFIED retries. The old one-shot latch could fire
+  // into a not-yet-ready native map (silent no-op) and never try again — that
+  // was the "whole India until you recenter manually" bug. Now we only latch
+  // AFTER getCamera confirms the snap landed; until then every new fix / ready
+  // signal retries. User gestures also latch (never fight the user).
+  const trySnapToUser = useCallback(() => {
+    if (didInitialPosition.current || !mapRef.current) return;
+    if (propsRef.current.destination || propsRef.current.searchedPlace) { didInitialPosition.current = true; return; }
+    if (lastInteraction.current > 0) { didInitialPosition.current = true; return; }
+    const u = propsRef.current.userLocation || selfLoc;
     if (!u) return;
-    if (props.destination || props.searchedPlace) { didInitialPosition.current = true; return; }
-    didInitialPosition.current = true;
     markProgrammatic(900);
     currentZoom.current = USER_MAP_ZOOM;
-    // Instant snap (setCamera, no animation) so it opens ON the user like Google
-    // Maps — no slow zoom, no country-wide flash.
     mapRef.current.setCamera({ center: { latitude: u.lat, longitude: u.lng }, zoom: USER_MAP_ZOOM, pitch: 0, heading: 0 });
-  }, [mapReady, props.userLocation, selfLoc, props.destination, props.searchedPlace]);
-
-  // Safety net: if onMapReady never fires (rare Android quirk), still mark ready
-  // shortly after mount so the GPS snap above can run.
+    // Latch ONLY once the camera verifiably moved off the country-wide view.
+    setTimeout(() => {
+      mapRef.current?.getCamera?.().then((cam: any) => {
+        if (cam && typeof cam.zoom === 'number' && cam.zoom >= USER_MAP_ZOOM - 2) {
+          didInitialPosition.current = true;
+        }
+      }).catch(() => {});
+    }, 300);
+  }, [selfLoc]);
+  useEffect(() => { trySnapToUser(); }, [mapReady, props.userLocation, selfLoc, trySnapToUser]);
+  // Steady retry heartbeat for the first seconds after mount — covers every
+  // ready/fix ordering without depending on any single event.
   useEffect(() => {
-    const t = setTimeout(() => setMapReady(true), 1500);
-    return () => clearTimeout(t);
-  }, []);
+    const iv = setInterval(() => {
+      if (didInitialPosition.current) { clearInterval(iv); return; }
+      trySnapToUser();
+    }, 700);
+    const stop = setTimeout(() => clearInterval(iv), 15000);
+    return () => { clearInterval(iv); clearTimeout(stop); };
+  }, [trySnapToUser]);
 
   // ── Camera follow ─────────────────────────────────────────────
   useEffect(() => {
@@ -350,20 +363,13 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
     } catch {}
   };
 
-  // The map's OWN first location fix (the one drawing the native blue dot).
-  // We snap the camera to it independently of the app's userLocation prop,
-  // which can lag — this is what reliably kills the "whole India" open view.
+  // The map's OWN location fix (the one drawing the native blue dot) — the
+  // freshest possible source. Feed it into the verified snap pipeline; the
+  // retry heartbeat does the rest.
   const handleUserLocationChange = (e: any) => {
     const c = e?.nativeEvent?.coordinate;
     if (!c || typeof c.latitude !== 'number') return;
-    if (didInitialPosition.current || !mapReady || !mapRef.current) return;
-    if (propsRef.current.destination || propsRef.current.searchedPlace) { didInitialPosition.current = true; return; }
-    didInitialPosition.current = true;
-    markProgrammatic(900);
-    mapRef.current.animateCamera(
-      { center: { latitude: c.latitude, longitude: c.longitude }, zoom: USER_MAP_ZOOM, pitch: 0, heading: 0 },
-      { duration: 600 }
-    );
+    if (!didInitialPosition.current) setSelfLoc({ lat: c.latitude, lng: c.longitude });
   };
 
   // ── Route polylines ───────────────────────────────────────────
