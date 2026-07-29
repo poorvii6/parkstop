@@ -484,11 +484,21 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
             anchor={{ x: 0.5, y: 0.5 }}
             flat
             rotation={props.heading || 0}
-            tracksViewChanges={track}
+            tracksViewChanges
             zIndex={10}
+            style={{ width: 56, height: 56 }}
           >
-            <View style={styles.navArrowWrap}>
-              <View style={styles.navArrow} />
+            {/* Google Maps-style nav puck: blue chevron with a white outline
+                (no enclosing circle). The glyph points up-right natively, so
+                rotate -45° to point up; the flat marker then rotates it with
+                the travel heading, exactly like Google navigation. */}
+            <View collapsable={false} style={styles.navChevronWrap}>
+              <View style={styles.navChevronRot}>
+                <Ionicons name="navigate" size={46} color="#fff" />
+              </View>
+              <View style={[styles.navChevronRot, StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
+                <Ionicons name="navigate" size={34} color="#1a73e8" />
+              </View>
             </View>
           </Marker>
         ) : null}
@@ -589,6 +599,8 @@ const styles = StyleSheet.create({
   spotPillPerHr: { color: 'rgba(255,255,255,0.85)', fontWeight: '600', fontSize: 10, marginLeft: 1, flexShrink: 0 },
   navArrowWrap: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#1a73e8', borderWidth: 3, borderColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 6 },
   navArrow: { width: 0, height: 0, borderLeftWidth: 9, borderRightWidth: 9, borderBottomWidth: 18, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: '#fff', marginTop: -3 },
+  navChevronWrap: { width: 56, height: 56, alignItems: 'center', justifyContent: 'center' },
+  navChevronRot: { transform: [{ rotate: '-45deg' }], alignItems: 'center', justifyContent: 'center' },
   recenterBtn: { position: 'absolute', right: 16, width: 48, height: 48, borderRadius: 24, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 6, shadowOffset: { width: 0, height: 3 }, elevation: 6 },
   mapCtrlBtn: { position: 'absolute', right: 16, width: 46, height: 46, borderRadius: 23, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 6 },
   zoomPill: { position: 'absolute', right: 16, width: 46, borderRadius: 23, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', paddingVertical: 2, shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 6 },
