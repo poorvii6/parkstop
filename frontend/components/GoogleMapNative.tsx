@@ -27,6 +27,34 @@ const GESTURE_PRESS_GUARD_MS = 350;
 const OFF_ROUTE_BASE_M = 50;
 const OFF_ROUTE_CONFIRMATIONS = 2;
 
+/** Night runs 7pm–6am, matching the old MapLibre day/night switch. */
+const isNightHour = () => {
+  const h = new Date().getHours();
+  return h >= 19 || h < 6;
+};
+
+/** Google's official night-mode map style (maps platform styling reference). */
+const GOOGLE_NIGHT_STYLE = [
+  { elementType: 'geometry', stylers: [{ color: '#242f3e' }] },
+  { elementType: 'labels.text.stroke', stylers: [{ color: '#242f3e' }] },
+  { elementType: 'labels.text.fill', stylers: [{ color: '#746855' }] },
+  { featureType: 'administrative.locality', elementType: 'labels.text.fill', stylers: [{ color: '#d59563' }] },
+  { featureType: 'poi', elementType: 'labels.text.fill', stylers: [{ color: '#d59563' }] },
+  { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#263c3f' }] },
+  { featureType: 'poi.park', elementType: 'labels.text.fill', stylers: [{ color: '#6b9a76' }] },
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#38414e' }] },
+  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#212a37' }] },
+  { featureType: 'road', elementType: 'labels.text.fill', stylers: [{ color: '#9ca5b3' }] },
+  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#746855' }] },
+  { featureType: 'road.highway', elementType: 'geometry.stroke', stylers: [{ color: '#1f2835' }] },
+  { featureType: 'road.highway', elementType: 'labels.text.fill', stylers: [{ color: '#f3d19c' }] },
+  { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#2f3948' }] },
+  { featureType: 'transit.station', elementType: 'labels.text.fill', stylers: [{ color: '#d59563' }] },
+  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#17263c' }] },
+  { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#515c6d' }] },
+  { featureType: 'water', elementType: 'labels.text.stroke', stylers: [{ color: '#17263c' }] },
+];
+
 type LatLng = { latitude: number; longitude: number };
 
 type Props = {
@@ -133,6 +161,14 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
 
   // Current map rotation (deg), so the custom compass button can reflect it.
   const [mapHeading, setMapHeading] = useState(0);
+
+  // Day/night theme like Google: light by day, night palette 7pm–6am.
+  // Re-checked every 5 minutes so a session crossing 7pm flips live.
+  const [night, setNight] = useState(isNightHour);
+  useEffect(() => {
+    const iv = setInterval(() => setNight(isNightHour()), 5 * 60 * 1000);
+    return () => clearInterval(iv);
+  }, []);
 
   // ── Imperative ref: the finder drives the whole map through animateCamera ──
   useImperativeHandle(ref, () => ({
@@ -421,6 +457,7 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
           altitude: 0,
         }}
         onMapReady={() => setMapReady(true)}
+        customMapStyle={night ? GOOGLE_NIGHT_STYLE : []}
         onPress={handlePress}
         onPanDrag={handlePanDrag}
         onRegionChangeComplete={handleRegionChangeComplete}
