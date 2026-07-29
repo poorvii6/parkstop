@@ -39,6 +39,11 @@ const isNightHour = () => {
 
 type LatLng = { latitude: number; longitude: number };
 
+/** Congestion colors — identical to the MapLibre map (Google's palette). */
+const TRAFFIC_COLORS: Record<string, string> = {
+  low: '#34a853', moderate: '#fbbc04', heavy: '#ea8600', severe: '#ea4335',
+};
+
 type Props = {
   userLocation?: { lat: number; lng: number };
   viewportHint?: { lat: number; lng: number } | null;
@@ -462,23 +467,55 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
   };
 
   // ── Route polylines ───────────────────────────────────────────
+  // Alternatives are TAPPABLE — tapping a grey route selects it (the finder
+  // swaps it in as the main route). Index is the ORIGINAL altRoutes index so
+  // the finder's lookup matches even if some alternates are invalid.
   const altPolylines = useMemo(
     () =>
-      (props.altRoutes || [])
-        .filter((a) => (a.coords?.length || 0) >= 2)
-        .map((a, i) => (
+      (props.altRoutes || []).map((a, i) =>
+        (a.coords?.length || 0) >= 2 ? (
           <Polyline
             key={`alt-${i}`}
             coordinates={a.coords}
             strokeColor="#78909c"
-            strokeWidth={6}
+            strokeWidth={7}
             zIndex={1}
             lineCap="round"
             lineJoin="round"
+            tappable
+            onPress={() => propsRef.current.onSelectAltRoute?.(i)}
           />
-        )),
+        ) : null
+      ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [(props.altRoutes || []).map((a) => `${a.coords?.length || 0}:${Math.round(a.duration || 0)}`).join('|')]
+  );
+
+  // ── Traffic-colored segments (navigation) ─────────────────────
+  // Same behaviour as the MapLibre map: while navigating with traffic data,
+  // the plain route dims and per-step congestion segments draw on top
+  // (green/amber/orange/red by measured speed).
+  const trafficSegs = props.trafficSegments || [];
+  const hasTraffic = !!props.isActiveNavigation && trafficSegs.length > 0;
+  const trafficPolylines = useMemo(
+    () =>
+      !hasTraffic
+        ? null
+        : trafficSegs.map((seg: any, i: number) =>
+            (seg.coords?.length || 0) >= 2 ? (
+              <Polyline
+                key={`traffic-${i}`}
+                coordinates={seg.coords.map((c: [number, number]) => ({ latitude: c[1], longitude: c[0] }))}
+                strokeColor={TRAFFIC_COLORS[seg.congestion] || '#4285F4'}
+                strokeWidth={7}
+                zIndex={4}
+                lineCap="round"
+                lineJoin="round"
+              />
+            ) : null
+          ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [hasTraffic, trafficSegs.map((s: any) => `${s.coords?.length || 0}:${s.congestion}`).join('|')]
   );
 
   const spotMarkers = useMemo(
@@ -537,13 +574,18 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
         {/* Alternative routes — muted grey beneath the main route */}
         {altPolylines}
 
-        {/* Main route: dark casing under a bright line (Google style) */}
+        {/* Main route: dark casing under a bright line (Google style). While
+            traffic segments are showing, the plain route dims so the colored
+            congestion overlay reads clearly — same as the MapLibre map. */}
         {rc.length >= 2 ? (
           <>
-            <Polyline coordinates={rc} strokeColor="#0d47a1" strokeWidth={12} zIndex={2} lineCap="round" lineJoin="round" />
-            <Polyline coordinates={rc} strokeColor="#4285F4" strokeWidth={7} zIndex={3} lineCap="round" lineJoin="round" />
+            <Polyline coordinates={rc} strokeColor={hasTraffic ? 'rgba(13,71,161,0.15)' : '#0d47a1'} strokeWidth={12} zIndex={2} lineCap="round" lineJoin="round" />
+            <Polyline coordinates={rc} strokeColor={hasTraffic ? 'rgba(66,133,244,0.2)' : '#4285F4'} strokeWidth={7} zIndex={3} lineCap="round" lineJoin="round" />
           </>
         ) : null}
+
+        {/* Traffic congestion overlay (navigation only) */}
+        {trafficPolylines}
 
         {/* During navigation, a directional arrow puck (flat markers rotate in
             the map frame, so rotation=heading points along the road like
