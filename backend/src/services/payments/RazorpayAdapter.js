@@ -67,6 +67,38 @@ class RazorpayAdapter {
   }
 
   /**
+   * CREATE DYNAMIC UPI QR (credits ParkStop, NOT the spotter)
+   * A single-use, fixed-amount UPI QR the finder scans in GPay/PhonePe/Paytm.
+   * The money lands in ParkStop's Razorpay account; `qr_code.credited` webhook
+   * then settles the booking. booking_id travels in notes so the webhook can
+   * recover it. Raw REST (Basic auth) to stay independent of SDK versions.
+   */
+  async createQrCode({ amountPaise, bookingId, description, closeBy }) {
+    const auth = Buffer.from(`${process.env.RAZORPAY_KEY_ID}:${process.env.RAZORPAY_KEY_SECRET}`).toString('base64');
+    const body = {
+      type: 'upi_qr',
+      name: `ParkStop #${bookingId}`,
+      usage: 'single_use',
+      fixed_amount: true,
+      payment_amount: amountPaise,
+      description: description || `ParkStop booking ${bookingId}`,
+      notes: { booking_id: String(bookingId) },
+    };
+    if (closeBy) body.close_by = closeBy;
+    const res = await fetch('https://api.razorpay.com/v1/payments/qr_codes', {
+      method: 'POST',
+      headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      logger.error('Razorpay QR create error:', data);
+      throw new Error(data.error?.description || 'Failed to create payment QR');
+    }
+    return data; // { id, image_url, ... }
+  }
+
+  /**
    * VERIFY WEBHOOK SIGNATURE
    * Razorpay signs webhook deliveries with HMAC-SHA256 of the RAW request body
    * using the webhook secret (a separate secret from the API key). Timing-safe

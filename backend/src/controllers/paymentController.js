@@ -288,6 +288,23 @@ class PaymentController {
   }
 
   /**
+   * 🔳 CREATE BOOKING PAYMENT QR (credits ParkStop, not the spotter's UPI)
+   */
+  static async createBookingQr(req, res) {
+    try {
+      const { bookingId } = req.body;
+      if (!bookingId) {
+        return res.status(400).json({ success: false, message: 'bookingId is required' });
+      }
+      const qr = await PaymentService.createBookingQr(bookingId, req.user.id);
+      return res.json({ success: true, data: qr });
+    } catch (error) {
+      logger.error('createBookingQr error:', error);
+      return res.status(400).json({ success: false, message: error.message || 'Failed to create payment QR' });
+    }
+  }
+
+  /**
    * 🔔 RAZORPAY WEBHOOK (server-to-server, no auth — authenticated by HMAC)
    * Authoritative payment confirmation: settles bookings even if the app died
    * right after the user paid. Razorpay retries non-2xx responses, so we only
@@ -312,6 +329,13 @@ class PaymentController {
       if (event === 'payment.captured') {
         const entity = req.body?.payload?.payment?.entity;
         const result = await PaymentService.settleFromWebhook(entity);
+        return res.json({ received: true, ...result });
+      }
+
+      if (event === 'qr_code.credited') {
+        const qrEntity = req.body?.payload?.qr_code?.entity;
+        const paymentEntity = req.body?.payload?.payment?.entity;
+        const result = await PaymentService.settleFromQrCredit(paymentEntity, qrEntity);
         return res.json({ received: true, ...result });
       }
 

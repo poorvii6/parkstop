@@ -90,6 +90,68 @@ class PaymentService {
   }
 
   /**
+   * 🔳 CREATE A BOOKING PAYMENT QR (credits ParkStop)
+   * Amount is computed SERVER-SIDE (price + finder arrears) — the client cannot
+   * influence it. Replaces the old QR that paid the spotter's personal UPI.
+   */
+  static async createBookingQr(bookingId, requesterId) {
+    const booking = await prisma.bookings.findUnique({
+      where: { id: parseInt(bookingId) },
+      include: { users: true, parking_spots: true }
+    });
+    if (!booking) throw new Error('Booking not found');
+    if (booking.payment_status === 'paid') throw new Error('This booking is already paid');
+
+    // Only the booking's finder or the spot's spotter may generate its QR.
+    const isFinder = booking.user_id === requesterId;
+    const isSpotter = booking.parking_spots && booking.parking_spots.spotter_id === requesterId;
+    if (!isFinder && !isSpotter) throw new Error('Not authorized for this booking');
+
+    const arrears = (booking.users && booking.users.balance < 0) ? Math.abs(Number(booking.users.balance)) : 0;
+    const amountPaise = Math.round((Number(booking.total_price) + arrears) * 100);
+    if (!(amountPaise > 0)) throw new Error('Invalid booking amount');
+
+    const closeBy = Math.floor(Date.now() / 1000) + 30 * 60; // 30-minute validity
+    const qr = await razorpayAdapter.createQrCode({
+      amountPaise, bookingId, description: `ParkStop booking #${bookingId}`, closeBy
+    });
+    return { qrId: qr.id, imageUrl: qr.image_url, amount: amountPaise / 100 };
+  }
+
+  /**
+   * ✅ QR SETTLEMENT (server-to-server, authoritative)
+   * Handles `qr_code.credited`. booking_id comes from the QR's notes (set by us
+   * at creation); the payment must be captured and at least cover the base
+   * price. Idempotent via the shared atomic claim.
+   */
+  static async settleFromQrCredit(paymentEntity, qrEntity) {
+    if (!paymentEntity || paymentEntity.status !== 'captured') {
+      return { handled: false, reason: 'not captured' };
+    }
+    const bookingId = qrEntity?.notes?.booking_id;
+    if (!bookingId) {
+      logger.warn(`QR credit ${paymentEntity.id} has no booking_id note — skipping`);
+      return { handled: false, reason: 'no booking' };
+    }
+    const booking = await prisma.bookings.findUnique({ where: { id: parseInt(bookingId) } });
+    if (!booking) throw new Error(`Booking ${bookingId} not found for QR credit`);
+
+    const minPaise = Math.round(Number(booking.total_price) * 100);
+    if (Number(paymentEntity.amount) < minPaise) {
+      logger.error(`QR UNDERPAID booking ${bookingId}: got ${paymentEntity.amount} < base ${minPaise}`);
+      throw new Error('QR amount underpaid');
+    }
+
+    const updated = await PaymentService._finalizeClaimedBooking(bookingId, paymentEntity.id);
+    if (!updated) {
+      logger.info(`QR: booking ${bookingId} already settled — idempotent ack`);
+      return { handled: true, alreadySettled: true };
+    }
+    logger.info(`QR settled booking ${bookingId} via payment ${paymentEntity.id}`);
+    return { handled: true };
+  }
+
+  /**
    * ✅ WEBHOOK SETTLEMENT (server-to-server, authoritative)
    * Called for Razorpay's `payment.captured` events. Does NOT trust anything
    * from the app: the payment entity comes from a signature-verified webhook,

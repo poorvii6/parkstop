@@ -22,6 +22,7 @@ export default function VerifyScreen() {
   const [refreshing, setRefreshing] = useState(false);
 
   const [spotterUpiId, setSpotterUpiId] = useState<string | null>(null);
+  const [qrImageUrl, setQrImageUrl] = useState<string | null>(null);
   const [accountName, setAccountName] = useState<string | null>(null);
   // Booking is chosen by TAPPING a card; typing an ID is a fallback only.
   const [toast, setToast] = useState<{ msg: string; kind: 'success' | 'error' | 'info' } | null>(null);
@@ -167,8 +168,18 @@ export default function VerifyScreen() {
       if (res.data?.success) {
         setCheckoutData(res.data.data);
       }
+      // The QR now credits ParkStop (Razorpay Dynamic QR), NOT the spotter's
+      // personal UPI. ParkStop takes its fee and settles the spotter's share —
+      // the platform can no longer be bypassed. Webhook confirms the payment.
+      setQrImageUrl(null);
+      const qr = await apiClient.post('/payments/booking-qr', { bookingId });
+      if (qr.data?.success) {
+        setQrImageUrl(qr.data.data.imageUrl);
+      } else {
+        throw new Error(qr.data?.message || 'Could not create payment QR');
+      }
     } catch (e: any) {
-      Alert.alert('Failed to generate QR', e.response?.data?.message || 'Could not fetch amount');
+      Alert.alert('Failed to generate QR', e.response?.data?.message || e.message || 'Could not create QR');
     } finally {
       setLoading(false);
     }
@@ -323,14 +334,18 @@ export default function VerifyScreen() {
                 Ask the Finder to scan this QR code using PhonePe, GPay, or Paytm.
               </Text>
 
-              <View style={{ padding: 12, backgroundColor: '#FFF', borderRadius: RAD.md, marginBottom: SP.xl, alignItems: 'center' }}>
-                <View style={{ width: 200, height: 200 }}>
-                  <Image 
-                    source={{ uri: `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`upi://pay?pa=${spotterUpiId || 'parkstop@upi'}&pn=${accountName || 'ParkStop'}&am=${checkoutData.total_amount}&tr=${checkoutData.booking_id}`)}` }}
-                    style={{ width: 200, height: 200 }}
-                  />
+              <View style={{ padding: 12, backgroundColor: '#FFF', borderRadius: RAD.md, marginBottom: SP.md, alignItems: 'center' }}>
+                <View style={{ width: 200, height: 200, alignItems: 'center', justifyContent: 'center' }}>
+                  {qrImageUrl ? (
+                    <Image source={{ uri: qrImageUrl }} style={{ width: 200, height: 200 }} />
+                  ) : (
+                    <ActivityIndicator size="large" color={SC.accent} />
+                  )}
                 </View>
               </View>
+              <Text style={{ color: SC.textSecondary, fontSize: 11, textAlign: 'center', marginBottom: SP.xl }}>
+                Payment goes securely to ParkStop; your share is settled to you automatically.
+              </Text>
 
               <View style={{ flexDirection: 'column', gap: 12, width: '100%' }}>
                 <TouchableOpacity

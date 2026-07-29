@@ -14,6 +14,9 @@ const router = express.Router();
 // authenticated routes so nothing intercepts it.
 router.post('/webhook', PaymentController.razorpayWebhook);
 
+// Booking payment QR — credits ParkStop (not the spotter's personal UPI).
+router.post('/booking-qr', authenticate, authorize('FINDER', 'SPOTTER'), PaymentController.createBookingQr);
+
 router.post(
   '/checkout',
   authenticate,
