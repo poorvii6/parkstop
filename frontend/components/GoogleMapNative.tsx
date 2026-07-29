@@ -65,10 +65,12 @@ function SpotMarker({ m, onPress }: { m: { id: string; lat: number; lng: number;
   // own background has nothing to mis-measure. tracksViewChanges stays true —
   // with a handful of spots the redraw cost is negligible and correctness wins.
   const label = `P  ₹${m.price}/hr`;
-  // EXPLICIT width computed from the label so Android never measures the text
-  // at all — measurement is what kept locking the bitmap too narrow. ~9px per
-  // character at fontSize 13 plus horizontal padding, with generous slack.
   const w = Math.ceil(24 + label.length * 9.5);
+  // RN 0.81 = Fabric (new architecture). Fabric FLATTENS plain views/texts, and
+  // react-native-maps rasterises the flattened marker at a stale narrow width —
+  // this is the documented cause of clipped custom markers on Fabric, and
+  // collapsable={false} on a fixed-size root view is the documented fix: it
+  // forces a real native view that the marker snapshots at its true size.
   return (
     <Marker
       identifier={String(m.id)}
@@ -77,12 +79,12 @@ function SpotMarker({ m, onPress }: { m: { id: string; lat: number; lng: number;
       tracksViewChanges
       onPress={onPress}
     >
-      <Text
-        allowFontScaling={false}
-        style={[styles.spotPillFlat, !m.available && styles.spotPillFlatUnavailable, { width: w }]}
+      <View
+        collapsable={false}
+        style={[styles.spotPillBox, !m.available && styles.spotPillFlatUnavailable, { width: w }]}
       >
-        {label}
-      </Text>
+        <Text allowFontScaling={false} style={styles.spotPillBoxText}>{label}</Text>
+      </View>
     </Marker>
   );
 }
@@ -520,6 +522,8 @@ const styles = StyleSheet.create({
   // measures exactly one box and cannot clip it.
   spotPillFlat: { backgroundColor: '#4285F4', color: '#fff', fontSize: 13, fontWeight: '800', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 15, overflow: 'hidden', textAlign: 'center' },
   spotPillFlatUnavailable: { backgroundColor: '#9aa0a6' },
+  spotPillBox: { height: 32, borderRadius: 16, backgroundColor: '#4285F4', alignItems: 'center', justifyContent: 'center' },
+  spotPillBoxText: { color: '#fff', fontSize: 13, fontWeight: '800' },
   spotPill: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#4285F4', paddingVertical: 4, borderRadius: 16, borderWidth: 2, borderColor: '#fff' },
   spotPillUnavailable: { backgroundColor: '#9aa0a6' },
   spotPBadge: { width: 17, height: 17, borderRadius: 8.5, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', marginRight: 5 },
