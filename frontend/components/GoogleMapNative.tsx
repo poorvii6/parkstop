@@ -103,6 +103,7 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
   // ── Gesture vs programmatic camera bookkeeping ─────────────────
   const lastInteraction = useRef(0);
   const programmaticUntil = useRef(0);
+  const currentZoom = useRef(USER_MAP_ZOOM); // tracked so follow never resets zoom
   const markProgrammatic = (durationMs: number) => {
     programmaticUntil.current = Date.now() + durationMs + 400;
   };
@@ -162,11 +163,18 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
     if (props.destination || props.searchedPlace) { didInitialPosition.current = true; return; }
     didInitialPosition.current = true;
     markProgrammatic(900);
-    mapRef.current.animateCamera(
-      { center: { latitude: u.lat, longitude: u.lng }, zoom: USER_MAP_ZOOM, pitch: 0, heading: 0 },
-      { duration: 500 }
-    );
+    currentZoom.current = USER_MAP_ZOOM;
+    // Instant snap (setCamera, no animation) so it opens ON the user like Google
+    // Maps — no slow zoom, no country-wide flash.
+    mapRef.current.setCamera({ center: { latitude: u.lat, longitude: u.lng }, zoom: USER_MAP_ZOOM, pitch: 0, heading: 0 });
   }, [mapReady, props.userLocation, selfLoc, props.destination, props.searchedPlace]);
+
+  // Safety net: if onMapReady never fires (rare Android quirk), still mark ready
+  // shortly after mount so the GPS snap above can run.
+  useEffect(() => {
+    const t = setTimeout(() => setMapReady(true), 1500);
+    return () => clearTimeout(t);
+  }, []);
 
   // ── Camera follow ─────────────────────────────────────────────
   useEffect(() => {
@@ -180,8 +188,9 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
         { duration: FOLLOW_EASE_MS }
       );
     } else {
-      // Partial camera update: only recenter, leaving the user's zoom/pitch.
-      mapRef.current.animateCamera({ center }, { duration: FOLLOW_EASE_MS });
+      // Recenter but keep zoom EXPLICIT — a partial camera resets zoom to a
+      // default on Android, which read as the map "slowly zooming out".
+      mapRef.current.animateCamera({ center, zoom: currentZoom.current || USER_MAP_ZOOM }, { duration: FOLLOW_EASE_MS });
     }
   }, [props.userLocation, props.isFollowing, props.isActiveNavigation, props.heading]);
 
@@ -297,6 +306,7 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
     lastHeadingRead.current = now;
     mapRef.current?.getCamera?.().then((cam: any) => {
       if (cam && typeof cam.heading === 'number') setMapHeading(cam.heading);
+      if (cam && typeof cam.zoom === 'number') currentZoom.current = cam.zoom;
     }).catch(() => {});
   };
   const handleRegionChangeComplete = (_region: any, details?: any) => {
