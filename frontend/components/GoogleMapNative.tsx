@@ -33,37 +33,9 @@ const isNightHour = () => {
   return h >= 19 || h < 6;
 };
 
-/**
- * Visually no-op DAY style. Play Services Maps 19+ defaults to following the
- * phone's system dark mode; passing ANY custom style forces the classic light
- * styled renderer instead. This keeps the map light during the day even on
- * phones set to dark mode — night is governed by our own clock below.
- */
-const GOOGLE_DAY_STYLE = [
-  { elementType: 'geometry', stylers: [{ saturation: 0 }] },
-];
-
-/** Google's official night-mode map style (maps platform styling reference). */
-const GOOGLE_NIGHT_STYLE = [
-  { elementType: 'geometry', stylers: [{ color: '#242f3e' }] },
-  { elementType: 'labels.text.stroke', stylers: [{ color: '#242f3e' }] },
-  { elementType: 'labels.text.fill', stylers: [{ color: '#746855' }] },
-  { featureType: 'administrative.locality', elementType: 'labels.text.fill', stylers: [{ color: '#d59563' }] },
-  { featureType: 'poi', elementType: 'labels.text.fill', stylers: [{ color: '#d59563' }] },
-  { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#263c3f' }] },
-  { featureType: 'poi.park', elementType: 'labels.text.fill', stylers: [{ color: '#6b9a76' }] },
-  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#38414e' }] },
-  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#212a37' }] },
-  { featureType: 'road', elementType: 'labels.text.fill', stylers: [{ color: '#9ca5b3' }] },
-  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#746855' }] },
-  { featureType: 'road.highway', elementType: 'geometry.stroke', stylers: [{ color: '#1f2835' }] },
-  { featureType: 'road.highway', elementType: 'labels.text.fill', stylers: [{ color: '#f3d19c' }] },
-  { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#2f3948' }] },
-  { featureType: 'transit.station', elementType: 'labels.text.fill', stylers: [{ color: '#d59563' }] },
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#17263c' }] },
-  { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#515c6d' }] },
-  { featureType: 'water', elementType: 'labels.text.stroke', stylers: [{ color: '#17263c' }] },
-];
+// Theme: we drive Google's OWN modern color schemes (the exact renderer the
+// Google Maps app uses) via the userInterfaceStyle prop — light by day, Google's
+// real dark mode at night. No hand-rolled style JSON, no legacy cream palette.
 
 type LatLng = { latitude: number; longitude: number };
 
@@ -456,8 +428,13 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
   return (
     <View style={[StyleSheet.absoluteFill, props.style]}>
       <MapView
+        // Key on the theme: userInterfaceStyle is applied at map creation, so a
+        // day/night flip mid-session remounts the map in the new scheme (the
+        // first-fix logic re-centers it automatically).
+        key={night ? 'map-dark' : 'map-light'}
         ref={mapRef}
         provider={PROVIDER_GOOGLE}
+        userInterfaceStyle={night ? 'dark' : 'light'}
         style={StyleSheet.absoluteFill}
         initialCamera={{
           center: { latitude: loc.lat, longitude: loc.lng },
@@ -467,7 +444,6 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
           altitude: 0,
         }}
         onMapReady={() => setMapReady(true)}
-        customMapStyle={night ? GOOGLE_NIGHT_STYLE : GOOGLE_DAY_STYLE}
         onPress={handlePress}
         onPanDrag={handlePanDrag}
         onRegionChangeComplete={handleRegionChangeComplete}
