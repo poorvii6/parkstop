@@ -312,6 +312,29 @@ export default function SpotterDashboard() {
           </TouchableOpacity>
         </View>
 
+        {/* #5 GETTING STARTED — guides a new spotter through setup, hides when done */}
+        {(!(dashboardData.active_spots > 0 || (dashboardData.inventory || []).length > 0) || payoutSetup === false || !dashboardData.global_online) && (
+          <View style={{ backgroundColor: SC.bgCard, borderRadius: RAD.lg, borderWidth: 1, borderColor: SC.border, padding: 16, marginBottom: SP.xl }}>
+            <Text style={{ color: SC.textPrimary, fontWeight: '900', fontSize: 15, marginBottom: 4 }}>Get set up to earn</Text>
+            <Text style={{ color: SC.textSecondary, fontSize: 12, marginBottom: 8 }}>Finish these to start receiving bookings.</Text>
+            {[
+              { done: (dashboardData.active_spots > 0 || (dashboardData.inventory || []).length > 0), label: 'Add a parking spot', hint: 'List where drivers can park', onPress: () => router.push('/spotter/spots') },
+              { done: payoutSetup === true, label: 'Set up payouts', hint: 'Link UPI or bank to get paid', onPress: () => router.push('/spotter/payout-setup') },
+              { done: !!dashboardData.global_online, label: 'Go online', hint: 'Make your spots bookable', onPress: () => toggleGlobalStatus(!!dashboardData.global_online) },
+            ].map((step: any, i: number) => (
+              <TouchableOpacity key={i} onPress={step.done ? undefined : step.onPress} activeOpacity={step.done ? 1 : 0.8}
+                style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderTopWidth: i === 0 ? 0 : 1, borderTopColor: SC.border }}>
+                <Ionicons name={step.done ? 'checkmark-circle' : 'ellipse-outline'} size={22} color={step.done ? SC.success : SC.textMuted} style={{ marginRight: 12 }} />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: step.done ? SC.textMuted : SC.textPrimary, fontWeight: '700', fontSize: 14, textDecorationLine: step.done ? 'line-through' : 'none' }}>{step.label}</Text>
+                  {!step.done && <Text style={{ color: SC.textSecondary, fontSize: 11.5, marginTop: 1 }}>{step.hint}</Text>}
+                </View>
+                {!step.done && <Ionicons name="chevron-forward" size={18} color={SC.textMuted} />}
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
+
         {/* ACTION REQUIRED PILLS */}
         <View style={{ marginBottom: SP.xl, gap: 8 }}>
           {dashboardData.balance < 0 ? (
