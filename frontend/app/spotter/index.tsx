@@ -57,6 +57,7 @@ export default function SpotterDashboard() {
   const [isRazorpayVisible, setIsRazorpayVisible] = useState(false);
   const [razorpayOrder, setRazorpayOrder] = useState<any>(null);
   const [isClearingDues, setIsClearingDues] = useState(false);
+  const [isWithdrawing, setIsWithdrawing] = useState(false);
 
   const handleClearDues = async () => {
     try {
@@ -78,6 +79,45 @@ export default function SpotterDashboard() {
     } finally {
       setIsClearingDues(false);
     }
+  };
+
+  // #4 WITHDRAW: cash out the available (positive) wallet balance to the
+  // spotter's linked payout method. Routes to payout-setup if none is linked.
+  const handleWithdraw = async () => {
+    const bal = Number(dashboardData.balance || 0);
+    if (bal <= 0) { Alert.alert('Nothing to withdraw', 'You have no available balance yet.'); return; }
+    if (payoutSetup === false) {
+      Alert.alert('Set up payout first', 'Add your UPI or bank account to receive withdrawals.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Set up', onPress: () => router.push('/spotter/payout-setup') },
+      ]);
+      return;
+    }
+    Alert.alert('Withdraw earnings', `Withdraw ₹${bal.toFixed(2)} to your linked account?`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Withdraw', onPress: async () => {
+        setIsWithdrawing(true);
+        try {
+          const m = await apiClient.get('/payments/methods');
+          const methods = m.data?.data || [];
+          const method = methods.find((x: any) => x.is_default) || methods[0];
+          if (!method) {
+            Alert.alert('Set up payout first', 'Add your UPI or bank account to receive withdrawals.', [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Set up', onPress: () => router.push('/spotter/payout-setup') },
+            ]);
+            return;
+          }
+          await apiClient.post('/payments/withdraw', { methodId: method.id, amount: bal });
+          setToast({ msg: `Withdrawal of ₹${bal.toFixed(2)} requested`, kind: 'success' });
+          fetchDashboardData();
+        } catch (e: any) {
+          Alert.alert('Withdrawal failed', e.response?.data?.message || 'Could not process the withdrawal right now.');
+        } finally {
+          setIsWithdrawing(false);
+        }
+      }},
+    ]);
   };
 
   const handleRazorpaySuccess = async (data: any) => {
@@ -310,14 +350,41 @@ export default function SpotterDashboard() {
           )}
 
           {dashboardData.balance >= 0 && (
-            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(16,185,129,0.15)', padding: 12, borderRadius: RAD.md, borderWidth: 1, borderColor: 'rgba(16,185,129,0.3)' }}>
-              <Ionicons name="checkmark-circle" size={20} color="#10b981" style={{ marginRight: 8 }} />
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: '#10b981', fontWeight: '800', fontSize: 14 }}>No Pending Dues</Text>
-                <Text style={{ color: '#34d399', fontSize: 12 }}>All platform fees settled.</Text>
+            dashboardData.balance > 0 ? (
+              <View style={{ backgroundColor: 'rgba(16,185,129,0.15)', padding: 14, borderRadius: RAD.md, borderWidth: 1, borderColor: 'rgba(16,185,129,0.3)' }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                  <Ionicons name="wallet" size={20} color="#10b981" style={{ marginRight: 8 }} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ color: '#10b981', fontWeight: '800', fontSize: 14 }}>Available to withdraw</Text>
+                    <Text style={{ color: '#34d399', fontSize: 12 }}>Your earnings, settled and ready.</Text>
+                  </View>
+                  <Text style={{ color: '#10b981', fontWeight: '900', fontSize: 18 }}>₹{Number(dashboardData.balance).toFixed(2)}</Text>
+                </View>
+                <TouchableOpacity
+                  onPress={handleWithdraw}
+                  disabled={isWithdrawing}
+                  style={{ marginTop: 12, backgroundColor: '#10b981', borderRadius: RAD.md, paddingVertical: 12, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Withdraw ${Number(dashboardData.balance).toFixed(2)} rupees to your linked account`}
+                >
+                  {isWithdrawing ? <ActivityIndicator color="#fff" /> : (
+                    <>
+                      <Ionicons name="cash-outline" size={16} color="#fff" />
+                      <Text style={{ color: '#fff', fontWeight: '900', fontSize: 14 }}>Withdraw ₹{Number(dashboardData.balance).toFixed(2)}</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
               </View>
-              <Text style={{ color: '#10b981', fontWeight: 'bold' }}>₹0.00</Text>
-            </View>
+            ) : (
+              <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(16,185,129,0.15)', padding: 12, borderRadius: RAD.md, borderWidth: 1, borderColor: 'rgba(16,185,129,0.3)' }}>
+                <Ionicons name="checkmark-circle" size={20} color="#10b981" style={{ marginRight: 8 }} />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: '#10b981', fontWeight: '800', fontSize: 14 }}>No Pending Dues</Text>
+                  <Text style={{ color: '#34d399', fontSize: 12 }}>All platform fees settled.</Text>
+                </View>
+                <Text style={{ color: '#10b981', fontWeight: 'bold' }}>₹0.00</Text>
+              </View>
+            )
           )}
 
           {payoutSetup === false && (
