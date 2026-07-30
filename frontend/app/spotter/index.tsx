@@ -33,6 +33,7 @@ export default function SpotterDashboard() {
     loadFailed,
     lastSyncedAt,
     payoutSetup,
+    payoutRailLive,
     refetch: fetchDashboardData,
     onRefresh,
   } = useSpotterDashboard();
@@ -379,24 +380,31 @@ export default function SpotterDashboard() {
                   <Ionicons name="wallet" size={20} color="#10b981" style={{ marginRight: 8 }} />
                   <View style={{ flex: 1 }}>
                     <Text style={{ color: '#10b981', fontWeight: '800', fontSize: 14 }}>Available to withdraw</Text>
-                    <Text style={{ color: '#34d399', fontSize: 12 }}>Your earnings, settled and ready.</Text>
+                    <Text style={{ color: '#34d399', fontSize: 12 }}>{payoutRailLive ? 'Your earnings, ready to withdraw.' : 'Your earnings, safe in your wallet.'}</Text>
                   </View>
                   <Text style={{ color: '#10b981', fontWeight: '900', fontSize: 18 }}>₹{Number(dashboardData.balance).toFixed(2)}</Text>
                 </View>
-                <TouchableOpacity
-                  onPress={handleWithdraw}
-                  disabled={isWithdrawing}
-                  style={{ marginTop: 12, backgroundColor: '#10b981', borderRadius: RAD.md, paddingVertical: 12, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 }}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Withdraw ${Number(dashboardData.balance).toFixed(2)} rupees to your linked account`}
-                >
-                  {isWithdrawing ? <ActivityIndicator color="#fff" /> : (
-                    <>
-                      <Ionicons name="cash-outline" size={16} color="#fff" />
-                      <Text style={{ color: '#fff', fontWeight: '900', fontSize: 14 }}>Withdraw ₹{Number(dashboardData.balance).toFixed(2)}</Text>
-                    </>
-                  )}
-                </TouchableOpacity>
+                {payoutRailLive ? (
+                  <TouchableOpacity
+                    onPress={handleWithdraw}
+                    disabled={isWithdrawing}
+                    style={{ marginTop: 12, backgroundColor: '#10b981', borderRadius: RAD.md, paddingVertical: 12, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 }}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Withdraw ${Number(dashboardData.balance).toFixed(2)} rupees to your linked account`}
+                  >
+                    {isWithdrawing ? <ActivityIndicator color="#fff" /> : (
+                      <>
+                        <Ionicons name="cash-outline" size={16} color="#fff" />
+                        <Text style={{ color: '#fff', fontWeight: '900', fontSize: 14 }}>Withdraw ₹{Number(dashboardData.balance).toFixed(2)}</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                ) : (
+                  <View style={{ marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: RAD.md, paddingVertical: 10, paddingHorizontal: 12 }}>
+                    <Ionicons name="time-outline" size={16} color={SC.textSecondary} />
+                    <Text style={{ color: SC.textSecondary, fontSize: 11.5, flex: 1 }}>Automatic payouts activate once your payout account is verified — your earnings stay safe here until then.</Text>
+                  </View>
+                )}
               </View>
             ) : (
               <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(16,185,129,0.15)', padding: 12, borderRadius: RAD.md, borderWidth: 1, borderColor: 'rgba(16,185,129,0.3)' }}>

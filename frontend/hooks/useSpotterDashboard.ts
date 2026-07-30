@@ -52,6 +52,10 @@ export function useSpotterDashboard() {
   const [loadFailed, setLoadFailed] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
   const [payoutSetup, setPayoutSetup] = useState<boolean | null>(null);
+  // Whether a REAL payout rail exists (RazorpayX fund account). Only then is a
+  // withdrawal an actual transfer — otherwise it would just drain the wallet
+  // into a request nothing fulfils. Gates the Withdraw button honestly.
+  const [payoutRailLive, setPayoutRailLive] = useState(false);
 
   // Guards against setState after unmount (realtime events can land late).
   const mounted = useRef(true);
@@ -104,7 +108,10 @@ export function useSpotterDashboard() {
       apiClient
         .get('/payouts/account-status')
         .then((res) => {
-          if (mounted.current && res.data?.success) setPayoutSetup(res.data.data.is_setup);
+          if (mounted.current && res.data?.success) {
+            setPayoutSetup(res.data.data.is_setup);
+            setPayoutRailLive(!!res.data.data.has_razorpay_account);
+          }
         })
         .catch(() => { if (mounted.current) setPayoutSetup(false); });
     }, [fetchDashboardData])
@@ -123,6 +130,7 @@ export function useSpotterDashboard() {
     loadFailed,
     lastSyncedAt,
     payoutSetup,
+    payoutRailLive,
     refetch: fetchDashboardData,
     onRefresh,
   };

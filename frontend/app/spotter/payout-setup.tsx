@@ -83,7 +83,7 @@ export default function PayoutSetupScreen() {
       if (res.data?.success) {
         Alert.alert(
           '✅ Payout Account Ready!',
-          `Your ${payoutType === 'upi' ? 'UPI' : 'bank'} account has been ${isSetup ? 'updated' : 'linked'}. You'll receive earnings automatically after each booking.`,
+          `Your ${payoutType === 'upi' ? 'UPI' : 'bank'} account is ${isSetup ? 'updated' : 'saved'}. Your earnings collect safely in your wallet and pay out here automatically once ParkStop payouts go live.`,
           [{ text: 'Back to Dashboard', onPress: () => router.back() }]
         );
       }
@@ -124,7 +124,7 @@ export default function PayoutSetupScreen() {
             <View style={styles.statusBanner}>
               <Ionicons name="checkmark-circle" size={20} color={SC.success} />
               <Text style={styles.statusText}>
-                Payout account active via {existingData?.payout_mode?.toUpperCase()}
+                Payout destination saved · {existingData?.payout_mode?.toUpperCase()}
               </Text>
             </View>
           )}
@@ -133,7 +133,7 @@ export default function PayoutSetupScreen() {
           <View style={styles.infoCard}>
             <Ionicons name="information-circle" size={20} color={SC.info} />
             <Text style={styles.infoText}>
-              Add your UPI ID or bank account to receive earnings automatically when a booking completes. ParkStop pays you 80% of each booking.
+              You keep 80% of every booking. Add your UPI or bank account here — earnings collect in your wallet and pay out to it automatically once ParkStop payouts go live.
             </Text>
           </View>
 
