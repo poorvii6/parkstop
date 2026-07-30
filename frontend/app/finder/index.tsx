@@ -9,6 +9,7 @@ import { useStripe } from '../../components/StripeImports';
 import RazorpayCheckout from '../../components/RazorpayCheckout';
 import razorpayService from '../../services/razorpayService';
 import { registerForPushNotificationsAsync } from '../../services/notifications';
+import { onRealtime } from '../../services/realtime';
 
 import { io, Socket } from 'socket.io-client';
 import * as Location from 'expo-location';
@@ -1701,7 +1702,7 @@ export default function FinderDashboard() {
         try {
           const res = await apiClient.get('/bookings/my-bookings');
           if (res.data?.success) {
-            const currentBooking = res.data.data.find((b: any) => b.id === bookingDetails?.id);
+            const currentBooking = res.data.data.find((b: any) => String(b.id) === String(bookingDetails?.id));
             if (currentBooking) {
               if (step === 'arriving' && (currentBooking.status === 'active' || currentBooking.status === 'occupied')) {
                 setBookingDetails({ ...bookingDetails, ...currentBooking });
@@ -1724,6 +1725,21 @@ export default function FinderDashboard() {
     return () => {
       if (pollInterval) clearInterval(pollInterval);
     };
+  }, [step, bookingDetails?.id]);
+
+  // Instant check-in via socket (the 3s poll above is the fallback). When the
+  // spotter verifies the entry OTP, the backend emits booking:checkedin to this
+  // finder — advance straight to the active session with no wait.
+  useEffect(() => {
+    if (step !== 'arriving' || !bookingDetails?.id) return;
+    const off = onRealtime('booking:checkedin', (b: any) => {
+      if (String(b?.id) === String(bookingDetails?.id)) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        setBookingDetails((prev: any) => (prev ? { ...prev, ...b } : b));
+        setStep('active_parking');
+      }
+    });
+    return () => off();
   }, [step, bookingDetails?.id]);
 
   useEffect(() => {

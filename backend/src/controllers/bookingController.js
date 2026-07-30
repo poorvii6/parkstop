@@ -108,6 +108,11 @@ class BookingController {
 
       const updatedBooking = await Booking.verifyOTP(bookingId, otp);
 
+      // Instantly tell the FINDER they're checked in so their screen advances
+      // to the active session immediately (the 3s poll is a fallback, and was
+      // also silently broken by a string-vs-number booking id mismatch).
+      try { emitToUser(booking.user_id, 'booking:checkedin', updatedBooking); } catch (e) { logger.warn('checkedin emit failed:', e?.message); }
+
       res.json({
         success: true,
         message: 'Booking activated successfully',
