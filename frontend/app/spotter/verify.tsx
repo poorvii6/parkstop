@@ -23,6 +23,7 @@ export default function VerifyScreen() {
 
   const [spotterUpiId, setSpotterUpiId] = useState<string | null>(null);
   const [qrImageUrl, setQrImageUrl] = useState<string | null>(null);
+  const [qrError, setQrError] = useState<string | null>(null);
   const [accountName, setAccountName] = useState<string | null>(null);
   // Booking is chosen by TAPPING a card; typing an ID is a fallback only.
   const [toast, setToast] = useState<{ msg: string; kind: 'success' | 'error' | 'info' } | null>(null);
@@ -172,14 +173,17 @@ export default function VerifyScreen() {
       // personal UPI. ParkStop takes its fee and settles the spotter's share —
       // the platform can no longer be bypassed. Webhook confirms the payment.
       setQrImageUrl(null);
+      setQrError(null);
       const qr = await apiClient.post('/payments/booking-qr', { bookingId });
-      if (qr.data?.success) {
+      if (qr.data?.success && qr.data.data?.imageUrl) {
         setQrImageUrl(qr.data.data.imageUrl);
       } else {
-        throw new Error(qr.data?.message || 'Could not create payment QR');
+        throw new Error(qr.data?.message || 'QR service returned no image');
       }
     } catch (e: any) {
-      Alert.alert('Failed to generate QR', e.response?.data?.message || e.message || 'Could not create QR');
+      const msg = e.response?.data?.message || e.message || 'Could not create QR';
+      setQrError(msg);
+      Alert.alert('Failed to generate QR', msg);
     } finally {
       setLoading(false);
     }
@@ -338,6 +342,8 @@ export default function VerifyScreen() {
                 <View style={{ width: 200, height: 200, alignItems: 'center', justifyContent: 'center' }}>
                   {qrImageUrl ? (
                     <Image source={{ uri: qrImageUrl }} style={{ width: 200, height: 200 }} />
+                  ) : qrError ? (
+                    <Text style={{ color: '#dc2626', fontSize: 12, textAlign: 'center', paddingHorizontal: 10 }}>{qrError}</Text>
                   ) : (
                     <ActivityIndicator size="large" color={SC.accent} />
                   )}

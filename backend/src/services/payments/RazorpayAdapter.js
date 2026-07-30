@@ -92,9 +92,10 @@ class RazorpayAdapter {
     });
     const data = await res.json();
     if (!res.ok) {
-      logger.error('Razorpay QR create error:', data);
-      throw new Error(data.error?.description || 'Failed to create payment QR');
+      logger.error('Razorpay QR create error:', JSON.stringify(data));
+      throw new Error(data.error?.description || data.error?.reason || 'Failed to create payment QR');
     }
+    logger.info(`Razorpay QR created for booking ${bookingId}: id=${data.id}, image_url=${data.image_url ? 'present' : 'MISSING'}`);
     return data; // { id, image_url, ... }
   }
 
