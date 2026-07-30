@@ -408,6 +408,25 @@ class SpotController {
       const { online } = req.body;
       const is_active = !!online;
 
+      // DUES GATING: a spotter who owes the platform beyond the allowed limit
+      // (unpaid cash fees = negative wallet balance) cannot go ONLINE until
+      // they clear dues — the enforcement that keeps the cash/direct model
+      // safe. Going OFFLINE is always allowed.
+      if (is_active) {
+        const prisma = require('../config/prisma');
+        const me = await prisma.users.findUnique({ where: { id: req.user.id }, select: { balance: true } });
+        const dues = me && me.balance < 0 ? Math.abs(Number(me.balance)) : 0;
+        const duesLimit = Number(process.env.SPOTTER_DUES_LIMIT || 200);
+        if (dues > duesLimit) {
+          return res.status(403).json({
+            success: false,
+            code: 'DUES_LIMIT_EXCEEDED',
+            dues,
+            message: `You have ₹${dues.toFixed(2)} in unpaid platform dues. Please clear your dues to go online.`
+          });
+        }
+      }
+
       await require('../config/prisma').parking_spots.updateMany({
         where: { spotter_id: req.user.id },
         data: { is_active, updated_at: new Date() }

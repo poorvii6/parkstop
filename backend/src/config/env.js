@@ -93,6 +93,7 @@ function validateEnv() {
     { name: 'OLA_MAPS_API_KEY', feature: 'Maps search/routing (falls back to Nominatim/OSRM)' },
     { name: 'STRIPE_SECRET_KEY', feature: 'Stripe payments' },
     { name: 'RAZORPAY_ACCOUNT_NUMBER', feature: 'Razorpay payouts' },
+    { name: 'SPOTTER_DUES_LIMIT', feature: 'Max unpaid dues (INR) before a spotter is blocked from going online (default 200)' },
     { name: 'RAZORPAY_WEBHOOK_SECRET', feature: 'Razorpay webhook payment confirmation (server-to-server settlement)' },
     { name: 'REDIS_URL', feature: 'Durable payout/notification queues (falls back to inline execution with NO retry)' },
   ];
