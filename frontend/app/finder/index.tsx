@@ -3482,8 +3482,9 @@ export default function FinderDashboard() {
                         </View>
                         <View style={{ flex: 1 }}>
                           <Text style={{ color: '#10b981', fontWeight: '800', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.2, marginBottom: 2 }}>Checking out</Text>
-                          <Text style={{ color: '#fff', fontWeight: '900', fontSize: 16 }} numberOfLines={1}>{spots.find(s => s.id === selectedSpotId)?.title || 'Your parking spot'}</Text>
-                          <Text style={{ color: '#94a3b8', fontSize: 12, marginTop: 1 }}>Booking #{bookingDetails?.id}</Text>
+                          <Text style={{ color: '#fff', fontWeight: '900', fontSize: 15 }} numberOfLines={1}>{spots.find(s => s.id === selectedSpotId)?.title || 'Your parking spot'}</Text>
+                          <Text style={{ color: '#64748b', fontSize: 9, fontWeight: '800', letterSpacing: 1, marginTop: 4 }}>BOOKING ID — SHOW TO OWNER</Text>
+                          <Text selectable={true} style={{ color: '#fff', fontSize: 18, fontWeight: '900', letterSpacing: 0.5 }}>#{bookingDetails?.id}</Text>
                         </View>
                       </View>
 
