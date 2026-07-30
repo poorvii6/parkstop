@@ -3454,15 +3454,21 @@ export default function FinderDashboard() {
 
                 {step === 'checkout_verification' && (
                   <View style={{ paddingVertical: 10 }}>
-                    <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', marginBottom: 4, letterSpacing: -0.5 }}>Check-Out Verification</Text>
+                    <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', marginBottom: 4, letterSpacing: -0.5 }}>Ready to Check Out</Text>
                     <Text style={{ color: '#94a3b8', fontSize: 13, marginBottom: 20, fontWeight: '500', lineHeight: 18 }}>
-                      Show this exit code to the spot owner before leaving.
+                      Review your total, then complete checkout to pay and leave.
                     </Text>
 
                     <View style={{ backgroundColor: 'rgba(255,255,255,0.03)', padding: 18, borderRadius: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', marginBottom: 16 }}>
-                      <View style={{ alignItems: 'center', backgroundColor: 'rgba(99,102,241,0.08)', padding: 24, borderRadius: 20, borderWidth: 1.5, borderColor: 'rgba(99,102,241,0.2)', marginBottom: 16 }}>
-                        <Text style={{ color: '#818cf8', fontWeight: '800', fontSize: 10, marginBottom: 10, textTransform: 'uppercase', letterSpacing: 1.5 }}>Exit OTP</Text>
-                        <Text selectable={true} style={{ color: '#fff', fontWeight: '900', fontSize: 40, letterSpacing: 8 }}>{bookingDetails?.checkoutOtp || bookingDetails?.checkout_otp || '----'}</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(16,185,129,0.08)', padding: 16, borderRadius: 20, borderWidth: 1.5, borderColor: 'rgba(16,185,129,0.2)', marginBottom: 16 }}>
+                        <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: 'rgba(16,185,129,0.15)', alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
+                          <Ionicons name="car-outline" size={22} color="#10b981" />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ color: '#10b981', fontWeight: '800', fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.2, marginBottom: 2 }}>Checking out</Text>
+                          <Text style={{ color: '#fff', fontWeight: '900', fontSize: 16 }} numberOfLines={1}>{spots.find(s => s.id === selectedSpotId)?.title || 'Your parking spot'}</Text>
+                          <Text style={{ color: '#94a3b8', fontSize: 12, marginTop: 1 }}>Booking #{bookingDetails?.id}</Text>
+                        </View>
                       </View>
 
                       <View style={{ gap: 10 }}>
