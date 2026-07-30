@@ -218,7 +218,10 @@ export default function FinderDashboard() {
   // Consecutive in-geofence GPS fixes required before declaring arrival.
   const arrivalHits = useRef(0);
   const [extendModalOpen, setExtendModalOpen] = useState(false);
-  const [selectedExtendHours, setSelectedExtendHours] = useState(1);
+  // Extension duration in MINUTES. Presets cover quick top-ups (5/10/20/30 min)
+  // and hour blocks (60/120/180); customExtendText holds a manual entry.
+  const [selectedExtendMinutes, setSelectedExtendMinutes] = useState(60);
+  const [customExtendText, setCustomExtendText] = useState('');
   const [isExtending, setIsExtending] = useState(false);
   const [showPaymentMethodModal, setShowPaymentMethodModal] = useState(false);
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'online' | 'cash'>('online');
@@ -1763,11 +1766,20 @@ export default function FinderDashboard() {
 
   const handleExtendStay = async () => {
     if (!bookingDetails?.id) return;
+    const minutes = Math.round(Number(selectedExtendMinutes));
+    if (!Number.isFinite(minutes) || minutes <= 0) {
+      Alert.alert('Pick a duration', 'Choose a preset or enter how many minutes to add.');
+      return;
+    }
+    if (minutes > 1440) {
+      Alert.alert('Too long', 'You can extend by at most 24 hours at a time.');
+      return;
+    }
     setIsExtending(true);
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       const res = await apiClient.put(`/bookings/${bookingDetails.id}/extend`, {
-        additionalHours: selectedExtendHours
+        additionalMinutes: minutes
       });
       if (res.data.success) {
         Alert.alert("Success", "Stay extended successfully!");
@@ -3852,49 +3864,99 @@ export default function FinderDashboard() {
 
       <Modal visible={extendModalOpen} transparent animationType="slide">
         <View style={styles.chatModalBg}>
-          <View style={[styles.chatModal, BlueprintTheme.glassCard, { height: 350, padding: 24, borderRadius: 32 }]}>
+          <View style={[styles.chatModal, BlueprintTheme.glassCard, { height: 500, padding: 24, borderRadius: 32 }]}>
             <View style={styles.chatHeader}>
               <Text style={styles.chatTitle}>Extend Your Stay</Text>
               <TouchableOpacity onPress={() => setExtendModalOpen(false)}>
                 <Text style={styles.chatClose}>Cancel</Text>
               </TouchableOpacity>
             </View>
-            <View style={{ flex: 1, paddingVertical: 10, justifyContent: 'center', alignItems: 'center' }}>
-              <Text style={{ color: '#94a3b8', fontSize: 13, textAlign: 'center', marginBottom: 18, fontWeight: '500' }}>
-                Select additional hours to add to your reservation:
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: 6 }}>
+              <Text style={{ color: '#94a3b8', fontSize: 13, marginBottom: 16, fontWeight: '500' }}>
+                Add time to your session. Pick a preset or enter your own.
               </Text>
-              <View style={{ flexDirection: 'row', gap: 10, marginBottom: 24 }}>
-                {[1, 2, 3, 4].map(h => (
-                  <TouchableOpacity
-                    key={h}
-                    onPress={() => {
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                      setSelectedExtendHours(h);
-                    }}
-                    style={{
-                      width: 60, height: 60, borderRadius: 16,
-                      backgroundColor: selectedExtendHours === h ? '#6366f1' : 'rgba(255,255,255,0.05)',
-                      alignItems: 'center', justifyContent: 'center',
-                      borderWidth: 2, borderColor: selectedExtendHours === h ? '#6366f1' : 'rgba(255,255,255,0.08)'
-                    }}
-                  >
-                    <Text style={{ color: '#fff', fontWeight: '900', fontSize: 16 }}>+{h}h</Text>
-                  </TouchableOpacity>
-                ))}
+
+              <Text style={{ color: '#64748b', fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8 }}>Quick top-up</Text>
+              <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
+                {[5, 10, 20, 30].map(m => {
+                  const active = !customExtendText && selectedExtendMinutes === m;
+                  return (
+                    <TouchableOpacity
+                      key={m}
+                      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setCustomExtendText(''); setSelectedExtendMinutes(m); }}
+                      style={{ flex: 1, height: 54, borderRadius: 16, backgroundColor: active ? '#6366f1' : 'rgba(255,255,255,0.05)', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: active ? '#6366f1' : 'rgba(255,255,255,0.08)' }}
+                    >
+                      <Text style={{ color: '#fff', fontWeight: '900', fontSize: 15 }}>{m}m</Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
 
-              <TouchableOpacity
-                disabled={isExtending}
-                onPress={handleExtendStay}
-                style={[BlueprintTheme.buttonPrimary, { width: '100%', height: 52, borderRadius: 16, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8 }]}
-              >
-                {isExtending ? (
-                  <ActivityIndicator color="#fff" size="small" />
-                ) : (
-                  <Text style={BlueprintTheme.buttonPrimaryText}>Confirm Extension</Text>
-                )}
-              </TouchableOpacity>
-            </View>
+              <Text style={{ color: '#64748b', fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8 }}>Hours</Text>
+              <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
+                {[1, 2, 3].map(h => {
+                  const mins = h * 60;
+                  const active = !customExtendText && selectedExtendMinutes === mins;
+                  return (
+                    <TouchableOpacity
+                      key={h}
+                      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setCustomExtendText(''); setSelectedExtendMinutes(mins); }}
+                      style={{ flex: 1, height: 54, borderRadius: 16, backgroundColor: active ? '#6366f1' : 'rgba(255,255,255,0.05)', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: active ? '#6366f1' : 'rgba(255,255,255,0.08)' }}
+                    >
+                      <Text style={{ color: '#fff', fontWeight: '900', fontSize: 15 }}>{h}h</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              <Text style={{ color: '#64748b', fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8 }}>Custom (minutes)</Text>
+              <TextInput
+                value={customExtendText}
+                onChangeText={(t) => {
+                  const clean = t.replace(/[^0-9]/g, '').slice(0, 4);
+                  setCustomExtendText(clean);
+                  const n = Number(clean);
+                  if (Number.isFinite(n) && n > 0) setSelectedExtendMinutes(n);
+                }}
+                keyboardType="number-pad"
+                placeholder="e.g. 45"
+                placeholderTextColor="#64748b"
+                style={{ height: 52, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.05)', borderWidth: 2, borderColor: customExtendText ? '#6366f1' : 'rgba(255,255,255,0.08)', color: '#fff', fontSize: 16, fontWeight: '800', paddingHorizontal: 16, marginBottom: 16 }}
+              />
+
+              <View style={{ backgroundColor: 'rgba(99,102,241,0.08)', borderRadius: 16, borderWidth: 1, borderColor: 'rgba(99,102,241,0.2)', padding: 14 }}>
+                {(() => {
+                  const mins = Math.round(Number(selectedExtendMinutes) || 0);
+                  const rate = spots.find(s => s.id === selectedSpotId)?.price || 0;
+                  const addCost = (mins / 60) * rate;
+                  const label = mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60 ? `${mins % 60}m` : ''}`.trim() : `${mins}m`;
+                  return (
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <View>
+                        <Text style={{ color: '#94a3b8', fontSize: 11, fontWeight: '700', textTransform: 'uppercase' }}>Adding</Text>
+                        <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900' }}>{mins > 0 ? label : '—'}</Text>
+                      </View>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <Text style={{ color: '#94a3b8', fontSize: 11, fontWeight: '700', textTransform: 'uppercase' }}>Approx. cost</Text>
+                        <Text style={{ color: '#a5b4fc', fontSize: 18, fontWeight: '900' }}>₹{addCost.toFixed(0)}</Text>
+                      </View>
+                    </View>
+                  );
+                })()}
+              </View>
+            </ScrollView>
+
+            <TouchableOpacity
+              disabled={isExtending}
+              onPress={handleExtendStay}
+              style={[BlueprintTheme.buttonPrimary, { width: '100%', height: 52, borderRadius: 16, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8, marginTop: 14 }]}
+            >
+              {isExtending ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <Text style={BlueprintTheme.buttonPrimaryText}>Confirm Extension</Text>
+              )}
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>

@@ -489,16 +489,31 @@ class BookingController {
       }
 
       const bookingId = req.params.id;
-      const { additionalHours } = req.body;
+      const { additionalHours, additionalMinutes } = req.body;
 
-      if (!additionalHours || additionalHours <= 0) {
+      // Accept either minutes (preferred, for 5/10/20/30-min top-ups) or whole
+      // hours, and normalise to fractional hours so every extension shares one
+      // path. Pricing and end_time math already handle fractional hours.
+      let totalMinutes = Number(additionalMinutes);
+      if (!Number.isFinite(totalMinutes) || totalMinutes <= 0) {
+        totalMinutes = Number(additionalHours) * 60;
+      }
+      totalMinutes = Math.round(totalMinutes);
+
+      if (!Number.isFinite(totalMinutes) || totalMinutes <= 0) {
         return res.status(400).json({
           success: false,
-          message: 'Valid additionalHours is required'
+          message: 'A valid extension duration is required'
+        });
+      }
+      if (totalMinutes > 1440) {
+        return res.status(400).json({
+          success: false,
+          message: 'You can extend by at most 24 hours at a time'
         });
       }
 
-      const extendedBooking = await Booking.extend(bookingId, req.user.id, additionalHours);
+      const extendedBooking = await Booking.extend(bookingId, req.user.id, totalMinutes / 60);
 
       res.json({
         success: true,
