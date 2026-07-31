@@ -232,6 +232,120 @@ class BookingController {
   }
 
   /**
+   * REQUEST CHECKOUT (Finder only)
+   * Finder taps "End Session": lock the billable end time to NOW and move the
+   * booking into the owner-confirmation gate. Payment stays locked until the spot
+   * owner confirms (strict). Calling again while already pending just re-notifies
+   * the owner (the "Nudge owner" button).
+   */
+  static async requestCheckout(req, res) {
+    try {
+      if (!req.user.role || req.user.role.toLowerCase() !== 'finder') {
+        return res.status(403).json({ success: false, message: 'Only finders can end their session' });
+      }
+
+      const bookingId = req.params.id;
+      const booking = await Booking.findById(bookingId);
+      if (!booking) {
+        return res.status(404).json({ success: false, message: 'Booking not found' });
+      }
+      if (booking.user_id !== req.user.id) {
+        return res.status(403).json({ success: false, message: 'Unauthorized' });
+      }
+      if (booking.status === 'completed' || booking.payment_status === 'paid') {
+        return res.status(400).json({ success: false, message: 'This session is already closed' });
+      }
+
+      const spot = await ParkingSpot.findById(booking.spot_id);
+      if (!spot) {
+        return res.status(404).json({ success: false, message: 'Spot not found' });
+      }
+
+      const prisma = require('../config/prisma');
+      let updated = booking;
+
+      if (booking.status === 'active') {
+        updated = await prisma.bookings.update({
+          where: { id: parseInt(bookingId) },
+          data: { status: 'checkout_pending', actual_end_time: new Date(), updated_at: new Date() }
+        });
+      } else if (booking.status !== 'checkout_pending') {
+        return res.status(400).json({ success: false, message: 'Session cannot be checked out from its current state' });
+      }
+      // else already checkout_pending -> fall through and just re-notify (nudge)
+
+      try {
+        emitToUser(spot.spotter_id, 'booking:checkout_requested', {
+          id: updated.id,
+          spot_id: updated.spot_id,
+          spot_title: spot.title,
+          slot_name: updated.slot_name,
+          total_price: updated.total_price,
+          requested_at: new Date()
+        });
+      } catch (e) { logger.warn('checkout_requested emit failed:', e?.message); }
+
+      return res.json({
+        success: true,
+        message: 'Waiting for the spot owner to confirm your checkout',
+        data: updated
+      });
+    } catch (error) {
+      logger.error('Request checkout error:', error);
+      return res.status(500).json({ success: false, message: 'Failed to request checkout' });
+    }
+  }
+
+  /**
+   * CONFIRM CHECKOUT (Spotter only)
+   * Owner confirms the finder has left. Finalises the session (same path as
+   * finderCheckout) and unlocks the finder's payment screen via socket. Only
+   * allowed from checkout_pending, so a finder can never self-checkout.
+   */
+  static async confirmCheckout(req, res) {
+    try {
+      if (!req.user.role || req.user.role.toLowerCase() !== 'spotter') {
+        return res.status(403).json({ success: false, message: 'Only the spot owner can confirm checkout' });
+      }
+
+      const bookingId = req.params.id;
+      const booking = await Booking.findById(bookingId);
+      if (!booking) {
+        return res.status(404).json({ success: false, message: 'Booking not found' });
+      }
+
+      const spot = await ParkingSpot.findById(booking.spot_id);
+      if (!spot || spot.spotter_id !== req.user.id) {
+        return res.status(403).json({ success: false, message: 'Unauthorized to confirm this checkout' });
+      }
+      if (booking.status !== 'checkout_pending') {
+        return res.status(400).json({ success: false, message: 'This booking is not awaiting your confirmation' });
+      }
+
+      const completedBooking = await Booking.complete(bookingId);
+
+      const settledBooking = await Booking.findById(bookingId);
+      if (settledBooking) {
+        await BookingSettlementService.settleCompletedBooking(
+          settledBooking,
+          settledBooking.parking_spots
+        );
+      }
+
+      try { emitToUser(booking.user_id, 'booking:checkout_confirmed', completedBooking); } catch (e) { logger.warn('checkout_confirmed emit failed:', e?.message); }
+
+      return res.json({
+        success: true,
+        message: 'Checkout confirmed',
+        data: completedBooking
+      });
+    } catch (error) {
+      logger.error('Confirm checkout error:', error);
+      return res.status(500).json({ success: false, message: error.message || 'Failed to confirm checkout' });
+    }
+  }
+
+  /**
    * COMPLETE BOOKING (Spotter Only)
    */
   static async completeBooking(req, res) {

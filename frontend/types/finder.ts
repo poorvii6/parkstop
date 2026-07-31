@@ -33,5 +33,6 @@ export type AppStep =
   | 'arriving'
   | 'active_parking'
   | 'checkout_verification'
+  | 'awaiting_owner'
   | 'payment'
   | 'receipt';

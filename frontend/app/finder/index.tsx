@@ -1700,7 +1700,7 @@ export default function FinderDashboard() {
 
   useEffect(() => {
     let pollInterval: any;
-    if (['arriving', 'checkout_verification'].includes(step) && bookingDetails?.id) {
+    if (['arriving', 'checkout_verification', 'awaiting_owner'].includes(step) && bookingDetails?.id) {
       pollInterval = setInterval(async () => {
         try {
           const res = await apiClient.get('/bookings/my-bookings');
@@ -1712,7 +1712,7 @@ export default function FinderDashboard() {
                 Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
                 setStep('active_parking');
                 clearInterval(pollInterval);
-              } else if (step === 'checkout_verification' && currentBooking.status === 'completed') {
+              } else if ((step === 'checkout_verification' || step === 'awaiting_owner') && currentBooking.status === 'completed') {
                 setBookingDetails({ ...bookingDetails, ...currentBooking });
                 Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
                 setStep('payment');
@@ -1740,6 +1740,21 @@ export default function FinderDashboard() {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         setBookingDetails((prev: any) => (prev ? { ...prev, ...b } : b));
         setStep('active_parking');
+      }
+    });
+    return () => off();
+  }, [step, bookingDetails?.id]);
+
+  // Owner confirmed the checkout -> unlock the payment screen instantly. Until
+  // this arrives (or the poll sees 'completed'), the finder waits — payment is
+  // strictly gated on the spot owner's confirmation.
+  useEffect(() => {
+    if (step !== 'awaiting_owner' || !bookingDetails?.id) return;
+    const off = onRealtime('booking:checkout_confirmed', (b: any) => {
+      if (String(b?.id) === String(bookingDetails?.id)) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        setBookingDetails((prev: any) => (prev ? { ...prev, basePrice: b.total_price, finalAmount: b.total_price, ...b } : b));
+        setStep('payment');
       }
     });
     return () => off();
@@ -2639,7 +2654,7 @@ export default function FinderDashboard() {
       {/* Google Maps Style Instruction Banner */}
 
       {/* FLOATING BACK/HOME BUTTON — rendered AFTER map so it sits on top of WebView */}
-      {['spot_booking', 'en_route', 'navigating', 'arriving', 'booking_confirm', 'active_parking', 'checkout_verification', 'payment'].includes(step) && (
+      {['spot_booking', 'en_route', 'navigating', 'arriving', 'booking_confirm', 'active_parking', 'checkout_verification', 'awaiting_owner', 'payment'].includes(step) && (
         <TouchableOpacity
           style={{
             position: 'absolute',
@@ -3484,7 +3499,7 @@ export default function FinderDashboard() {
                   <View style={{ paddingVertical: 10 }}>
                     <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', marginBottom: 4, letterSpacing: -0.5 }}>Ready to Check Out</Text>
                     <Text style={{ color: '#94a3b8', fontSize: 13, marginBottom: 20, fontWeight: '500', lineHeight: 18 }}>
-                      Review your total, then complete checkout to pay and leave.
+                      Review your total, then request checkout — the spot owner confirms you've left, and your payment opens right after.
                     </Text>
 
                     <View style={{ backgroundColor: 'rgba(255,255,255,0.03)', padding: 18, borderRadius: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', marginBottom: 16 }}>
@@ -3528,24 +3543,19 @@ export default function FinderDashboard() {
                         setIsLoading(true);
                         try {
                           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-                          const res = await apiClient.put(`/bookings/${bookingDetails.id}/finder-checkout`);
+                          const res = await apiClient.post(`/bookings/${bookingDetails.id}/request-checkout`);
                           if (res.data?.success) {
-                            setBookingDetails(prev => prev ? {
-                              ...prev,
-                              basePrice: res.data.data.total_price,
-                              finalAmount: res.data.data.total_price,
-                              ...res.data.data
-                            } : prev);
-                            setStep('payment');
+                            setBookingDetails(prev => prev ? { ...prev, ...res.data.data } : prev);
+                            setStep('awaiting_owner');
                           }
                         } catch (e: any) {
-                          Alert.alert('Checkout Failed', e.response?.data?.message || 'Unable to complete checkout.');
+                          Alert.alert('Checkout Failed', e.response?.data?.message || 'Unable to request checkout.');
                         } finally {
                           setIsLoading(false);
                         }
                       }}
                     >
-                      <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>{isLoading ? 'Processing...' : 'Complete Checkout'}</Text>
+                      <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>{isLoading ? 'Sending…' : 'Request Checkout'}</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity
@@ -3557,6 +3567,55 @@ export default function FinderDashboard() {
                       }}
                     >
                       <Text style={{ color: '#94a3b8', fontWeight: '700', fontSize: 14 }}>Go Back</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
+                {step === 'awaiting_owner' && (
+                  <View style={{ paddingVertical: 10 }}>
+                    <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', marginBottom: 4, letterSpacing: -0.5 }}>Waiting for Owner</Text>
+                    <Text style={{ color: '#94a3b8', fontSize: 13, marginBottom: 20, fontWeight: '500', lineHeight: 18 }}>
+                      We've asked the spot owner to confirm you've left. Your payment opens the moment they confirm.
+                    </Text>
+
+                    <View style={{ backgroundColor: 'rgba(255,255,255,0.03)', padding: 22, borderRadius: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', marginBottom: 16, alignItems: 'center' }}>
+                      <ActivityIndicator color="#6366f1" size="large" />
+                      <Text style={{ color: '#cbd5e1', fontSize: 14, fontWeight: '800', marginTop: 14 }}>Awaiting owner confirmation…</Text>
+                      <Text style={{ color: '#64748b', fontSize: 11, fontWeight: '700', marginTop: 6 }}>Booking #{bookingDetails?.id}</Text>
+                    </View>
+
+                    <TouchableOpacity
+                      activeOpacity={0.9}
+                      style={{ backgroundColor: 'rgba(255,255,255,0.06)', paddingVertical: 16, borderRadius: 18, alignItems: 'center', marginBottom: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' }}
+                      onPress={async () => {
+                        if (!bookingDetails?.id) return;
+                        try {
+                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                          await apiClient.post(`/bookings/${bookingDetails.id}/request-checkout`);
+                          Alert.alert('Owner nudged', "We've re-notified the spot owner to confirm your checkout.");
+                        } catch (e: any) {
+                          Alert.alert('Could not nudge', e.response?.data?.message || 'Please try again.');
+                        }
+                      }}
+                    >
+                      <Text style={{ color: '#fff', fontSize: 15, fontWeight: '800' }}>Nudge owner</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      activeOpacity={0.8}
+                      style={{ paddingVertical: 12, alignItems: 'center' }}
+                      onPress={() => {
+                        Alert.alert(
+                          'Owner not responding?',
+                          "If the owner can't confirm your checkout, contact ParkStop support and we'll sort it out. You won't be charged extra for the delay.",
+                          [
+                            { text: 'Close', style: 'cancel' },
+                            { text: 'Contact support', onPress: () => Linking.openURL('mailto:support@parkstop.app?subject=Checkout%20not%20confirmed%20-%20Booking%20%23' + (bookingDetails?.id || '')) }
+                          ]
+                        );
+                      }}
+                    >
+                      <Text style={{ color: '#94a3b8', fontWeight: '700', fontSize: 13 }}>Owner not responding? Report a problem</Text>
                     </TouchableOpacity>
                   </View>
                 )}

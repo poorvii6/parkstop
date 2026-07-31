@@ -138,6 +138,34 @@ router.put(
 );
 
 /**
+ * ✅ REQUEST CHECKOUT (Finder only) — asks the spot owner to confirm
+ */
+router.post(
+  '/:id/request-checkout',
+  authenticate,
+  authorize('FINDER'),
+  [
+    param('id').isInt().withMessage('Booking ID must be an integer'),
+    validate
+  ],
+  BookingController.requestCheckout
+);
+
+/**
+ * ✅ CONFIRM CHECKOUT (Spotter only) — owner confirms the finder has left
+ */
+router.post(
+  '/:id/confirm-checkout',
+  authenticate,
+  authorize('SPOTTER'),
+  [
+    param('id').isInt().withMessage('Booking ID must be an integer'),
+    validate
+  ],
+  BookingController.confirmCheckout
+);
+
+/**
  * ✅ UPDATE PAYMENT MODE (Finder only)
  */
 router.patch(
@@ -175,7 +203,8 @@ router.put(
   authorize('FINDER'),
   [
     param('id').isInt().withMessage('Booking ID must be an integer'),
-    body('additionalHours').isNumeric().withMessage('Additional hours must be a number'),
+    body('additionalHours').optional().isNumeric().withMessage('Additional hours must be a number'),
+    body('additionalMinutes').optional().isNumeric().withMessage('Additional minutes must be a number'),
     validate
   ],
   BookingController.extendBooking

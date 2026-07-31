@@ -198,7 +198,7 @@ class Booking {
       });
 
       if (!booking) throw new Error('Booking not found');
-      if (booking.status !== 'active') throw new Error('Booking not active');
+      if (booking.status !== 'active' && booking.status !== 'checkout_pending') throw new Error('Booking not active');
 
       if (checkoutOtp) {
         const crypto = require('crypto');
@@ -209,7 +209,10 @@ class Booking {
         }
       }
 
-      const endTime = new Date();
+      // Bill to the finder's end-of-session time (recorded when they tapped End
+      // Session and checkout was requested) rather than the owner's confirmation
+      // time — a slow owner must never inflate the finder's charge.
+      const endTime = booking.actual_end_time ? new Date(booking.actual_end_time) : new Date();
       const startTime = new Date(booking.start_time);
       let diffMs = endTime - startTime;
       if (diffMs < 0) diffMs = 60 * 1000;
