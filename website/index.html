@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ParkStop — Find & Book Parking, Instantly</title>
+<meta name="description" content="ParkStop is a parking marketplace that connects drivers with nearby parking-space owners. Find a spot, navigate, park, and pay securely — all in one app." />
+<style>
+  :root{
+    --blue:#4285F4; --blue-d:#1a73e8; --ink:#0f172a; --slate:#475569;
+    --muted:#94a3b8; --bg:#f8fafc; --card:#ffffff; --line:#e5e9f0; --green:#10b981;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:var(--ink);background:var(--bg);line-height:1.6}
+  a{color:var(--blue-d);text-decoration:none}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 22px}
+  header{position:sticky;top:0;background:rgba(255,255,255,.9);backdrop-filter:blur(10px);border-bottom:1px solid var(--line);z-index:20}
+  .nav{display:flex;align-items:center;justify-content:space-between;height:66px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:900;font-size:22px;color:var(--blue)}
+  .brand .pin{width:26px;height:26px;border-radius:50%;background:var(--blue);display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:14px}
+  .nav a.link{color:var(--slate);font-weight:600;font-size:14px;margin-left:22px}
+  .nav a.link:hover{color:var(--ink)}
+  .btn{display:inline-block;background:var(--blue);color:#fff;font-weight:800;padding:12px 22px;border-radius:12px;font-size:15px}
+  .btn:hover{background:var(--blue-d)}
+  .hero{padding:76px 0 60px;text-align:center}
+  .hero h1{font-size:44px;line-height:1.1;letter-spacing:-1px;font-weight:900;max-width:760px;margin:0 auto 18px}
+  .hero h1 span{color:var(--blue)}
+  .hero p{font-size:18px;color:var(--slate);max-width:600px;margin:0 auto 30px}
+  .hero .cta{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
+  .ghost{background:#fff;color:var(--ink);border:1px solid var(--line);padding:12px 22px;border-radius:12px;font-weight:700}
+  section{padding:58px 0}
+  .eyebrow{color:var(--blue);font-weight:800;letter-spacing:1.5px;text-transform:uppercase;font-size:12px;text-align:center;margin-bottom:10px}
+  h2{font-size:32px;font-weight:900;letter-spacing:-.5px;text-align:center;margin-bottom:12px}
+  .sub{text-align:center;color:var(--slate);max-width:620px;margin:0 auto 40px}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:26px}
+  .card .ic{width:46px;height:46px;border-radius:12px;background:rgba(66,133,244,.1);color:var(--blue);display:flex;align-items:center;justify-content:center;font-size:22px;margin-bottom:14px}
+  .card h3{font-size:18px;font-weight:800;margin-bottom:6px}
+  .card p{color:var(--slate);font-size:14.5px}
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:22px;padding:30px}
+  .panel h3{font-size:20px;font-weight:900;margin-bottom:10px}
+  .panel ul{list-style:none}
+  .panel li{padding:9px 0 9px 28px;position:relative;color:var(--slate)}
+  .panel li::before{content:'✓';position:absolute;left:0;color:var(--green);font-weight:900}
+  .steps{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;counter-reset:s}
+  .step{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px;position:relative}
+  .step .n{width:30px;height:30px;border-radius:50%;background:var(--blue);color:#fff;font-weight:900;display:flex;align-items:center;justify-content:center;margin-bottom:12px}
+  .step h4{font-size:15.5px;font-weight:800;margin-bottom:4px}
+  .step p{font-size:13.5px;color:var(--slate)}
+  .trust{background:var(--ink);color:#fff;border-radius:24px;padding:44px;text-align:center}
+  .trust h2{color:#fff}
+  .trust p{color:#cbd5e1;max-width:640px;margin:0 auto}
+  .policy{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:26px;margin-bottom:18px}
+  .policy h3{font-size:19px;font-weight:900;margin-bottom:8px;color:var(--ink)}
+  .policy p,.policy li{color:var(--slate);font-size:14.5px;margin-bottom:8px}
+  .policy ul{padding-left:20px}
+  footer{background:#fff;border-top:1px solid var(--line);padding:40px 0;margin-top:20px}
+  .fgrid{display:flex;justify-content:space-between;flex-wrap:wrap;gap:20px}
+  .fgrid .col h5{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:10px}
+  .fgrid .col a,.fgrid .col p{display:block;color:var(--slate);font-size:14px;margin-bottom:6px}
+  .copyright{text-align:center;color:var(--muted);font-size:13px;margin-top:26px;border-top:1px solid var(--line);padding-top:20px}
+  @media(max-width:760px){
+    .grid,.steps,.split,.fgrid{grid-template-columns:1fr;display:grid}
+    .hero h1{font-size:34px}.nav a.link{display:none}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <div class="brand"><span class="pin">P</span> ParkStop</div>
+    <nav>
+      <a class="link" href="#how">How it works</a>
+      <a class="link" href="#owners">For owners</a>
+      <a class="link" href="#pricing">Pricing</a>
+      <a class="link" href="#contact">Contact</a>
+      <a class="btn" href="#contact" style="margin-left:22px">Get the app</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <section class="hero">
+    <h1>Find and book <span>parking</span> near you, in seconds.</h1>
+    <p>ParkStop connects drivers with nearby parking-space owners. Discover a spot, navigate to it, park, and pay securely — all from one app.</p>
+    <div class="cta">
+      <a class="btn" href="#contact">Get the app</a>
+      <a class="ghost" href="#owners">List your parking space</a>
+    </div>
+  </section>
+
+  <section id="how">
+    <div class="eyebrow">How it works</div>
+    <h2>Parking made simple</h2>
+    <p class="sub">From searching for a spot to driving away, ParkStop handles the whole journey.</p>
+    <div class="steps">
+      <div class="step"><div class="n">1</div><h4>Find a spot</h4><p>See available parking near your destination with live pricing and distance.</p></div>
+      <div class="step"><div class="n">2</div><h4>Navigate</h4><p>Turn-by-turn directions guide you straight to the parking space.</p></div>
+      <div class="step"><div class="n">3</div><h4>Check in</h4><p>Verify your arrival with a one-time PIN shared with the space owner.</p></div>
+      <div class="step"><div class="n">4</div><h4>Pay & go</h4><p>Pay securely in-app when you leave. No cash fumbling, no disputes.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="grid">
+      <div class="card"><div class="ic">📍</div><h3>Real-time availability</h3><p>Live spot availability and transparent, upfront pricing before you book.</p></div>
+      <div class="card"><div class="ic">🔒</div><h3>Secure payments</h3><p>Payments are processed through a certified, RBI-regulated payment gateway.</p></div>
+      <div class="card"><div class="ic">🛡️</div><h3>Verified check-in</h3><p>One-time PIN verification at entry and confirmed checkout protect both sides.</p></div>
+    </div>
+  </section>
+
+  <section id="owners">
+    <div class="eyebrow">For everyone</div>
+    <h2>Two sides, one simple app</h2>
+    <p class="sub">Whether you're looking for parking or have a space to share, ParkStop works for you.</p>
+    <div class="split">
+      <div class="panel">
+        <h3>🚗 For drivers</h3>
+        <ul>
+          <li>Find guaranteed parking near your destination</li>
+          <li>See prices upfront — no surprises</li>
+          <li>Navigate directly to your spot</li>
+          <li>Pay securely in the app</li>
+          <li>Extend your stay with a tap</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <h3>🅿️ For space owners</h3>
+        <ul>
+          <li>List your driveway, garage, or lot in minutes</li>
+          <li>Set your own hourly price</li>
+          <li>Earn from parking space you already own</li>
+          <li>Get paid directly to your bank account</li>
+          <li>Confirm every check-in and checkout</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="pricing">
+    <div class="eyebrow">Pricing</div>
+    <h2>Transparent and fair</h2>
+    <p class="sub">Drivers pay the hourly rate set by the space owner. ParkStop charges a small platform service fee on each booking — always shown before you confirm. Space owners receive their earnings, net of the platform fee, directly to their account.</p>
+  </section>
+
+  <section>
+    <div class="trust">
+      <h2>Built on trust and security</h2>
+      <p>Every payment on ParkStop is handled by a certified, RBI-regulated payment gateway with bank-grade encryption. We never store your card or bank details, and verified check-in protects both drivers and space owners on every booking.</p>
+    </div>
+  </section>
+
+  <!-- ============ POLICIES (required for payment activation) ============ -->
+  <section id="policies">
+    <div class="eyebrow">Policies</div>
+    <h2>Our policies</h2>
+    <p class="sub">Transparency matters. Here's how we handle terms, privacy, and refunds.</p>
+
+    <div class="policy" id="terms">
+      <h3>Terms of Service</h3>
+      <p>By using ParkStop, you agree to use the platform lawfully to find, book, or list parking spaces. ParkStop is a marketplace that connects drivers ("Finders") with parking-space owners ("Spotters"); the parking service itself is provided by the space owner. Bookings are subject to availability and the price shown at the time of booking. Users are responsible for the accuracy of the information they provide and for complying with local parking rules and regulations. ParkStop reserves the right to suspend accounts that misuse the platform.</p>
+    </div>
+
+    <div class="policy" id="privacy">
+      <h3>Privacy Policy</h3>
+      <p>We collect only the information needed to provide the service: your contact details, approximate location (to show nearby parking), booking history, and payment confirmation. Payments are processed by a certified third-party payment gateway — ParkStop does not store your card or bank details. We do not sell your personal data. Information is used to operate the service, process bookings, and provide support. You may request access to, or deletion of, your data by contacting us at the email below.</p>
+    </div>
+
+    <div class="policy" id="refunds">
+      <h3>Refund &amp; Cancellation Policy</h3>
+      <ul>
+        <li>A booking may be cancelled before check-in for a full refund.</li>
+        <li>After check-in, charges apply for the time the space was reserved or used.</li>
+        <li>If a booked space is unavailable on arrival, the driver receives a full refund.</li>
+        <li>Approved refunds are returned to the original payment method, typically within 5–7 business days.</li>
+        <li>For any billing issue, contact our support team and we will resolve it promptly.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="contact">
+    <div class="eyebrow">Contact</div>
+    <h2>Get in touch</h2>
+    <p class="sub">Questions, support, or want to list your space? We'd love to hear from you.</p>
+    <div style="text-align:center">
+      <p style="font-size:17px;font-weight:700">📧 <a href="mailto:poorvikrishna06@gmail.com">poorvikrishna06@gmail.com</a></p>
+      <p style="color:var(--slate);margin-top:6px">Bengaluru, Karnataka, India</p>
+    </div>
+  </section>
+
+</div>
+
+<footer>
+  <div class="wrap">
+    <div class="fgrid">
+      <div class="col">
+        <div class="brand" style="font-size:20px;margin-bottom:8px"><span class="pin">P</span> ParkStop</div>
+        <p style="max-width:280px">Find and book parking near you, and turn your unused parking space into earnings.</p>
+      </div>
+      <div class="col">
+        <h5>Product</h5>
+        <a href="#how">How it works</a>
+        <a href="#owners">For owners</a>
+        <a href="#pricing">Pricing</a>
+      </div>
+      <div class="col">
+        <h5>Legal</h5>
+        <a href="#terms">Terms of Service</a>
+        <a href="#privacy">Privacy Policy</a>
+        <a href="#refunds">Refund &amp; Cancellation</a>
+      </div>
+      <div class="col">
+        <h5>Contact</h5>
+        <a href="mailto:poorvikrishna06@gmail.com">poorvikrishna06@gmail.com</a>
+        <p>Bengaluru, Karnataka</p>
+      </div>
+    </div>
+    <div class="copyright">
+      © 2026 ParkStop. Operated as a sole proprietorship (Udyam-registered MSME), Bengaluru, India. All rights reserved.
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

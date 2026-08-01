@@ -128,6 +128,8 @@ model users {
   bank_account_name         String?           @db.VarChar(100)
   razorpay_contact_id       String?           @db.VarChar(50)
   razorpay_fund_account_id  String?           @db.VarChar(50)
+  cashfree_vendor_id        String?           @db.VarChar(60)
+  cashfree_vendor_status    String?           @db.VarChar(30)
   payout_mode               String?           @default("upi") @db.VarChar(20)
   is_finder_registered      Boolean           @default(true)
   is_spotter_registered     Boolean           @default(false)

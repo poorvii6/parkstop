@@ -1,10 +1,18 @@
 const express = require('express');
 const { body } = require('express-validator');
 const PaymentController = require('../controllers/paymentController');
+const CashfreeController = require('../controllers/cashfreeController');
 const { authenticate, authorize } = require('../middleware/auth');
 const validate = require('../middleware/validator');
 
 const router = express.Router();
+
+// ── Cashfree Easy Split (split-at-source: 80% spotter / 20% ParkStop) ──
+// Webhook first, unauthenticated — verified by HMAC signature inside the handler.
+router.post('/cashfree/webhook', CashfreeController.webhook);
+router.post('/cashfree/checkout', authenticate, authorize('FINDER'), CashfreeController.createCheckout);
+router.post('/cashfree/vendor', authenticate, authorize('SPOTTER'), CashfreeController.onboardVendor);
+router.get('/cashfree/vendor-status', authenticate, authorize('SPOTTER'), CashfreeController.vendorStatus);
 
 /**
  * 💳 INITIATE CHECKOUT
