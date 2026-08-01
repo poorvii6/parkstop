@@ -149,6 +149,45 @@ class CashfreeController {
   }
 
   /**
+   * VERIFY PAYMENT (Finder) — confirmation WITHOUT relying on the webhook.
+   * The app calls this right after checkout; we fetch the order from Cashfree and
+   * mark the booking paid if it's PAID. This works even when dashboard webhooks
+   * are gated behind account activation (as they are for a pre-launch account).
+   */
+  static async verifyPayment(req, res) {
+    try {
+      if (!req.user.role || req.user.role.toLowerCase() !== 'finder') {
+        return res.status(403).json({ success: false, message: 'Only finders can verify a payment' });
+      }
+      const orderId = req.body.orderId;
+      if (!orderId) {
+        return res.status(400).json({ success: false, message: 'orderId is required' });
+      }
+
+      const order = await Cashfree.getOrder(orderId);
+      const status = order?.order_status; // ACTIVE | PAID | EXPIRED | TERMINATED
+      const paid = status === 'PAID';
+
+      if (paid) {
+        const m = /^ps_(\d+)_/.exec(orderId);
+        const bookingId = m ? parseInt(m[1], 10) : Number(req.body.bookingId) || null;
+        if (bookingId) {
+          // Only ever touch the caller's own booking.
+          await prisma.bookings.updateMany({
+            where: { id: bookingId, user_id: req.user.id, payment_status: { not: 'paid' } },
+            data: { payment_status: 'paid', payment_mode: 'online', updated_at: new Date() },
+          });
+        }
+      }
+
+      return res.json({ success: true, data: { status, paid } });
+    } catch (error) {
+      logger.error('Cashfree verifyPayment error:', error?.message, error?.body || '');
+      return res.status(500).json({ success: false, message: error?.message || 'Failed to verify payment' });
+    }
+  }
+
+  /**
    * ONBOARD VENDOR (Spotter) — creates/updates the spotter's Easy Split vendor.
    */
   static async onboardVendor(req, res) {

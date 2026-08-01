@@ -11,6 +11,7 @@ const router = express.Router();
 // Webhook first, unauthenticated — verified by HMAC signature inside the handler.
 router.post('/cashfree/webhook', CashfreeController.webhook);
 router.post('/cashfree/checkout', authenticate, authorize('FINDER'), CashfreeController.createCheckout);
+router.post('/cashfree/verify', authenticate, authorize('FINDER'), CashfreeController.verifyPayment);
 router.post('/cashfree/vendor', authenticate, authorize('SPOTTER'), CashfreeController.onboardVendor);
 router.get('/cashfree/vendor-status', authenticate, authorize('SPOTTER'), CashfreeController.vendorStatus);
 
