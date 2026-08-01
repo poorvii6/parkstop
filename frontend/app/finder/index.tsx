@@ -10,6 +10,7 @@ import RazorpayCheckout from '../../components/RazorpayCheckout';
 import razorpayService from '../../services/razorpayService';
 import { registerForPushNotificationsAsync } from '../../services/notifications';
 import { onRealtime } from '../../services/realtime';
+import { setCashfreeCallbacks, removeCashfreeCallbacks, payBookingWithCashfree, verifyCashfreePayment } from '../../services/cashfree';
 
 import { io, Socket } from 'socket.io-client';
 import * as Location from 'expo-location';
@@ -1995,6 +1996,45 @@ export default function FinderDashboard() {
     Alert.alert('Payment Failed', error || 'Failed to complete transaction.');
   };
 
+  // ── Cashfree UPI checkout (Easy Split: 80% spotter / 20% ParkStop) ──
+  const cashfreeOrderRef = useRef<string | null>(null);
+
+  const handleCashfreePay = async () => {
+    if (!bookingDetails?.id) return;
+    try {
+      setIsLoading(true);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      await apiClient.patch(`/bookings/${bookingDetails.id}/payment-mode`, { payment_mode: 'online' }).catch(() => {});
+      cashfreeOrderRef.current = await payBookingWithCashfree(Number(bookingDetails.id));
+    } catch (e: any) {
+      Alert.alert('Payment Error', e?.response?.data?.message || e?.message || 'Could not start payment');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    setCashfreeCallbacks({
+      onSuccess: async (orderId: string) => {
+        try {
+          const paid = await verifyCashfreePayment(orderId, Number(bookingDetails?.id));
+          if (paid) {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            setStep('receipt');
+          } else {
+            Alert.alert('Payment pending', 'We could not confirm the payment yet. If money was debited it will reflect shortly.');
+          }
+        } catch (e: any) {
+          Alert.alert('Verification error', e?.response?.data?.message || e?.message || 'Could not verify payment');
+        }
+      },
+      onError: (msg: string) => {
+        Alert.alert('Payment failed', msg);
+      },
+    });
+    return () => removeCashfreeCallbacks();
+  }, [bookingDetails?.id]);
+
   const isBottomPanelFull = ['arriving', 'active_parking', 'payment', 'receipt'].includes(step);
   // Route is visible during spot preview (the "blue line" when a spot is
   // selected), booking, and ALL navigation phases including final approach.
@@ -3714,14 +3754,14 @@ export default function FinderDashboard() {
                       onPress={() => {
                         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
                         if (selectedPaymentMethod === 'online') {
-                          setShowUPIInline(!showUPIInline);
+                          handleCashfreePay();
                         } else {
                           processPayment();
                         }
                       }}
                     >
                       <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>
-                        {isLoading ? 'Processing...' : (selectedPaymentMethod === 'cash' ? 'Complete Checkout' : 'Proceed to Payment')}
+                        {isLoading ? 'Processing...' : (selectedPaymentMethod === 'cash' ? 'Complete Checkout' : 'Pay with UPI')}
                       </Text>
                     </TouchableOpacity>
 

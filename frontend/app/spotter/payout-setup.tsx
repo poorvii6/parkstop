@@ -17,6 +17,7 @@ export default function PayoutSetupScreen() {
   const [accountNumber, setAccountNumber] = useState('');
   const [ifsc, setIfsc] = useState('');
   const [accountName, setAccountName] = useState('');
+  const [pan, setPan] = useState('');
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(true);
   const [isSetup, setIsSetup] = useState(false);
@@ -63,9 +64,13 @@ export default function PayoutSetupScreen() {
         return Alert.alert('Invalid IFSC', 'Please enter a valid 11-character IFSC code');
       }
     }
+    if (!/^[A-Za-z]{5}[0-9]{4}[A-Za-z]$/.test(pan.trim())) {
+      return Alert.alert('PAN required', 'Enter your PAN (e.g. ABCDE1234F) — it is required to receive automatic payouts.');
+    }
 
     setLoading(true);
     try {
+      // Keep the legacy payout record (best-effort, non-blocking).
       const payload: any = { type: payoutType };
       if (payoutType === 'upi') {
         payload.upi_id = upiId.trim();
@@ -74,16 +79,29 @@ export default function PayoutSetupScreen() {
         payload.ifsc = ifsc.trim().toUpperCase();
         payload.name = accountName.trim();
       }
-
       const endpoint = isSetup ? '/payouts/update-details' : '/payouts/setup-account';
       const method = isSetup ? 'put' : 'post';
+      try { await apiClient[method](endpoint, payload); } catch (_) { /* non-blocking */ }
 
-      const res = await apiClient[method](endpoint, payload);
+      // Create/refresh the Cashfree Easy Split vendor — this is what actually
+      // routes 80% of every booking straight to the spotter's account.
+      const cf: any = { pan: pan.trim().toUpperCase() };
+      if (payoutType === 'upi') {
+        cf.upi_id = upiId.trim();
+      } else {
+        cf.account_number = accountNumber.trim();
+        cf.ifsc = ifsc.trim().toUpperCase();
+        cf.name = accountName.trim();
+      }
+      const res = await apiClient.post('/payments/cashfree/vendor', cf);
 
       if (res.data?.success) {
+        const st = res.data?.data?.status;
         Alert.alert(
-          '✅ Payout Account Ready!',
-          `Your ${payoutType === 'upi' ? 'UPI' : 'bank'} account is ${isSetup ? 'updated' : 'saved'}. Your earnings collect safely in your wallet and pay out here automatically once ParkStop payouts go live.`,
+          '✅ Payout account submitted',
+          st === 'ACTIVE'
+            ? 'Your payout account is active — your 80% share of each booking settles to you automatically.'
+            : 'Submitted. Your bank/UPI is being verified; once active, your 80% share of each booking settles to you automatically.',
           [{ text: 'Back to Dashboard', onPress: () => router.back() }]
         );
       }
@@ -232,6 +250,23 @@ export default function PayoutSetupScreen() {
               </Text>
             </View>
           )}
+
+          {/* PAN — required by Cashfree to route automatic payouts */}
+          <View style={styles.formSection}>
+            <Text style={styles.inputLabel}>PAN NUMBER</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="ABCDE1234F"
+              placeholderTextColor={SC.textMuted}
+              value={pan}
+              onChangeText={(t) => setPan(t.toUpperCase())}
+              autoCapitalize="characters"
+              maxLength={10}
+            />
+            <Text style={styles.helperText}>
+              Required to receive your 80% payout automatically. Kept secure.
+            </Text>
+          </View>
 
           {/* Balance Display */}
           {existingData?.balance !== undefined && (
