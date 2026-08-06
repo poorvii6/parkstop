@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import { auth } from '../services/firebase';
+import { isNetworkError, reportNetworkFailure, reportNetworkSuccess } from '../utils/networkStatus';
 
 import * as Device from 'expo-device';
 
@@ -83,7 +84,12 @@ apiClient.interceptors.request.use(
         }
       }
     } catch (e) {
-      console.error('Auth Request Interceptor Error:', e);
+      // Offline: Firebase token refresh throws auth/network-request-failed.
+      // Don't surface a banner from here — it's noisy and often transient. The
+      // response interceptor decides about connectivity based on real requests.
+      if (!isNetworkError(e)) {
+        console.error('Auth Request Interceptor Error:', e);
+      }
     }
     return config;
   },
@@ -92,10 +98,23 @@ apiClient.interceptors.request.use(
 
 // RESPONSE INTERCEPTOR: Retry on 502/503 (Railway cold start), handle 401
 apiClient.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // A real response came back → we are reachable. Clears any pending/showing
+    // "can't reach ParkStop" banner.
+    reportNetworkSuccess();
+    return response;
+  },
   async (error) => {
     const config = error.config;
     const status = error.response?.status;
+
+    // No response reached the server → possible connectivity loss. Report it;
+    // the banner only appears if nothing succeeds within a short grace window
+    // (so backend cold-starts and transient blips stay silent).
+    if (isNetworkError(error)) {
+      reportNetworkFailure();
+      return Promise.reject(error);
+    }
 
     // Retry once on 502/503 (server waking up) with a short delay
     if ((status === 502 || status === 503) && config && !config._retried) {

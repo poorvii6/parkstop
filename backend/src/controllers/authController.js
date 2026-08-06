@@ -556,15 +556,32 @@ class AuthController {
    */
   static async updatePushToken(req, res) {
     try {
-      const { push_token } = req.body;
+      const { push_token, platform } = req.body;
+
+      if (!push_token || typeof push_token !== 'string') {
+        return res.status(400).json({ success: false, message: 'push_token is required' });
+      }
+
+      // Multi-device: store every device's token in device_tokens.
+      // upsert on the unique token so that:
+      //   - the same device re-registering just refreshes updated_at,
+      //   - a token that moved to a different user is re-pointed to this user,
+      //   - a brand-new device is added (user keeps receiving on ALL devices).
+      await prisma.device_tokens.upsert({
+        where: { token: push_token },
+        update: { user_id: req.user.id, platform: platform || null, updated_at: new Date() },
+        create: { user_id: req.user.id, token: push_token, platform: platform || null },
+      });
+
+      // Keep the legacy single-column in sync for backward compatibility.
       await prisma.users.update({
         where: { id: req.user.id },
-        data: { push_token }
+        data: { push_token },
       });
 
       res.json({
         success: true,
-        message: 'Push token updated successfully'
+        message: 'Push token registered successfully'
       });
     } catch (error) {
       logger.error('Update push token error:', error);

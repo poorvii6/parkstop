@@ -1,23 +1,30 @@
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
-import { Platform } from 'react-native';
+import { Platform, AppState, Linking } from 'react-native';
 import apiClient from '../api/client';
 
 const isExpoGo = Constants.appOwnership === 'expo';
 
 // Only load and configure expo-notifications if not running in Expo Go
+// (remote push is removed from Expo Go on SDK 53+).
 let Notifications: any = null;
 if (!isExpoGo) {
   try {
     Notifications = require('expo-notifications');
     Notifications.setNotificationHandler({
-      handleNotification: async () => ({
-        shouldShowAlert: true,
-        shouldPlaySound: true,
-        shouldSetBadge: true,
-        shouldShowBanner: true,
-        shouldShowList: true,
-      }),
+      // De-dupe: when the app is in the FOREGROUND, the Socket.io channel already
+      // shows the update in-app, so we suppress the system banner/sound to avoid
+      // a double notification. In the background we show everything.
+      handleNotification: async () => {
+        const inForeground = AppState.currentState === 'active';
+        return {
+          shouldShowAlert: !inForeground,
+          shouldShowBanner: !inForeground,
+          shouldPlaySound: !inForeground,
+          shouldSetBadge: true,
+          shouldShowList: true,
+        };
+      },
     });
   } catch (err) {
     console.warn('Failed to load expo-notifications:', err);
@@ -25,63 +32,146 @@ if (!isExpoGo) {
 }
 
 /**
- * Request permission and get the Expo Push Token for the current device.
- * It will then send the token to our backend to be saved to the database.
+ * Resolve the EAS project ID from every place Expo may store it. After you run
+ * `eas init`, it lands in app.json under expo.extra.eas.projectId and is read
+ * here automatically — no need to duplicate it into .env.
  */
-export async function registerForPushNotificationsAsync() {
+function getProjectId(): string | undefined {
+  return (
+    (Constants.expoConfig as any)?.extra?.eas?.projectId ||
+    (Constants as any)?.easConfig?.projectId ||
+    process.env.EXPO_PUBLIC_PROJECT_ID ||
+    undefined
+  );
+}
+
+/** Save a device token against the current user (all devices are kept). */
+async function sendTokenToBackend(token: string): Promise<void> {
+  try {
+    await apiClient.post('/auth/push-token', { push_token: token, platform: Platform.OS });
+    console.log('[Push] Token registered with backend.');
+  } catch (e) {
+    console.log('[Push] Failed to send token to backend:', e);
+  }
+}
+
+let listenersAttached = false;
+/**
+ * Attach one-time listeners so tokens stay fresh:
+ *  - addPushTokenListener → re-save when Expo rotates the token,
+ *  - AppState 'active'    → re-register whenever the app returns to foreground.
+ */
+function attachTokenListenersOnce(): void {
+  if (listenersAttached || !Notifications) return;
+  listenersAttached = true;
+
+  try {
+    Notifications.addPushTokenListener((t: any) => {
+      const token = t?.data || t;
+      if (token) sendTokenToBackend(token);
+    });
+  } catch {}
+
+  AppState.addEventListener('change', (state) => {
+    if (state === 'active') {
+      registerForPushNotificationsAsync().catch(() => {});
+    }
+  });
+}
+
+/** Current OS-level notification permission status. */
+export async function getNotificationPermissionStatus(): Promise<string> {
+  if (!Notifications) return 'unsupported';
+  try {
+    const { status } = await Notifications.getPermissionsAsync();
+    return status; // 'granted' | 'denied' | 'undetermined'
+  } catch {
+    return 'unsupported';
+  }
+}
+
+/** Open the OS settings so a user who denied notifications can re-enable them. */
+export async function openNotificationSettings(): Promise<void> {
+  try {
+    await Linking.openSettings();
+  } catch {}
+}
+
+/**
+ * Request permission and get the Expo Push Token for the current device, then
+ * send it to our backend. Returns the token, or null if unavailable.
+ */
+export async function registerForPushNotificationsAsync(): Promise<string | null> {
   if (isExpoGo) {
-    console.log('[Push Notifications] Remote push notifications functionality is disabled/removed in Expo Go SDK 53+. Please use a development build.');
+    console.log('[Push] Remote push is not available in Expo Go (SDK 53+). Use a development or production build.');
     return null;
   }
-
   if (!Notifications) {
-    console.log('[Push Notifications] expo-notifications library is not loaded.');
+    console.log('[Push] expo-notifications is not loaded.');
     return null;
   }
-
-  let token;
+  if (!Device.isDevice) {
+    console.log('[Push] Must use a physical device for push notifications.');
+    return null;
+  }
 
   if (Platform.OS === 'android') {
     await Notifications.setNotificationChannelAsync('default', {
       name: 'default',
-      importance: Notifications.AndroidImportance.MAX,
+      importance: Notifications.AndroidImportance.MAX, // heads-up alerts
       vibrationPattern: [0, 250, 250, 250],
       lightColor: '#3b82f6',
     });
   }
 
-  if (Device.isDevice) {
-    const { status: existingStatus } = await Notifications.getPermissionsAsync();
-    let finalStatus = existingStatus;
-    
-    if (existingStatus !== 'granted') {
-      const { status } = await Notifications.requestPermissionsAsync();
-      finalStatus = status;
-    }
-    
-    if (finalStatus !== 'granted') {
-      console.log('Failed to get push token for push notification!');
-      return null;
-    }
-    
-    try {
-      const projectId = process.env.EXPO_PUBLIC_PROJECT_ID;
-      if (!projectId) {
-        console.log('Notice: Push notifications are disabled in local Expo Go because EXPO_PUBLIC_PROJECT_ID is not configured in environment variables.');
-        return null;
-      }
-      token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
-      console.log('Obtained Expo Push Token:', token);
-
-      // Send the token to the backend
-      await apiClient.post('/auth/push-token', { push_token: token });
-      
-    } catch (e) {
-      console.log('Error getting or saving push token (EAS setup required):', e);
-    }
-  } else {
-    console.log('Must use physical device for Push Notifications');
+  // Ask for permission (gracefully handle denial).
+  const { status: existingStatus } = await Notifications.getPermissionsAsync();
+  let finalStatus = existingStatus;
+  if (existingStatus !== 'granted') {
+    const { status } = await Notifications.requestPermissionsAsync();
+    finalStatus = status;
+  }
+  if (finalStatus !== 'granted') {
+    console.log('[Push] Notification permission not granted. The user can re-enable it in system settings (see openNotificationSettings()).');
+    return null;
   }
 
-  return token;
+  const projectId = getProjectId();
+  if (!projectId) {
+    console.log('[Push] No EAS projectId found. Run `eas init` (writes expo.extra.eas.projectId in app.json), then rebuild the app.');
+    return null;
+  }
+
+  try {
+    const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
+    console.log('[Push] Expo push token obtained.');
+    await sendTokenToBackend(token);
+    attachTokenListenersOnce();
+    return token;
+  } catch (e) {
+    console.log('[Push] Error getting or saving push token:', e);
+    return null;
+  }
+}
+
+/**
+ * Attach foreground + tap listeners so the app can react to a push while open
+ * (e.g. refresh a list) or when the user taps a notification (e.g. navigate).
+ * Returns an unsubscribe function — call it on unmount.
+ */
+export function addNotificationListeners(handlers: {
+  onReceived?: (notification: any) => void;
+  onTapped?: (notification: any) => void;
+}): () => void {
+  if (!Notifications) return () => {};
+  const receivedSub = Notifications.addNotificationReceivedListener((n: any) => {
+    try { handlers.onReceived?.(n); } catch {}
+  });
+  const responseSub = Notifications.addNotificationResponseReceivedListener((r: any) => {
+    try { handlers.onTapped?.(r?.notification); } catch {}
+  });
+  return () => {
+    try { receivedSub.remove(); } catch {}
+    try { responseSub.remove(); } catch {}
+  };
 }

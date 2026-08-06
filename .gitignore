@@ -14,3 +14,16 @@ firebase-service-account.json
 *.pem
 secrets/
 .env*
+# --- Personal / sensitive documents — never commit (repo is public) ---
+*.pdf
+Aadhaar-*
+PAN-*
+*-photo*.jpg
+*-photo*.jpeg
+*Signed*
+*.jpg
+*.jpeg
+
+# Personal reference docs (contain PAN / Udyam / address) — keep local, never commit
+ParkStop-Payments-Setup-Guide.md
+ParkStop_Assessment_Report*.md

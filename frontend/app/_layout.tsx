@@ -1,6 +1,7 @@
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { StripeProvider } from '../components/StripeImports';
+import OfflineBanner from '../components/OfflineBanner';
 
 export default function RootLayout() {
   return (
@@ -34,6 +35,7 @@ export default function RootLayout() {
         <Stack.Screen name="payments" options={{ headerShown: false, animation: 'slide_from_right' }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', headerShown: false }} />
       </Stack>
+      <OfflineBanner />
       <StatusBar style="light" />
     </StripeProvider>
   );
