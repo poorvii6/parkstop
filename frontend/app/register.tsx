@@ -7,6 +7,7 @@ import { BlueprintTheme, BlueprintColors } from '../constants/BlueprintTheme';
 import { createUserWithEmailAndPassword, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { auth } from '../services/firebase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { presentAuthError } from '../utils/authErrors';
 
 export default function RegisterScreen() {
   const [name, setName] = useState('');
@@ -143,7 +144,7 @@ export default function RegisterScreen() {
       }
     } catch (error: any) {
       console.error('[SOCIAL AUTH] OAuth Error:', error);
-      Alert.alert('Authentication Failed', error.message || 'Failed to complete social login.');
+      presentAuthError(error);
     } finally {
       setLoading(false);
     }
@@ -186,11 +187,7 @@ export default function RegisterScreen() {
       }
     } catch (otpErr: any) {
       console.error('[GMAIL OTP] Send OTP request failed:', otpErr.response?.data || otpErr.message);
-      let msg = otpErr.response?.data?.message || 'Failed to send OTP verification email. Please try again.';
-      if (otpErr.message === 'Network Error') {
-        msg = `Network Error: Cannot connect to backend server.\n\nExpected URL: ${apiClient.defaults.baseURL || 'http://localhost:3000/api/v1'}\n\nPlease check that:\n1. Your backend server is running.\n2. Your phone is on the same Wi-Fi network.\n3. Windows Firewall is not blocking port 3000.`;
-      }
-      Alert.alert('Send OTP Failed', msg);
+      presentAuthError(otpErr);
     } finally {
       setLoading(false);
     }
@@ -285,15 +282,15 @@ export default function RegisterScreen() {
     } catch (error: any) {
       const errorData = error.response?.data;
       console.error('[AUTH] Register Error Response:', errorData || error.message);
-      let msg = errorData?.message || error.message || 'Network error';
 
+      // Keep specific field-validation feedback; route everything else
+      // (offline, rate-limits, server errors) through the clean handler.
       if (errorData?.errors) {
         const validationMsgs = errorData.errors.map((e: any) => `${e.field}: ${e.message}`).join('\n');
-        msg = `Validation failed:\n${validationMsgs}`;
+        Alert.alert('Please check your details', validationMsgs);
+      } else {
+        presentAuthError(error);
       }
-
-      if (Platform.OS === 'web') alert('Registration Failed: ' + msg);
-      else Alert.alert('Registration Failed', msg);
     } finally {
       setLoading(false);
     }

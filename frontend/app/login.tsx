@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { BlueprintTheme, BlueprintColors } from '../constants/BlueprintTheme';
 import { signInWithEmailAndPassword, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { auth } from '../services/firebase';
+import { presentAuthError } from '../utils/authErrors';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
@@ -45,12 +46,7 @@ export default function LoginScreen() {
       }
     } catch (error: any) {
       console.error('[AUTH] Login Error:', error.response?.data || error.message);
-      let msg = error.response?.data?.message || 'Incorrect email or password';
-      if (error.message === 'Network Error') {
-        msg = `Network Error: Cannot connect to backend server.\n\nExpected URL: ${apiClient.defaults.baseURL || 'http://localhost:3000/api/v1'}\n\nPlease check that:\n1. Your backend server is running.\n2. Your phone is on the same Wi-Fi network.\n3. Windows Firewall is not blocking port 3000.`;
-      }
-      if (Platform.OS === 'web') alert('Login Failed: ' + msg);
-      else Alert.alert('Login Failed', msg);
+      presentAuthError(error);
     } finally {
       setLoading(false);
     }
@@ -102,14 +98,7 @@ export default function LoginScreen() {
         } catch (err: any) {
           setLoading(false);
           console.error('[SOCIAL AUTH] Google Sign-In failed:', err);
-          if (err.code === 'SIGN_IN_CANCELLED') {
-            Alert.alert('Cancelled', 'Sign-in was cancelled.');
-          } else {
-            Alert.alert(
-              'Google Sign-In Error',
-              `Code: ${err.code || 'UNKNOWN'}\nMessage: ${err.message || 'An error occurred.'}`
-            );
-          }
+          presentAuthError(err);
           return; // Exit gracefully without crashing
         }
       }
@@ -138,18 +127,7 @@ export default function LoginScreen() {
       }
     } catch (error: any) {
       console.error('[SOCIAL AUTH] OAuth Error:', error);
-      // Prefer the server's own message. Falling straight through to
-      // `error.message` surfaced raw axios text like "Request failed with
-      // status code 429", which tells the user nothing about what to do.
-      const serverMsg = error.response?.data?.message;
-      const status = error.response?.status;
-      const msg =
-        serverMsg ||
-        (status === 429
-          ? 'Too many sign-in attempts. Please wait a few minutes and try again.'
-          : error.message) ||
-        'Failed to complete social login.';
-      Alert.alert('Sign-in failed', msg);
+      presentAuthError(error);
     } finally {
       setLoading(false);
     }
