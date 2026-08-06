@@ -20,12 +20,21 @@ export function getAuthErrorMessage(error: any): { title: string; message: strin
     return { title: OFFLINE_TITLE, message: OFFLINE_MESSAGE };
   }
 
-  const code: string | undefined = error?.code;
+  const code: string | number | undefined = error?.code;
   const status: number | undefined = error?.response?.status;
   const serverMsg: string | undefined = error?.response?.data?.message;
 
   if (status === 429 || code === 'auth/too-many-requests') {
     return { title: 'Too many attempts', message: 'Please wait a few minutes and try again.' };
+  }
+
+  // Native Google Sign-In cancelled (code 12501) or dismissed.
+  if (code === 12501 || code === '12501' || code === 'SIGN_IN_CANCELLED' || code === 'auth/popup-closed-by-user') {
+    return { title: 'Sign-in cancelled', message: 'You closed the sign-in before it finished. Please try again.' };
+  }
+  // Native Google Sign-In config problem — keep it non-technical for the user.
+  if (code === 10 || code === '10' || code === 'DEVELOPER_ERROR') {
+    return { title: 'Sign-in unavailable', message: "Google sign-in isn't available right now. Please try email sign-in, or try again later." };
   }
 
   switch (code) {

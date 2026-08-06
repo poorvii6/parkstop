@@ -107,14 +107,7 @@ export default function RegisterScreen() {
         } catch (err: any) {
           setLoading(false);
           console.error('[SOCIAL AUTH] Google Sign-In failed:', err);
-          if (err.code === 'SIGN_IN_CANCELLED') {
-            Alert.alert('Cancelled', 'Sign-in was cancelled.');
-          } else {
-            Alert.alert(
-              'Google Sign-In Error',
-              `Code: ${err.code || 'UNKNOWN'}\nMessage: ${err.message || 'An error occurred.'}`
-            );
-          }
+          presentAuthError(err);
           return; // Exit gracefully without crashing
         }
       }

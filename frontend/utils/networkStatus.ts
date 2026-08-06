@@ -32,6 +32,12 @@ export function isNetworkError(error: any): boolean {
   if (error.message === 'Network Error') return true;
   if (error.isAxiosError && !error.response) return true;         // request sent, no response
   if (error.code === 'ECONNABORTED') return true;                // timeout (often a slow/cold server)
+
+  // Native Google Sign-In (@react-native-google-signin) offline error:
+  // it surfaces as { code: 7, message: 'NETWORK_ERROR' }.
+  if (error.code === 7 || error.code === '7') return true;
+  if (typeof error.message === 'string' && error.message.toUpperCase() === 'NETWORK_ERROR') return true;
+
   return false;
 }
 
