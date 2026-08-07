@@ -874,7 +874,7 @@ export default function FinderDashboard() {
             }
           });
         } catch (e) {
-          console.error("GPS Watch Error:", e);
+          console.log("GPS Watch Error:", e); // background watcher; not user-facing
         }
       };
 
@@ -1774,7 +1774,7 @@ export default function FinderDashboard() {
     try {
       setStep('payment');
     } catch (e) {
-      console.error(e);
+      console.log('[finishParking]', e);
     } finally {
       setIsLoading(false);
     }
@@ -2106,7 +2106,7 @@ export default function FinderDashboard() {
       const res = await apiClient.get(`/spots/${spotId}/slots`);
       if (res.data.success) setSlotData(res.data.data);
     } catch (err) {
-      console.error("Fetch slots error:", err);
+      console.log("Fetch slots error:", err); // handled: shows 'No slots available' + offline banner
       setSlotData([]);
     } finally {
       setIsSlotLoading(false);
