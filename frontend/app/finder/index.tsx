@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { View, Text, StyleSheet, Platform, TouchableOpacity, TextInput, Dimensions, Modal, Alert, ScrollView, Linking, Keyboard, ActivityIndicator, BackHandler, AppState, Image, Animated, KeyboardAvoidingView } from 'react-native';
+import { View, Text, StyleSheet, Platform, TouchableOpacity, TextInput, Dimensions, Modal, Alert, ScrollView, Linking, Keyboard, ActivityIndicator, BackHandler, AppState, Image, Animated, KeyboardAvoidingView, DeviceEventEmitter } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -17,7 +17,7 @@ import * as Location from 'expo-location';
 import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
 import { Ionicons } from '@expo/vector-icons';
-import { isNetworkError } from '../../utils/networkStatus';
+import { isNetworkError, ONLINE_EVENT } from '../../utils/networkStatus';
 import { BlueprintTheme, BlueprintColors } from '../../constants/BlueprintTheme';
 import apiClient from '../../api/client';
 import { startBackgroundLocation, stopBackgroundLocation, onBackgroundLocation } from '../../services/backgroundLocation';
@@ -1387,6 +1387,15 @@ export default function FinderDashboard() {
       setIsNearbyLoading(false);
     }
   };
+
+  // Refetch nearby spots the moment connectivity is restored, so the map isn't
+  // left showing stale data after an offline stretch.
+  useEffect(() => {
+    const sub = DeviceEventEmitter.addListener(ONLINE_EVENT, () => {
+      if (userLocation) fetchNearbySpots(userLocation.lat, userLocation.lng);
+    });
+    return () => sub.remove();
+  }, [userLocation]);
 
   // Step 7: Location Search via Nominatim
   const handleSearch = async () => {

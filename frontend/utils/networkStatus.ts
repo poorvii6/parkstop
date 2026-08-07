@@ -72,14 +72,16 @@ export function reportNetworkFailure(message: string = DEFAULT_MSG): void {
  * showing, hides it (we're clearly reachable again).
  */
 export function reportNetworkSuccess(): void {
+  const wasFailing = !!pendingTimer || bannerVisible;
   if (pendingTimer) {
     clearTimeout(pendingTimer);
     pendingTimer = null;
   }
-  if (bannerVisible) {
-    bannerVisible = false;
-    DeviceEventEmitter.emit(ONLINE_EVENT);
-  }
+  bannerVisible = false;
+  // Emit ONLINE on ANY recovery from a failed state — even a brief blip that
+  // never showed the banner — so screens refetch stale data immediately. The
+  // OfflineBanner ignores this unless it was actually showing "offline".
+  if (wasFailing) DeviceEventEmitter.emit(ONLINE_EVENT);
 }
 
 /** Back-compat alias for any existing callers. */

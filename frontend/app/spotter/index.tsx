@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, RefreshControl, DeviceEventEmitter } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons, FontAwesome5, MaterialCommunityIcons } from '@expo/vector-icons';
 import apiClient from '../../api/client';
 import { presentError } from '../../utils/authErrors';
 import { addNotificationListeners } from '../../services/notifications';
+import { ONLINE_EVENT } from '../../utils/networkStatus';
 import Toast from '../../components/Toast';
 import RevenueChart from '../../components/spotter/RevenueChart';
 import { useSpotterDashboard } from '../../hooks/useSpotterDashboard';
@@ -49,7 +50,10 @@ export default function SpotterDashboard() {
       onReceived: () => { fetchDashboardData(); },
       onTapped: () => { fetchDashboardData(); },
     });
-    return unsubscribe;
+    // Also refetch the moment connectivity is restored, so stale data after an
+    // offline stretch refreshes without the user pulling to refresh.
+    const onlineSub = DeviceEventEmitter.addListener(ONLINE_EVENT, () => { fetchDashboardData(); });
+    return () => { unsubscribe(); onlineSub.remove(); };
   }, [fetchDashboardData]);
 
   const toggleGlobalStatus = async (currentStatus: boolean) => {

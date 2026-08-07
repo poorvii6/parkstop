@@ -56,6 +56,42 @@ const apiClient = axios.create({
   },
 });
 
+// ---- Proactive reconnect probe ----
+// While we believe we're offline, quietly poll /health so we detect the moment
+// the network returns and fire ONLINE (which makes screens refetch) instead of
+// waiting for the user's next action. Stops as soon as we're reachable again.
+let reconnectProbe: ReturnType<typeof setInterval> | null = null;
+
+function healthUrl(): string {
+  const base = apiClient.defaults.baseURL || getAPIUrlSync();
+  return base.replace(/\/api\/v1\/?$/, '') + '/health';
+}
+
+function startReconnectProbe() {
+  if (reconnectProbe) return;
+  reconnectProbe = setInterval(async () => {
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 4000);
+      const res = await fetch(healthUrl(), { method: 'GET', signal: ctrl.signal });
+      clearTimeout(timer);
+      if (res.ok) {
+        stopReconnectProbe();
+        reportNetworkSuccess(); // fires ONLINE -> screens refetch immediately
+      }
+    } catch {
+      // still offline — keep probing
+    }
+  }, 3000);
+}
+
+function stopReconnectProbe() {
+  if (reconnectProbe) {
+    clearInterval(reconnectProbe);
+    reconnectProbe = null;
+  }
+}
+
 // REQUEST INTERCEPTOR: Inject dynamic URL and Auth token
 apiClient.interceptors.request.use(
   async (config) => {
@@ -100,7 +136,8 @@ apiClient.interceptors.request.use(
 apiClient.interceptors.response.use(
   (response) => {
     // A real response came back → we are reachable. Clears any pending/showing
-    // "can't reach ParkStop" banner.
+    // "can't reach ParkStop" banner and stops the reconnect probe.
+    stopReconnectProbe();
     reportNetworkSuccess();
     return response;
   },
@@ -113,6 +150,7 @@ apiClient.interceptors.response.use(
     // (so backend cold-starts and transient blips stay silent).
     if (isNetworkError(error)) {
       reportNetworkFailure();
+      startReconnectProbe(); // start watching for reconnection so we recover fast
       return Promise.reject(error);
     }
 
