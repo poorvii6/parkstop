@@ -17,6 +17,7 @@ import * as Location from 'expo-location';
 import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
 import { Ionicons } from '@expo/vector-icons';
+import { isNetworkError } from '../../utils/networkStatus';
 import { BlueprintTheme, BlueprintColors } from '../../constants/BlueprintTheme';
 import apiClient from '../../api/client';
 import { startBackgroundLocation, stopBackgroundLocation, onBackgroundLocation } from '../../services/backgroundLocation';
@@ -359,6 +360,7 @@ export default function FinderDashboard() {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSlotLoading, setIsSlotLoading] = useState(false);
+  const [slotLoadError, setSlotLoadError] = useState(false); // true when slots couldn't load due to being offline
   const [isNearbyLoading, setIsNearbyLoading] = useState(false);
 
   useEffect(() => {
@@ -2101,13 +2103,16 @@ export default function FinderDashboard() {
   // Fetch slot data when a spot is selected
   const fetchSlots = async (spotId: string) => {
     setIsSlotLoading(true);
+    setSlotLoadError(false);
     setSlotData([]);
     try {
       const res = await apiClient.get(`/spots/${spotId}/slots`);
       if (res.data.success) setSlotData(res.data.data);
     } catch (err) {
-      console.log("Fetch slots error:", err); // handled: shows 'No slots available' + offline banner
+      console.log("Fetch slots error:", err); // handled below
       setSlotData([]);
+      // Distinguish "offline, couldn't load" from "genuinely no slots".
+      if (isNetworkError(err)) setSlotLoadError(true);
     } finally {
       setIsSlotLoading(false);
     }
@@ -2943,9 +2948,22 @@ export default function FinderDashboard() {
                   );
                 })}
               </View>
+            ) : slotLoadError ? (
+              <View style={{ alignItems: 'center', paddingVertical: 20, paddingHorizontal: 16, marginBottom: 16, gap: 6 }}>
+                <Ionicons name="cloud-offline-outline" size={26} color="#f59e0b" />
+                <Text style={{ color: '#fff', fontSize: 14, fontWeight: '800' }}>You're offline</Text>
+                <Text style={{ color: '#94a3b8', fontSize: 12, textAlign: 'center' }}>Couldn't load slots. Check your connection.</Text>
+                <TouchableOpacity
+                  onPress={() => { if (selectedSpotId) fetchSlots(selectedSpotId); }}
+                  activeOpacity={0.8}
+                  style={{ marginTop: 6, paddingVertical: 8, paddingHorizontal: 20, borderRadius: 12, backgroundColor: 'rgba(245,158,11,0.15)', borderWidth: 1, borderColor: 'rgba(245,158,11,0.4)' }}
+                >
+                  <Text style={{ color: '#f59e0b', fontWeight: '800', fontSize: 13 }}>Retry</Text>
+                </TouchableOpacity>
+              </View>
             ) : (
               <View style={{ alignItems: 'center', padding: 20, marginBottom: 16 }}>
-                <Text style={{ color: '#f43f5e', fontSize: 13, fontWeight: '700' }}>No slots available</Text>
+                <Text style={{ color: '#94a3b8', fontSize: 13, fontWeight: '700' }}>No slots available</Text>
               </View>
             )}
 
