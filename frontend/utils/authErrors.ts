@@ -68,3 +68,29 @@ export function presentAuthError(error: any): void {
     Alert.alert(title, message);
   }
 }
+
+/**
+ * General-purpose action error popup. Use for any user action (save, delete,
+ * toggle, etc.): when offline it shows the clean "You're offline" message;
+ * otherwise it prefers the server's message, then the provided fallback.
+ */
+export function presentError(
+  error: any,
+  fallbackMessage: string = 'Something went wrong. Please try again.',
+  fallbackTitle: string = 'Oops'
+): void {
+  let title = fallbackTitle;
+  let message = fallbackMessage;
+  if (isNetworkError(error)) {
+    title = OFFLINE_TITLE;
+    message = OFFLINE_MESSAGE;
+  } else {
+    message = error?.response?.data?.message || fallbackMessage;
+  }
+  if (Platform.OS === 'web') {
+    // eslint-disable-next-line no-alert
+    alert(`${title}\n\n${message}`);
+  } else {
+    Alert.alert(title, message);
+  }
+}

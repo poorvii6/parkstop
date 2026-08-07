@@ -8,6 +8,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
 import MapLibreView from '../../components/MapLibreView';
 import apiClient from '../../api/client';
+import { presentError } from '../../utils/authErrors';
 import { SC, TF, SP, RAD, SS } from '../../constants/SpotterTheme';
 
 export default function SpotsScreen() {
@@ -203,7 +204,7 @@ export default function SpotsScreen() {
       setLoadingSpots(true);
       fetchMySpots();
     } catch (e: any) {
-      Alert.alert('Error', e.response?.data?.message || 'Failed to save spot.');
+      presentError(e, 'Failed to save spot.');
     } finally {
       setCreating(false);
     }
@@ -236,7 +237,7 @@ export default function SpotsScreen() {
             setLoadingSpots(true);
             fetchMySpots();
           } catch (e: any) {
-            Alert.alert('Error', e.response?.data?.message || 'Failed to delete.');
+            presentError(e, 'Failed to delete.');
           }
         },
       },
