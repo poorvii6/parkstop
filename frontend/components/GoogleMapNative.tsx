@@ -279,7 +279,11 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
   const trySnapToUser = useCallback(() => {
     if (didInitialPosition.current || !mapRef.current) return;
     if (propsRef.current.destination || propsRef.current.searchedPlace) { didInitialPosition.current = true; return; }
-    if (lastInteraction.current > 0) { didInitialPosition.current = true; return; }
+    // Only defer to the user while they are ACTIVELY interacting (last gesture
+    // within 3s). A single stray early touch on the country-view fallback must
+    // not permanently cancel the open-on-user snap — that was the "stuck on
+    // whole-India until I recenter" bug. Once they stop, we still center them.
+    if (lastInteraction.current > 0 && Date.now() - lastInteraction.current < 3000) return;
     const u = propsRef.current.userLocation || selfLoc;
     if (!u) return;
     markProgrammatic(900);
@@ -302,7 +306,7 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
       if (didInitialPosition.current) { clearInterval(iv); return; }
       trySnapToUser();
     }, 700);
-    const stop = setTimeout(() => clearInterval(iv), 15000);
+    const stop = setTimeout(() => clearInterval(iv), 45000); // cover slow/cold GPS fixes
     return () => { clearInterval(iv); clearTimeout(stop); };
   }, [trySnapToUser]);
 
