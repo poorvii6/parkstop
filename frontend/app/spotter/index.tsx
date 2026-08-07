@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, RefreshControl } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons, FontAwesome5, MaterialCommunityIcons } from '@expo/vector-icons';
 import apiClient from '../../api/client';
 import { presentError } from '../../utils/authErrors';
+import { addNotificationListeners } from '../../services/notifications';
 import Toast from '../../components/Toast';
 import RevenueChart from '../../components/spotter/RevenueChart';
 import { useSpotterDashboard } from '../../hooks/useSpotterDashboard';
@@ -40,6 +41,16 @@ export default function SpotterDashboard() {
   } = useSpotterDashboard();
   const [togglingStatus, setTogglingStatus] = useState(false);
   const [toast, setToast] = useState<{ msg: string; kind: 'success' | 'error' | 'info' } | null>(null);
+
+  // Auto-refresh the dashboard when a push arrives (e.g. a new booking) while
+  // the app is open, and again if the user taps a notification to come back in.
+  useEffect(() => {
+    const unsubscribe = addNotificationListeners({
+      onReceived: () => { fetchDashboardData(); },
+      onTapped: () => { fetchDashboardData(); },
+    });
+    return unsubscribe;
+  }, [fetchDashboardData]);
 
   const toggleGlobalStatus = async (currentStatus: boolean) => {
     setTogglingStatus(true);

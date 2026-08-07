@@ -45,6 +45,46 @@ class NotificationService {
     return [...new Set(tokens)].filter((t) => typeof t === 'string' && t.startsWith('ExponentPushToken['));
   }
 
+  /** Save a notification to history so the user can see missed ones in-app. */
+  static async persistNotification(userId, { title, body, data }) {
+    try {
+      await prisma.notifications.create({
+        data: {
+          user_id: parseInt(userId),
+          title: title || '',
+          body: body || null,
+          type: data?.type || null,
+          data: data || undefined,
+        },
+      });
+    } catch (e) {
+      // Table may not exist yet (pre-migration) — never block delivery on this.
+      logger.warn(`persistNotification skipped for user ${userId}: ${e.message}`);
+    }
+  }
+
+  /**
+   * True if the user is currently within their configured quiet hours, so we
+   * suppress the push (history + socket still fire). Uses IST, the app's user
+   * base; a prefs lookup failure never blocks delivery.
+   */
+  static async isUserQuiet(userId) {
+    try {
+      const u = await prisma.users.findUnique({
+        where: { id: parseInt(userId) },
+        select: { quiet_hours_start: true, quiet_hours_end: true },
+      });
+      const s = u?.quiet_hours_start;
+      const e = u?.quiet_hours_end;
+      if (s == null || e == null || s === e) return false;
+      const istHour = new Date(Date.now() + (5 * 60 + 30) * 60000).getUTCHours();
+      // Handles overnight ranges (e.g. 22 -> 7).
+      return s < e ? (istHour >= s && istHour < e) : (istHour >= s || istHour < e);
+    } catch (_) {
+      return false;
+    }
+  }
+
   /** Delete a token that Expo told us is no longer valid (uninstalled app, etc.). */
   static async pruneToken(token) {
     try {
@@ -57,25 +97,72 @@ class NotificationService {
     }
   }
 
+  /** Split an array into fixed-size chunks. */
+  static chunk(arr, size) {
+    const out = [];
+    for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+    return out;
+  }
+
   /**
-   * Poll Expo push receipts (best-effort) and prune any tokens that come back
-   * as DeviceNotRegistered. Receipts may not be ready instantly, so this is a
-   * light follow-up; ticket-level errors are already handled at send time.
+   * POST JSON to Expo with ONE retry on a transient failure (network blip,
+   * Expo hiccup). Without this a single failed fetch silently dropped the push.
+   */
+  static async expoPost(url, payload) {
+    let lastErr;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        return await res.json();
+      } catch (e) {
+        lastErr = e;
+        if (attempt === 0) await new Promise((r) => setTimeout(r, 1000)); // brief backoff, then retry once
+      }
+    }
+    throw lastErr;
+  }
+
+  /**
+   * Durably schedule a receipt check. Expo receipts may not be ready for several
+   * minutes, and a bare setTimeout dies if the server restarts — so when a real
+   * (BullMQ) queue is available we enqueue a DELAYED job; otherwise we fall back
+   * to an in-process timer.
+   */
+  static scheduleReceiptCheck(receiptIdToToken) {
+    if (!receiptIdToToken || Object.keys(receiptIdToToken).length === 0) return;
+    try {
+      const { notificationQueue, queueMode } = require('../jobs/queues');
+      if (queueMode === 'bullmq' && notificationQueue?.add) {
+        notificationQueue.add('check-receipts', { receiptIdToToken }, { delay: 90000 }).catch(() => {});
+        return;
+      }
+    } catch (_) {
+      // queue not available — fall through to the timer
+    }
+    setTimeout(() => { this.checkReceipts(receiptIdToToken).catch(() => {}); }, 15000);
+  }
+
+  /**
+   * Poll Expo push receipts and prune any tokens that come back as
+   * DeviceNotRegistered. Ticket-level errors are already handled at send time;
+   * this catches failures that only surface later.
    */
   static async checkReceipts(receiptIdToToken) {
-    const ids = Object.keys(receiptIdToToken);
+    const ids = Object.keys(receiptIdToToken || {});
     if (ids.length === 0) return;
     try {
-      const res = await fetch('https://exp.host/--/api/v2/push/getReceipts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify({ ids }),
-      });
-      const json = await res.json();
-      const receipts = json?.data || {};
-      for (const [receiptId, receipt] of Object.entries(receipts)) {
-        if (receipt?.status === 'error' && receipt?.details?.error === 'DeviceNotRegistered') {
-          await this.pruneToken(receiptIdToToken[receiptId]);
+      // getReceipts accepts up to 1000 ids per request.
+      for (const idChunk of this.chunk(ids, 1000)) {
+        const json = await this.expoPost('https://exp.host/--/api/v2/push/getReceipts', { ids: idChunk });
+        const receipts = json?.data || {};
+        for (const [receiptId, receipt] of Object.entries(receipts)) {
+          if (receipt?.status === 'error' && receipt?.details?.error === 'DeviceNotRegistered') {
+            await this.pruneToken(receiptIdToToken[receiptId]);
+          }
         }
       }
     } catch (e) {
@@ -85,58 +172,68 @@ class NotificationService {
 
   /**
    * Send a push notification to ALL of a user's devices via Expo Push Service.
-   * Handles dead-token pruning (ticket + receipt level) so delivery stays clean.
+   * Chunks at Expo's 100-per-request limit, retries transient send failures,
+   * and prunes dead tokens (ticket + receipt level) so delivery stays clean.
    */
   static async sendPushNotification(userId, { title, body, data }) {
     try {
+      // Always record to history (best-effort), even if the push is suppressed.
+      await this.persistNotification(userId, { title, body, data });
+
+      // Respect quiet hours: skip the actual push (the in-app socket + history
+      // still deliver it, so nothing is lost — it just won't buzz the phone).
+      if (await this.isUserQuiet(userId)) {
+        logger.info(`Quiet hours active for user ${userId} — push suppressed (saved to history).`);
+        return;
+      }
+
       const tokens = await this.getUserPushTokens(userId);
       if (tokens.length === 0) {
         logger.info(`No valid push token registered for user ${userId}`);
         return;
       }
 
-      // One message per device (Expo accepts an array in a single request).
-      const messages = tokens.map((to) => ({
-        to,
-        title,
-        body,
-        data: data || {},
-        sound: 'default',
-        priority: 'high',
-        channelId: 'default',
-      }));
-
       logger.info(`Sending push to user ${userId} across ${tokens.length} device(s)...`);
-      const response = await fetch('https://exp.host/--/api/v2/push/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-        body: JSON.stringify(messages),
-      });
-      const result = await response.json();
 
-      // Expo returns a ticket per message, in the same order we sent them.
-      const tickets = Array.isArray(result?.data) ? result.data : [];
       const receiptIdToToken = {};
-      for (let i = 0; i < tickets.length; i++) {
-        const ticket = tickets[i];
-        const token = tokens[i];
-        if (ticket?.status === 'error') {
-          logger.warn(`Push ticket error for user ${userId}: ${ticket?.message}`);
-          if (ticket?.details?.error === 'DeviceNotRegistered') {
-            await this.pruneToken(token); // token is dead — stop sending to it
+      // Expo accepts up to 100 messages per request — chunk to stay within it.
+      for (const tokenChunk of this.chunk(tokens, 100)) {
+        const messages = tokenChunk.map((to) => ({
+          to,
+          title,
+          body,
+          data: data || {},
+          sound: 'default',
+          priority: 'high',
+          channelId: 'default',
+        }));
+
+        let result;
+        try {
+          result = await this.expoPost('https://exp.host/--/api/v2/push/send', messages);
+        } catch (e) {
+          logger.error(`Expo push send failed for user ${userId} after retry: ${e.message}`);
+          continue; // don't let one failed chunk abort the rest
+        }
+
+        // Expo returns a ticket per message, in the same order we sent them.
+        const tickets = Array.isArray(result?.data) ? result.data : [];
+        for (let i = 0; i < tickets.length; i++) {
+          const ticket = tickets[i];
+          const token = tokenChunk[i];
+          if (ticket?.status === 'error') {
+            logger.warn(`Push ticket error for user ${userId}: ${ticket?.message}`);
+            if (ticket?.details?.error === 'DeviceNotRegistered') {
+              await this.pruneToken(token); // token is dead — stop sending to it
+            }
+          } else if (ticket?.status === 'ok' && ticket?.id) {
+            receiptIdToToken[ticket.id] = token;
           }
-        } else if (ticket?.status === 'ok' && ticket?.id) {
-          receiptIdToToken[ticket.id] = token;
         }
       }
 
-      // Best-effort receipt follow-up to catch failures that surface later.
-      // (For production scale, move this to a scheduled job ~15 min later.)
-      if (Object.keys(receiptIdToToken).length > 0) {
-        setTimeout(() => {
-          this.checkReceipts(receiptIdToToken).catch(() => {});
-        }, 8000);
-      }
+      // Durable follow-up to catch failures that surface after the ticket.
+      this.scheduleReceiptCheck(receiptIdToToken);
     } catch (error) {
       logger.error(`Error sending push notification to user ${userId}:`, error);
     }

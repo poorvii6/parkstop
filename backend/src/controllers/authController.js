@@ -435,6 +435,19 @@ class AuthController {
    * LOGOUT (stateless, so we just return success)
    */
   static async logout(req, res) {
+    // If the app sends this device's push token, remove it so a shared phone
+    // stops receiving the previous user's notifications after logout. Scoped to
+    // the current user, so it never affects that user's other devices.
+    try {
+      const { push_token } = req.body || {};
+      if (push_token && req.user?.id) {
+        await prisma.device_tokens.deleteMany({ where: { token: push_token, user_id: req.user.id } });
+        await prisma.users.updateMany({ where: { id: req.user.id, push_token }, data: { push_token: null } });
+      }
+    } catch (e) {
+      logger.warn(`Logout token cleanup skipped: ${e.message}`);
+    }
+
     res.json({
       success: true,
       message: 'Logged out successfully'

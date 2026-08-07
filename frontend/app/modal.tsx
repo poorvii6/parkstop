@@ -5,6 +5,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons, FontAwesome5 } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import apiClient from '../api/client';
+import { getCurrentPushToken } from '../services/notifications';
 import DateTimePicker from '@react-native-community/datetimepicker';
 
 // Unified colors matching SpotterTheme
@@ -125,7 +126,7 @@ export default function ProfileModal() {
     Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Sign Out', style: 'destructive', onPress: async () => {
-        try { await apiClient.post('/auth/logout'); } catch (e) {}
+        try { await apiClient.post('/auth/logout', { push_token: getCurrentPushToken() }); } catch (e) {}
         await AsyncStorage.multiRemove(['access_token', 'user_role', 'discovered_api_url', 'is_dual_user']);
         router.replace('/login');
       }},

@@ -8,7 +8,7 @@ import MapLibreView from '../../components/MapLibreView';
 import { useStripe } from '../../components/StripeImports';
 import RazorpayCheckout from '../../components/RazorpayCheckout';
 import razorpayService from '../../services/razorpayService';
-import { registerForPushNotificationsAsync } from '../../services/notifications';
+import { registerForPushNotificationsAsync, getCurrentPushToken } from '../../services/notifications';
 import { onRealtime } from '../../services/realtime';
 import { setCashfreeCallbacks, removeCashfreeCallbacks, payBookingWithCashfree, verifyCashfreePayment } from '../../services/cashfree';
 
@@ -2305,7 +2305,7 @@ export default function FinderDashboard() {
                       text: 'Sign Out', 
                       style: 'destructive',
                       onPress: async () => {
-                        try { await apiClient.post('/auth/logout'); } catch(e) {}
+                        try { await apiClient.post('/auth/logout', { push_token: getCurrentPushToken() }); } catch(e) {}
                         await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user_role', 'is_dual_user']);
                         try {
                           const { auth } = require('../../services/firebase');

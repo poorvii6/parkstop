@@ -45,8 +45,18 @@ function getProjectId(): string | undefined {
   );
 }
 
+// Remember this device's most recent token so we can hand it to /auth/logout
+// (lets the backend detach it, so a shared phone stops old notifications).
+let currentPushToken: string | null = null;
+
+/** The current device's Expo push token, or null if not registered yet. */
+export function getCurrentPushToken(): string | null {
+  return currentPushToken;
+}
+
 /** Save a device token against the current user (all devices are kept). */
 async function sendTokenToBackend(token: string): Promise<void> {
+  currentPushToken = token;
   try {
     await apiClient.post('/auth/push-token', { push_token: token, platform: Platform.OS });
     console.log('[Push] Token registered with backend.');

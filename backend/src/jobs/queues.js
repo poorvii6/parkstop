@@ -43,11 +43,15 @@ if (useMockQueue) {
       logger.info(`[Mock Queue] Adding notification job: ${name}`);
       const NotificationService = require('../services/notificationService');
       try {
-        await NotificationService.sendPushNotification(data.userId, {
-          title: data.title,
-          body: data.body,
-          data: data.data
-        });
+        if (name === 'check-receipts') {
+          await NotificationService.checkReceipts(data.receiptIdToToken);
+        } else {
+          await NotificationService.sendPushNotification(data.userId, {
+            title: data.title,
+            body: data.body,
+            data: data.data
+          });
+        }
       } catch (err) {
         logger.error(`[Mock Queue] Error processing notification: ${err.message}`);
       }
@@ -92,8 +96,12 @@ if (useMockQueue) {
 
   // Notification Worker
   new Worker('notifications', async job => {
-    const { userId, title, body, data } = job.data;
     const NotificationService = require('../services/notificationService');
+    if (job.name === 'check-receipts') {
+      await NotificationService.checkReceipts(job.data.receiptIdToToken);
+      return;
+    }
+    const { userId, title, body, data } = job.data;
     await NotificationService.sendPushNotification(userId, { title, body, data });
   }, { connection });
 
