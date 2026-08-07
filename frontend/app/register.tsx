@@ -106,7 +106,7 @@ export default function RegisterScreen() {
           userCredential = await signInWithCredential(auth, credential);
         } catch (err: any) {
           setLoading(false);
-          console.error('[SOCIAL AUTH] Google Sign-In failed:', err);
+          console.log('[SOCIAL AUTH] Google Sign-In failed:', err); // handled below; not a crash
           presentAuthError(err);
           return; // Exit gracefully without crashing
         }
@@ -136,7 +136,7 @@ export default function RegisterScreen() {
         router.replace('/role-selection');
       }
     } catch (error: any) {
-      console.error('[SOCIAL AUTH] OAuth Error:', error);
+      console.log('[SOCIAL AUTH] OAuth Error:', error); // handled below; not a crash
       presentAuthError(error);
     } finally {
       setLoading(false);
@@ -179,7 +179,7 @@ export default function RegisterScreen() {
         setOtpModalVisible(true);
       }
     } catch (otpErr: any) {
-      console.error('[GMAIL OTP] Send OTP request failed:', otpErr.response?.data || otpErr.message);
+      console.log('[GMAIL OTP] Send OTP request failed:', otpErr.response?.data || otpErr.message); // handled below
       presentAuthError(otpErr);
     } finally {
       setLoading(false);
@@ -206,7 +206,7 @@ export default function RegisterScreen() {
         await executeRegister(response.data.otp_token);
       }
     } catch (error: any) {
-      console.error('[GMAIL OTP] Verification failed:', error.response?.data || error.message);
+      console.log('[GMAIL OTP] Verification failed:', error.response?.data || error.message); // shown in modal below
       const msg = error.response?.data?.message || 'Invalid or expired OTP verification code';
       setOtpError(msg);
       // The backend burns the code after 5 wrong guesses and answers 429. When
@@ -234,7 +234,7 @@ export default function RegisterScreen() {
       try {
         firebaseToken = await firebaseUser.getIdToken();
       } catch (tokenErr) {
-        console.error('[AUTH] Failed to get Firebase token, deleting user...', tokenErr);
+        console.log('[AUTH] Failed to get Firebase token, deleting user...', tokenErr); // handled by outer catch
         await firebaseUser.delete();
         throw tokenErr;
       }
@@ -262,19 +262,19 @@ export default function RegisterScreen() {
           router.replace('/role-selection');
         }
       } catch (backendError: any) {
-        console.error('[AUTH] Backend register failed, rolling back Firebase user:', backendError.response?.data || backendError.message);
+        console.log('[AUTH] Backend register failed, rolling back Firebase user:', backendError.response?.data || backendError.message); // handled by outer catch
         // Rollback Firebase user to keep database state consistent
         try {
           await firebaseUser.delete();
         } catch (delErr) {
-          console.error('[AUTH] Failed to rollback Firebase user:', delErr);
+          console.log('[AUTH] Failed to rollback Firebase user:', delErr);
         }
         throw backendError;
       }
 
     } catch (error: any) {
       const errorData = error.response?.data;
-      console.error('[AUTH] Register Error Response:', errorData || error.message);
+      console.log('[AUTH] Register Error Response:', errorData || error.message); // handled below
 
       // Keep specific field-validation feedback; route everything else
       // (offline, rate-limits, server errors) through the clean handler.

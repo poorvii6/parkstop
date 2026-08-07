@@ -45,7 +45,7 @@ export default function LoginScreen() {
         else router.replace('/role-selection');
       }
     } catch (error: any) {
-      console.error('[AUTH] Login Error:', error.response?.data || error.message);
+      console.log('[AUTH] Login Error:', error.response?.data || error.message); // handled below; not a crash
       presentAuthError(error);
     } finally {
       setLoading(false);
@@ -97,7 +97,7 @@ export default function LoginScreen() {
           userCredential = await signInWithCredential(auth, credential);
         } catch (err: any) {
           setLoading(false);
-          console.error('[SOCIAL AUTH] Google Sign-In failed:', err);
+          console.log('[SOCIAL AUTH] Google Sign-In failed:', err); // handled below; not a crash
           presentAuthError(err);
           return; // Exit gracefully without crashing
         }
@@ -126,7 +126,7 @@ export default function LoginScreen() {
         else router.replace('/role-selection');
       }
     } catch (error: any) {
-      console.error('[SOCIAL AUTH] OAuth Error:', error);
+      console.log('[SOCIAL AUTH] OAuth Error:', error); // handled below; not a crash
       presentAuthError(error);
     } finally {
       setLoading(false);
