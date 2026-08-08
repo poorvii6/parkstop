@@ -35,13 +35,15 @@ class BookingController {
         payment_mode: payment_mode || 'online'
       });
 
-      // Real-time notification to Spotter
+      // Real-time notification to Spotter (and confirmation to the Finder)
       try {
         const spot = await ParkingSpot.findById(spot_id);
         if (spot && spot.spotter_id) {
           booking.finder_name = req.user.name || 'A driver';
           await NotificationService.notifyNewBooking(spot.spotter_id, booking);
         }
+        // Confirm the reservation to the finder (their check-in OTP is in-app).
+        await NotificationService.notifyBookingConfirmed(req.user.id, booking);
       } catch (err) {
         logger.error('Notification error in createBooking:', err);
       }

@@ -19,6 +19,7 @@ import * as Speech from 'expo-speech';
 import { Ionicons } from '@expo/vector-icons';
 import { isNetworkError, ONLINE_EVENT } from '../../utils/networkStatus';
 import { useOnlineRefresh } from '../../hooks/useOnlineRefresh';
+import NotificationBell from '../../components/NotificationBell';
 import { BlueprintTheme, BlueprintColors } from '../../constants/BlueprintTheme';
 import apiClient from '../../api/client';
 import { startBackgroundLocation, stopBackgroundLocation, onBackgroundLocation } from '../../services/backgroundLocation';
@@ -2307,7 +2308,9 @@ export default function FinderDashboard() {
                 </TouchableOpacity>
               )}
               {isSearching && <ActivityIndicator size="small" color="#6366f1" style={{ marginRight: 10 }} />}
-              
+
+              <View style={{ marginRight: 6 }}><NotificationBell color="#94a3b8" size={20} /></View>
+
               {/* Subtle Sign Out Button in Search Bar */}
               <TouchableOpacity 
                 onPress={async () => {

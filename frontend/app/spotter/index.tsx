@@ -7,6 +7,7 @@ import apiClient from '../../api/client';
 import { presentError } from '../../utils/authErrors';
 import { addNotificationListeners } from '../../services/notifications';
 import { ONLINE_EVENT } from '../../utils/networkStatus';
+import NotificationBell from '../../components/NotificationBell';
 import Toast from '../../components/Toast';
 import RevenueChart from '../../components/spotter/RevenueChart';
 import { useSpotterDashboard } from '../../hooks/useSpotterDashboard';
@@ -198,7 +199,8 @@ export default function SpotterDashboard() {
             <Text style={SS.logoAccent}>P</Text>arkStop
           </Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-            <TouchableOpacity 
+            <NotificationBell color="#FFFFFF" size={22} />
+            <TouchableOpacity
               disabled={togglingStatus}
               onPress={() => {
                 Alert.alert(
