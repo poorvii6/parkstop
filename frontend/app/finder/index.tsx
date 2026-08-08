@@ -2324,7 +2324,7 @@ export default function FinderDashboard() {
               )}
               {isSearching && <ActivityIndicator size="small" color="#6366f1" style={{ marginRight: 10 }} />}
 
-              <View style={{ marginRight: 6 }}><NotificationBell color="#94a3b8" size={20} /></View>
+              <View style={{ marginRight: 6 }}><NotificationBell color="#94a3b8" size={20} audience="finder" /></View>
 
               {/* Subtle Sign Out Button in Search Bar */}
               <TouchableOpacity 

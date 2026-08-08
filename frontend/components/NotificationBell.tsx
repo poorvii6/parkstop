@@ -5,24 +5,31 @@ import { Ionicons } from '@expo/vector-icons';
 import apiClient from '../api/client';
 import { addNotificationListeners } from '../services/notifications';
 import { useOnlineRefresh } from '../hooks/useOnlineRefresh';
+import { belongsToAudience, Audience } from '../utils/notificationAudience';
 
 /**
  * Bell icon with an unread badge that opens the notifications screen. Drop it
  * into any header. Keeps the unread count fresh on focus, on a new push, and on
- * reconnect.
+ * reconnect. `audience` scopes the badge + inbox to this interface (finder vs
+ * spotter) for dual-role users.
  */
-export default function NotificationBell({ color = '#FFFFFF', size = 22 }: { color?: string; size?: number }) {
+export default function NotificationBell({ color = '#FFFFFF', size = 22, audience }: { color?: string; size?: number; audience?: Audience }) {
   const router = useRouter();
   const [unread, setUnread] = useState(0);
 
   const fetchUnread = useCallback(async () => {
     try {
       const res = await apiClient.get('/notifications');
-      if (res.data?.success) setUnread(res.data.data.unread || 0);
+      if (res.data?.success) {
+        const items = res.data.data.items || [];
+        // Count only unread notifications relevant to THIS interface.
+        const count = items.filter((n: any) => !n.read && belongsToAudience(n.type, audience)).length;
+        setUnread(count);
+      }
     } catch {
       // stay quiet — a failed count must never disrupt the screen
     }
-  }, []);
+  }, [audience]);
 
   useFocusEffect(useCallback(() => { fetchUnread(); }, [fetchUnread]));
   useOnlineRefresh(fetchUnread);
@@ -32,7 +39,7 @@ export default function NotificationBell({ color = '#FFFFFF', size = 22 }: { col
   }, [fetchUnread]);
 
   return (
-    <TouchableOpacity onPress={() => router.push('/notifications')} hitSlop={10} style={styles.wrap} activeOpacity={0.7}>
+    <TouchableOpacity onPress={() => router.push({ pathname: '/notifications', params: audience ? { audience } : {} })} hitSlop={10} style={styles.wrap} activeOpacity={0.7}>
       <Ionicons name="notifications-outline" size={size} color={color} />
       {unread > 0 && (
         <View style={styles.badge}>

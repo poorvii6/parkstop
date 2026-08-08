@@ -199,7 +199,7 @@ export default function SpotterDashboard() {
             <Text style={SS.logoAccent}>P</Text>arkStop
           </Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-            <NotificationBell color="#FFFFFF" size={22} />
+            <NotificationBell color="#FFFFFF" size={22} audience="spotter" />
             <TouchableOpacity
               disabled={togglingStatus}
               onPress={() => {

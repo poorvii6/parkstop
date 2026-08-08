@@ -1,10 +1,11 @@
 import React, { useState, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, RefreshControl, Switch } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter, useFocusEffect } from 'expo-router';
+import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import apiClient from '../api/client';
 import { useOnlineRefresh } from '../hooks/useOnlineRefresh';
+import { belongsToAudience, Audience } from '../utils/notificationAudience';
 
 const C = {
   bg: '#0C0C14',
@@ -45,6 +46,7 @@ const pad = (n: number) => String(n).padStart(2, '0');
 
 export default function NotificationsScreen() {
   const router = useRouter();
+  const { audience } = useLocalSearchParams<{ audience?: Audience }>();
   const [items, setItems] = useState<Notif[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -61,13 +63,18 @@ export default function NotificationsScreen() {
         apiClient.get('/notifications'),
         apiClient.get('/notifications/preferences'),
       ]);
-      if (list.data?.success) setItems(list.data.data.items || []);
+      // Show only notifications for THIS interface (finder vs spotter).
+      const all: Notif[] = list.data?.success ? (list.data.data.items || []) : [];
+      const visible = all.filter((n) => belongsToAudience(n.type, audience));
+      setItems(visible);
       if (prefs.data?.success) {
         setQStart(prefs.data.data.quiet_hours_start ?? null);
         setQEnd(prefs.data.data.quiet_hours_end ?? null);
       }
-      // Mark everything read on open.
-      apiClient.post('/notifications/read', {}).catch(() => {});
+      // Mark only the visible (this-interface) notifications read, so the other
+      // role's unread count isn't cleared.
+      const unreadIds = visible.filter((n) => !n.read).map((n) => n.id);
+      if (unreadIds.length) apiClient.post('/notifications/read', { ids: unreadIds }).catch(() => {});
     } catch (e) {
       console.log('Load notifications failed', e);
     } finally {
