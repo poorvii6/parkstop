@@ -84,5 +84,44 @@ export function reportNetworkSuccess(): void {
   if (wasFailing) DeviceEventEmitter.emit(ONLINE_EVENT);
 }
 
+/**
+ * Show the offline banner IMMEDIATELY — no grace window. Used by the OS
+ * connectivity monitor, which KNOWS the device is offline (airplane mode / Wi-Fi
+ * off), so there's nothing to second-guess. Deduped + throttled.
+ */
+export function forceOffline(message: string = DEFAULT_MSG): void {
+  if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; }
+  if (bannerVisible) return;
+  bannerVisible = true;
+  lastShownAt = Date.now();
+  DeviceEventEmitter.emit(OFFLINE_EVENT, message);
+}
+
+let monitorStarted = false;
+/**
+ * Start listening to the OS connectivity state via @react-native-community/netinfo
+ * so we detect "internet off" the instant it happens (sub-second) instead of
+ * waiting for a request to fail. If the package isn't installed, we silently
+ * fall back to the request-failure-based detection.
+ */
+export function initConnectivityMonitor(): void {
+  if (monitorStarted) return;
+  monitorStarted = true;
+  let NetInfo: any;
+  try {
+    NetInfo = require('@react-native-community/netinfo').default;
+  } catch {
+    return; // not installed — request-based detection still works
+  }
+  if (!NetInfo?.addEventListener) return;
+  NetInfo.addEventListener((state: any) => {
+    if (state?.isConnected === false) {
+      forceOffline(); // device is genuinely offline — show now, no grace
+    } else if (state?.isConnected === true) {
+      reportNetworkSuccess(); // back online — hide banner + trigger refetch
+    }
+  });
+}
+
 /** Back-compat alias for any existing callers. */
 export const notifyOffline = reportNetworkFailure;

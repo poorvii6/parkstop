@@ -9,7 +9,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Animated, DeviceEventEmitter, Platform, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { OFFLINE_EVENT, ONLINE_EVENT } from '../utils/networkStatus';
+import { OFFLINE_EVENT, ONLINE_EVENT, initConnectivityMonitor } from '../utils/networkStatus';
 
 type Status = 'offline' | 'online' | null;
 
@@ -19,6 +19,9 @@ export default function OfflineBanner() {
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    // Start OS-level connectivity monitoring so "internet off" shows instantly.
+    initConnectivityMonitor();
+
     const clearHide = () => { if (hideTimer.current) clearTimeout(hideTimer.current); };
 
     const offSub = DeviceEventEmitter.addListener(OFFLINE_EVENT, () => {
