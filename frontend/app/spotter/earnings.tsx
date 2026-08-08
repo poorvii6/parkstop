@@ -18,6 +18,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
+import { useOnlineRefresh } from '../../hooks/useOnlineRefresh';
 import { Ionicons } from '@expo/vector-icons';
 import apiClient from '../../api/client';
 import { SC, TF, SP, RAD, SS } from '../../constants/SpotterTheme';
@@ -100,6 +101,9 @@ export default function EarningsBreakdown() {
   }, []);
 
   useFocusEffect(useCallback(() => { load(days); }, [days, load]));
+
+  // Reload earnings the moment connectivity is restored.
+  useOnlineRefresh(() => load(days));
 
   const onRefresh = () => { setRefreshing(true); load(days, true); };
 

@@ -9,6 +9,7 @@ import * as Haptics from 'expo-haptics';
 import MapLibreView from '../../components/MapLibreView';
 import apiClient from '../../api/client';
 import { presentError } from '../../utils/authErrors';
+import { useOnlineRefresh } from '../../hooks/useOnlineRefresh';
 import { SC, TF, SP, RAD, SS } from '../../constants/SpotterTheme';
 
 export default function SpotsScreen() {
@@ -108,6 +109,9 @@ export default function SpotsScreen() {
       setLoadingSpots(false);
     }
   };
+
+  // Refresh the spots list the moment connectivity is restored.
+  useOnlineRefresh(fetchMySpots);
 
   const detectLocation = async () => {
     try {

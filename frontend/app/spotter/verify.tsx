@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, TextInput, Alert, ScrollView, ActivityIndicator, RefreshControl, Image } from 'react-native';
+import { useOnlineRefresh } from '../../hooks/useOnlineRefresh';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -126,6 +127,9 @@ export default function VerifyScreen() {
       setRefreshing(false);
     }
   };
+
+  // Reload the active-bookings/verification list when connectivity returns.
+  useOnlineRefresh(fetchActiveBookings);
 
   const handleVerify = async () => {
     if (!bookingId || !otp) {

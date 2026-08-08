@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import apiClient from '../../api/client';
+import { useOnlineRefresh } from '../../hooks/useOnlineRefresh';
 import { BlueprintTheme, BlueprintColors } from '../../constants/BlueprintTheme';
 
 type PlatformStats = {
@@ -35,6 +36,9 @@ export default function AdminDashboard() {
       setLoading(false);
     }
   };
+
+  // Refresh analytics when connectivity returns.
+  useOnlineRefresh(fetchAnalytics);
 
   const handleLogout = async () => {
     await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user_role', 'is_dual_user']);

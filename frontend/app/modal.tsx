@@ -6,6 +6,7 @@ import { Ionicons, FontAwesome5 } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import apiClient from '../api/client';
 import { getCurrentPushToken } from '../services/notifications';
+import { useOnlineRefresh } from '../hooks/useOnlineRefresh';
 import DateTimePicker from '@react-native-community/datetimepicker';
 
 // Unified colors matching SpotterTheme
@@ -78,6 +79,9 @@ export default function ProfileModal() {
     } catch (e) { console.log('Profile fetch error', e); }
     finally { setLoading(false); }
   };
+
+  // Refresh the profile (and its saved-spots/bookings) when connectivity returns.
+  useOnlineRefresh(fetchProfile);
 
   useEffect(() => {
     const backAction = () => {

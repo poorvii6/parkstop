@@ -18,6 +18,7 @@ import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
 import { Ionicons } from '@expo/vector-icons';
 import { isNetworkError, ONLINE_EVENT } from '../../utils/networkStatus';
+import { useOnlineRefresh } from '../../hooks/useOnlineRefresh';
 import { BlueprintTheme, BlueprintColors } from '../../constants/BlueprintTheme';
 import apiClient from '../../api/client';
 import { startBackgroundLocation, stopBackgroundLocation, onBackgroundLocation } from '../../services/backgroundLocation';
@@ -2126,6 +2127,9 @@ export default function FinderDashboard() {
       setIsSlotLoading(false);
     }
   };
+
+  // If the slot picker failed while offline, auto-retry once connectivity returns.
+  useOnlineRefresh(() => { if (selectedSpotId && slotLoadError) fetchSlots(selectedSpotId); });
   const handleCreateBooking = async (method: 'online' | 'cash') => {
     if (!selectedSpotId) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
