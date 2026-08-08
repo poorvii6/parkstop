@@ -20,6 +20,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { isNetworkError, ONLINE_EVENT } from '../../utils/networkStatus';
 import { useOnlineRefresh } from '../../hooks/useOnlineRefresh';
 import NotificationBell from '../../components/NotificationBell';
+import { getDistanceKm } from '../../utils/geo';
 import { BlueprintTheme, BlueprintColors } from '../../constants/BlueprintTheme';
 import apiClient from '../../api/client';
 import { startBackgroundLocation, stopBackgroundLocation, onBackgroundLocation } from '../../services/backgroundLocation';
@@ -452,15 +453,6 @@ export default function FinderDashboard() {
     const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
     return () => backHandler.remove();
   }, [step, searchQuery]);
-
-  // Haversine distance in km
-  const getDistanceKm = (lat1: number, lon1: number, lat2: number, lon2: number) => {
-    const R = 6371;
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  };
 
   useEffect(() => {
     let locationSub: Location.LocationSubscription | null = null;
