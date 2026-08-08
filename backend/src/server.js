@@ -172,6 +172,13 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
 });
 
+// Public legal pages (clean URLs for payment-gateway onboarding).
+const legalPage = (file) => (req, res) =>
+  res.sendFile(path.join(__dirname, '..', 'public', file));
+app.get('/privacy', legalPage('privacy.html'));
+app.get('/terms', legalPage('terms.html'));
+app.get('/refund', legalPage('refund.html'));
+
 app.use(notFound);
 app.use(errorHandler);
 
