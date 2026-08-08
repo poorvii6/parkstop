@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, TextInput, Switch, Alert, Platform, Modal, KeyboardAvoidingView, BackHandler } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, TextInput, Switch, Alert, Platform, Modal, KeyboardAvoidingView, BackHandler, Linking } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons, FontAwesome5 } from '@expo/vector-icons';
@@ -487,19 +487,29 @@ export default function ProfileModal() {
   );
 
   /* ── Legal ──────────────────────────────────────────────────── */
-  const LegalScreen = () => (
-    <>
-      <Header title="Legal" />
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={st.scroll}>
-        <Text style={{ color: '#FFF', fontSize: 20, fontWeight: '800', marginBottom: 14 }}>ParkStop Spot Owner Terms</Text>
-        <Text style={st.legalText}>By listing your property on ParkStop, you agree to provide accurate location data and ensure the safety of parked vehicles.</Text>
-        {['Revenue Share: ParkStop takes a 15% platform fee.', 'Responsibilities: Ensure the spot is accessible during reserved hours.', 'Payouts: Processed every Friday for the previous week.', 'Cancellations: Repeated cancellations may lead to suspension.', 'Liability: You indemnify ParkStop against claims from property use.'].map((t, i) => (
-          <Text key={i} style={st.legalItem}>{i + 1}. {t}</Text>
-        ))}
-        <Text style={st.legalText}>Please read our full Privacy Policy on our website.</Text>
-      </ScrollView>
-    </>
-  );
+  const LegalScreen = () => {
+    const base = (apiClient.defaults.baseURL || 'https://parkstop-production.up.railway.app/api/v1').replace(/\/api\/v1\/?$/, '');
+    const openLegal = (p: string) => Linking.openURL(`${base}/${p}`).catch(() => {});
+    return (
+      <>
+        <Header title="Legal" />
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={st.scroll}>
+          <Text style={st.sectionLabel}>Policies</Text>
+          <View style={st.listBox}>
+            <ListItem icon="lock-closed" color={C.info} bg={C.infoSoft} title="Privacy Policy" sub="How we handle your data" onPress={() => openLegal('privacy')} />
+            <ListItem icon="document-text" color="#999" bg="rgba(150,150,150,0.1)" title="Terms of Service" sub="Your agreement with ParkStop" onPress={() => openLegal('terms')} />
+            <ListItem icon="cash-outline" color={C.success} bg={C.successSoft} title="Refund & Cancellation" sub="Cancellation and refund rules" onPress={() => openLegal('refund')} last />
+          </View>
+
+          <Text style={[st.sectionLabel, { marginTop: 20 }]}>Spot Owner Terms</Text>
+          <Text style={st.legalText}>By listing your property on ParkStop, you agree to provide accurate location data and ensure the safety of parked vehicles.</Text>
+          {['Revenue Share: ParkStop retains a platform fee (typically 20–30%).', 'Responsibilities: Ensure the spot is accessible during reserved hours.', 'Payouts: Your earnings are settled to your verified bank account.', 'Cancellations: Repeated cancellations may lead to suspension.', 'Liability: You indemnify ParkStop against claims from property use.'].map((t, i) => (
+            <Text key={i} style={st.legalItem}>{i + 1}. {t}</Text>
+          ))}
+        </ScrollView>
+      </>
+    );
+  };
 
   /* ── Alerts ─────────────────────────────────────────────────── */
   const AlertsScreen = () => (
