@@ -14,8 +14,23 @@ export default function NotificationTapHandler() {
 
   useEffect(() => {
     const unsubscribe = addNotificationListeners({
-      onTapped: () => {
-        try { router.push('/notifications'); } catch {}
+      onTapped: (notification: any) => {
+        const data = notification?.request?.content?.data || {};
+        const type = data.type;
+        const bookingId = data.bookingId != null ? String(data.bookingId) : undefined;
+        try {
+          if (type === 'booking_confirmed') {
+            // Finder's confirmation → their booking view.
+            router.push('/finder');
+          } else if (type === 'new_booking' || type === 'finder_nearby' || type === 'booking_cancelled') {
+            // Spotter-facing events → the verify/active-bookings screen, focused on the booking.
+            router.push({ pathname: '/spotter/verify', params: bookingId ? { bookingId } : {} });
+          } else {
+            router.push('/notifications');
+          }
+        } catch {
+          try { router.push('/notifications'); } catch {}
+        }
       },
     });
     return unsubscribe;

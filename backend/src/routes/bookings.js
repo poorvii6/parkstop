@@ -37,6 +37,15 @@ router.post(
 );
 
 /**
+ * 📍 NOTIFY SPOTTER — driver is nearby (Finder only)
+ */
+router.post(
+  '/:id/notify-nearby',
+  authenticate,
+  BookingController.notifyNearby
+);
+
+/**
  * ✅ VERIFY OTP (Spotter only)
  */
 router.post(

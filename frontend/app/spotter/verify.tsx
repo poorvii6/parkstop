@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, TextInput, Alert, ScrollView, ActivityIndicator, RefreshControl, Image } from 'react-native';
 import { useOnlineRefresh } from '../../hooks/useOnlineRefresh';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import apiClient from '../../api/client';
 import { onRealtime } from '../../services/realtime';
@@ -34,10 +34,17 @@ export default function VerifyScreen() {
   const scrollRef = React.useRef<ScrollView | null>(null);
   const selectedBooking = activeBookings.find((b: any) => b.id?.toString() === bookingId) || null;
 
+  const params = useLocalSearchParams<{ bookingId?: string }>();
+
   useEffect(() => {
     fetchActiveBookings();
     checkPayoutStatus();
   }, []);
+
+  // Opened from a tapped notification → focus that booking for quick verify.
+  useEffect(() => {
+    if (params?.bookingId) setBookingId(String(params.bookingId));
+  }, [params?.bookingId]);
 
   // Live: a booking made right now appears in the list without a refresh, so
   // the driver isn't standing there while the host pulls to reload.

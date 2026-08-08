@@ -69,6 +69,34 @@ class BookingController {
   }
 
   /**
+   * 📍 NOTIFY SPOTTER: the driver is approaching the booked spot.
+   * Called by the finder app once when it gets within range during navigation.
+   */
+  static async notifyNearby(req, res) {
+    try {
+      const bookingId = parseInt(req.params.id);
+      const { distance_km } = req.body || {};
+      const booking = await Booking.findById(bookingId);
+      if (!booking) {
+        return res.status(404).json({ success: false, message: 'Booking not found' });
+      }
+      // Only the finder who owns the booking may trigger this.
+      if (booking.user_id !== req.user.id) {
+        return res.status(403).json({ success: false, message: 'Not your booking' });
+      }
+      const spot = await ParkingSpot.findById(booking.spot_id);
+      if (spot && spot.spotter_id) {
+        booking.finder_name = req.user.name || 'A driver';
+        await NotificationService.notifyFinderNearby(spot.spotter_id, booking, Number(distance_km) || 0);
+      }
+      res.json({ success: true });
+    } catch (error) {
+      logger.error('notifyNearby error:', error);
+      res.status(500).json({ success: false, message: 'Failed to send nearby alert' });
+    }
+  }
+
+  /**
    * VERIFY OTP (Spotter Only)
    */
   static async verifyOTP(req, res) {

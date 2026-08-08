@@ -221,6 +221,13 @@ export default function FinderDashboard() {
   const lastFixQuality = useRef<{ acc: number; t: number } | null>(null);
   // Consecutive in-geofence GPS fixes required before declaring arrival.
   const arrivalHits = useRef(0);
+
+  // Alert the spotter once per booking when the driver gets close to the spot.
+  const bookingIdRef = useRef<number | null>(null);
+  const notifiedNearbyRef = useRef<number | null>(null);
+  useEffect(() => {
+    bookingIdRef.current = (bookingDetails as any)?.id ?? null;
+  }, [bookingDetails]);
   const [extendModalOpen, setExtendModalOpen] = useState(false);
   // Extension duration in MINUTES. Presets cover quick top-ups (5/10/20/30 min)
   // and hour blocks (60/120/180); customExtendText holds a manual entry.
@@ -526,6 +533,14 @@ export default function FinderDashboard() {
 
             // Calculate remaining distance along actual route
             const straightKm = getDistanceKm(coords.lat, coords.lng, spot.lat, spot.lng);
+
+            // When the driver gets within ~300m, alert the spotter once so they
+            // can prepare for arrival. Fires a single time per booking.
+            if (straightKm < 0.3 && bookingIdRef.current && notifiedNearbyRef.current !== bookingIdRef.current) {
+              notifiedNearbyRef.current = bookingIdRef.current;
+              apiClient.post(`/bookings/${bookingIdRef.current}/notify-nearby`, { distance_km: Number(straightKm.toFixed(2)) }).catch(() => {});
+            }
+
             const currentRoute = routeCoords;
             let remainingKm = straightKm * 1.3; // fallback
             let closestIdx = 0;

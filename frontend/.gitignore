@@ -47,3 +47,4 @@ app-example
 # Firebase service credentials
 google-services.json
 GoogleService-Info.plist
+debug.keystore.bak
