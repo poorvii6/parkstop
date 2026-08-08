@@ -15,7 +15,7 @@
  *      be our server, so it says "can't reach ParkStop".
  *   4. When a request finally succeeds again, we emit ONLINE so the banner hides.
  */
-import { DeviceEventEmitter } from 'react-native';
+import { DeviceEventEmitter, NativeModules } from 'react-native';
 
 export const OFFLINE_EVENT = 'network-offline';
 export const ONLINE_EVENT = 'network-online';
@@ -107,20 +107,25 @@ let monitorStarted = false;
 export function initConnectivityMonitor(): void {
   if (monitorStarted) return;
   monitorStarted = true;
-  let NetInfo: any;
   try {
-    NetInfo = require('@react-native-community/netinfo').default;
+    // Only use NetInfo if its NATIVE module is actually linked in this build.
+    // If it isn't (e.g. the app wasn't rebuilt after adding it), requiring the
+    // package throws "RNCNetInfo is null" — so we check first and, when absent,
+    // silently fall back to the request-failure-based detection (no native
+    // module needed). This keeps the app crash-free with or without NetInfo.
+    if (!(NativeModules as any)?.RNCNetInfo) return;
+    const NetInfo = require('@react-native-community/netinfo').default;
+    if (!NetInfo?.addEventListener) return;
+    NetInfo.addEventListener((state: any) => {
+      if (state?.isConnected === false) {
+        forceOffline(); // device is genuinely offline — show now, no grace
+      } else if (state?.isConnected === true) {
+        reportNetworkSuccess(); // back online — hide banner + trigger refetch
+      }
+    });
   } catch {
-    return; // not installed — request-based detection still works
+    // NetInfo unavailable — request-based detection still works.
   }
-  if (!NetInfo?.addEventListener) return;
-  NetInfo.addEventListener((state: any) => {
-    if (state?.isConnected === false) {
-      forceOffline(); // device is genuinely offline — show now, no grace
-    } else if (state?.isConnected === true) {
-      reportNetworkSuccess(); // back online — hide banner + trigger refetch
-    }
-  });
 }
 
 /** Back-compat alias for any existing callers. */
