@@ -414,6 +414,16 @@ const MapLibreView = React.forwardRef((props: MapProps, ref: any) => {
   const [mapReady, setMapReady] = useState(false);
   const bearRef = useRef(0);
 
+  // While a route-fit is playing, the follow camera must stand down.
+  //
+  // Releasing follow mode goes child -> onMapInteraction -> finder state ->
+  // prop back down, which takes a render or two. GPS ticks arrive every ~1s and
+  // the follow effect re-centres on the user at zoom 16, so a tick landing
+  // inside that gap snaps the camera off the fitted route and zooms back in.
+  // A local ref applies instantly and closes the race. An explicit recenter
+  // tap clears it — the user's intent outranks the fit.
+  const suppressFollowUntil = useRef(0);
+
   // Animated position for smooth 60fps marker movement (#15)
   const animLng = useRef(new RNAnimated.Value(userLocation?.lng || 0)).current;
   const animLat = useRef(new RNAnimated.Value(userLocation?.lat || 0)).current;
@@ -453,14 +463,40 @@ const MapLibreView = React.forwardRef((props: MapProps, ref: any) => {
     setDisplayPos(targetPos);
   }, [userLocation, isActiveNavigation, routeCoords]);
 
-  // While a route-fit is playing, the follow camera must stand down.
-  //
-  // Releasing follow mode goes child -> onMapInteraction -> finder state ->
-  // prop back down, which takes a render or two. GPS ticks arrive every ~1s and
-  // the follow effect below re-centres on the user at zoom 16, so a tick
-  // landing inside that gap snaps the camera off the fitted route and zooms
-  // back in. A local ref applies instantly and closes the race.
-  const suppressFollowUntil = useRef(0);
+  /**
+   * Recenter — moves the camera IMMEDIATELY, then restores follow mode.
+   *
+   * This used to be `onPress={onRecenter}`, which only asked the finder to set
+   * isFollowing=true and then waited for that to travel back down as a prop
+   * before the follow effect moved anything. That round-trip is why the button
+   * felt sluggish and sometimes did nothing at all — and after a route fit my
+   * own suppressFollow guard blocked the effect entirely for 2.5s.
+   *
+   * Driving the camera here makes the tap feel instant, the way Google's
+   * recenter does, and the callback still restores follow mode afterwards.
+   */
+  const handleRecenter = useCallback(() => {
+    // Cancel any fit-bounds hold — an explicit tap outranks it.
+    suppressFollowUntil.current = 0;
+
+    const target = userLocation
+      ? [userLocation.lng, userLocation.lat] as [number, number]
+      : displayPos;
+
+    if (cameraRef.current && target) {
+      cameraRef.current.setCamera({
+        centerCoordinate: target,
+        // Keep the navigation framing while driving; otherwise return to a
+        // normal street-level view rather than whatever the user pinched to.
+        zoomLevel: isActiveNavigation ? 17.5 : 16,
+        pitch: isActiveNavigation ? 55 : 0,
+        heading: isActiveNavigation ? bearRef.current : 0,
+        animationDuration: 450,
+      });
+    }
+
+    onRecenter?.();
+  }, [userLocation, displayPos, isActiveNavigation, onRecenter]);
 
   // Camera follow
   useEffect(() => {
@@ -815,7 +851,7 @@ const MapLibreView = React.forwardRef((props: MapProps, ref: any) => {
           <TouchableOpacity style={styles.fab} onPress={() => setIsSatellite(s => !s)}>
             <Text style={styles.fabIcon}>{isSatellite ? '🗺️' : '🛰️'}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.fab, styles.recenterFab]} onPress={onRecenter}>
+          <TouchableOpacity style={[styles.fab, styles.recenterFab]} onPress={handleRecenter}>
             <Text style={styles.fabIcon}>🎯</Text>
           </TouchableOpacity>
           {isActiveNavigation && (
