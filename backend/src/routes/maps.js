@@ -599,7 +599,7 @@ router.get('/route', async (req, res) => {
         // Check route cache
         const cachedRoute = routeCache.get(routeCacheKey);
         if (cachedRoute) {
-            return res.json({ success: true, data: cachedRoute, cached: true });
+            return res.json({ success: true, data: cachedRoute, cached: true, provider: cachedRoute.provider || 'unknown' });
         }
 
         const apiKey = process.env.OLA_MAPS_API_KEY;
@@ -688,8 +688,13 @@ router.get('/route', async (req, res) => {
                     { hint: '', distance: 0, name: '', location: [startCoords.lng, startCoords.lat] },
                     { hint: '', distance: 0, name: '', location: [endCoords.lng, endCoords.lat] },
                 ] };
+                // Tag which service actually answered. Google is primary, but a
+                // missing key or a failed call falls through to Ola silently —
+                // which is how an entire test ride ran on Ola routes without
+                // anyone realising Google was never involved.
+                googleData.provider = 'google';
                 routeCache.set(routeCacheKey, googleData);
-                return res.json({ success: true, data: googleData });
+                return res.json({ success: true, data: googleData, provider: 'google' });
             } catch (gErr) {
                 console.error('[API ERROR] Google Routes failed, falling back to Ola/OSRM:', gErr.message);
             }
@@ -807,7 +812,14 @@ router.get('/route', async (req, res) => {
                     type,
                     modifier
                 },
-                name: streetName || instr,
+                // Deliberately NOT `streetName || instr`. When the regex above
+                // strips an instruction down to nothing — which happens for
+                // plain turns with no road name, e.g. "Turn left" — falling
+                // back to the raw instruction put the ACTION into the street
+                // field. The banner then rendered "Turn left" on both lines
+                // instead of "Turn left / 120 m". An empty name is correct
+                // here: the client shows the distance on its own.
+                name: streetName,
                 duration: stepDuration,
                 distance: stepDistance,
                 geometry: stepCoords.length > 0 ? { coordinates: stepCoords, type: 'LineString' } : null,
@@ -862,7 +874,8 @@ router.get('/route', async (req, res) => {
         };
 
         routeCache.set(routeCacheKey, osrmCompatibleData);
-        res.json({ success: true, data: osrmCompatibleData });
+        osrmCompatibleData.provider = 'ola';
+        res.json({ success: true, data: osrmCompatibleData, provider: 'ola' });
 
     } catch (error) {
         console.error('[API ERROR] Ola Maps Directions failed, falling back to OSRM:', error.message);
