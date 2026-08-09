@@ -482,26 +482,62 @@ const MapLibreView = React.forwardRef((props: MapProps, ref: any) => {
     });
   }, [displayPos, isFollowing, isActiveNavigation, heading, speed]);
 
-  // Fit bounds when route shown but not navigating
+  // Fit the camera to the WHOLE route when a destination is chosen — the
+  // Google Maps behaviour: pick a place, see the entire journey at once.
+  //
+  // This used to be gated on `!isFollowing`, which meant it almost never ran.
+  // Selecting a spot straight after opening the app leaves the camera in
+  // follow mode (tracking your location), so the fit was skipped and the route
+  // simply ran off the top of the screen with the destination out of view.
+  // Choosing a destination is an explicit intent to look at the journey, so it
+  // now overrides follow mode rather than being suppressed by it.
+  //
+  // Keyed on the DESTINATION, not on routeCoords: the route array is replaced
+  // on every reroute and every progress trim, and re-fitting on each of those
+  // would yank the camera around while the user is reading the sheet.
+  const destFitKey = destination
+    ? `${destination.lat.toFixed(5)},${destination.lng.toFixed(5)}`
+    : searchedPlace
+      ? `${searchedPlace.lat.toFixed(5)},${searchedPlace.lng.toFixed(5)}`
+      : '';
+  const lastFittedDest = useRef('');
+
   useEffect(() => {
-    if (!cameraRef.current || isActiveNavigation || routeCoords.length < 2) return;
-    if (!isFollowing && (searchedPlace || destination)) {
-      const coords = routeCoords.map(c => [c.longitude, c.latitude] as [number, number]);
-      let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
-      coords.forEach(p => {
-        if (p[0] < minLng) minLng = p[0];
-        if (p[0] > maxLng) maxLng = p[0];
-        if (p[1] < minLat) minLat = p[1];
-        if (p[1] > maxLat) maxLat = p[1];
-      });
-      if (minLng !== Infinity) {
-        cameraRef.current.fitBounds(
-          [maxLng, maxLat], [minLng, minLat],
-          [80, 220, 50, 50], 1000
-        );
-      }
+    if (!cameraRef.current || isActiveNavigation) return;
+    if (!destFitKey || routeCoords.length < 2) return;
+    if (lastFittedDest.current === destFitKey) return;
+
+    lastFittedDest.current = destFitKey;
+
+    let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
+    for (const c of routeCoords) {
+      if (c.longitude < minLng) minLng = c.longitude;
+      if (c.longitude > maxLng) maxLng = c.longitude;
+      if (c.latitude < minLat) minLat = c.latitude;
+      if (c.latitude > maxLat) maxLat = c.latitude;
     }
-  }, [routeCoords, isActiveNavigation, searchedPlace, destination]);
+    if (minLng === Infinity) return;
+
+    // Bottom padding must clear the booking sheet, otherwise the route is
+    // "fitted" into a viewport that is half-covered and the destination ends
+    // up hidden behind it. controlsBottomOffset already tracks the sheet
+    // height (470 while booking, 260 otherwise).
+    const sheet = props.controlsBottomOffset ?? 260;
+    cameraRef.current.fitBounds(
+      [maxLng, maxLat], [minLng, minLat],
+      [90, 60, sheet + 60, 60], // [top, right, bottom, left]
+      900
+    );
+
+    // Release follow mode so the camera stays on the fitted view instead of
+    // being pulled back to the user on the next GPS tick.
+    props.onMapInteraction?.();
+  }, [destFitKey, routeCoords, isActiveNavigation, props.controlsBottomOffset]);
+
+  // Allow a re-fit if the user clears the destination and picks another.
+  useEffect(() => {
+    if (!destFitKey) lastFittedDest.current = '';
+  }, [destFitKey]);
 
   // Style URL
   const styleUrl = useMemo(() => {
