@@ -575,7 +575,15 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
   // Same behaviour as the MapLibre map: while navigating with traffic data,
   // the plain route dims and per-step congestion segments draw on top
   // (green/amber/orange/red by measured speed).
-  const trafficSegs = props.trafficSegments || [];
+  // Only genuinely slow stretches get tinted. Previously EVERY segment was
+  // recoloured, and since city traffic classifies as moderate/heavy the whole
+  // route rendered orange instead of the blue drivers expect. Google keeps the
+  // route blue and highlights only the parts that are actually bad — which is
+  // what makes the highlight meaningful.
+  const allSegs = props.trafficSegments || [];
+  const trafficSegs = allSegs.filter(
+    (s: any) => s.congestion === 'heavy' || s.congestion === 'severe'
+  );
   const hasTraffic = !!props.isActiveNavigation && trafficSegs.length > 0;
   const trafficPolylines = useMemo(
     () =>
@@ -659,8 +667,13 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
             congestion overlay reads clearly — same as the MapLibre map. */}
         {rc.length >= 2 ? (
           <>
-            <Polyline coordinates={rc} strokeColor={hasTraffic ? 'rgba(13,71,161,0.15)' : '#0d47a1'} strokeWidth={12} zIndex={2} lineCap="round" lineJoin="round" />
-            <Polyline coordinates={rc} strokeColor={hasTraffic ? 'rgba(66,133,244,0.2)' : '#4285F4'} strokeWidth={7} zIndex={3} lineCap="round" lineJoin="round" />
+            {/* The route is ALWAYS solid blue. It used to fade to 15-20%
+                opacity whenever any traffic data existed, which left the
+                congestion overlay as the only visible line — that is why the
+                whole route looked orange rather than blue with a few slow
+                stretches marked. */}
+            <Polyline coordinates={rc} strokeColor="#0d47a1" strokeWidth={12} zIndex={2} lineCap="round" lineJoin="round" />
+            <Polyline coordinates={rc} strokeColor="#4285F4" strokeWidth={7} zIndex={3} lineCap="round" lineJoin="round" />
           </>
         ) : null}
 

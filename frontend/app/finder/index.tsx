@@ -999,12 +999,19 @@ export default function FinderDashboard() {
               const segments: Array<{ coords: Array<[number, number]>; congestion: 'low' | 'moderate' | 'heavy' | 'severe' }> = [];
               for (const s of steps) {
                 if (s.geometry?.coordinates && s.geometry.coordinates.length >= 2 && s.duration > 0) {
-                  // Speed in km/h for this segment
+                  // Speed in km/h for this segment.
+                  //
+                  // Thresholds tuned for INDIAN CITY driving. The previous set
+                  // (<10 severe, <25 heavy, <45 moderate) was highway logic:
+                  // ordinary town traffic runs 20-40 km/h, so nearly every
+                  // segment was flagged congested and the route rendered
+                  // orange end to end. Congestion should mean "slower than
+                  // this road normally moves", not "slower than a motorway".
                   const segSpeedKmh = (s.distance / s.duration) * 3.6;
                   let congestion: 'low' | 'moderate' | 'heavy' | 'severe' = 'low';
-                  if (segSpeedKmh < 10) congestion = 'severe';
-                  else if (segSpeedKmh < 25) congestion = 'heavy';
-                  else if (segSpeedKmh < 45) congestion = 'moderate';
+                  if (segSpeedKmh < 7) congestion = 'severe';        // crawling
+                  else if (segSpeedKmh < 15) congestion = 'heavy';   // stop-start
+                  else if (segSpeedKmh < 25) congestion = 'moderate';
                   segments.push({ coords: s.geometry.coordinates, congestion });
                 }
               }
@@ -2668,6 +2675,16 @@ export default function FinderDashboard() {
               lastRerouteTime.current = now;
               const dest = selectedSpotId ? spots.find(s => s.id === selectedSpotId) : null;
               if (!dest) return;
+
+              // Claim the shared route-fetch state so the MAIN route effect
+              // stands down. Both paths hit /maps/route independently, and the
+              // server logs showed them firing a second apart from slightly
+              // different origins — two routes racing, each overwriting the
+              // other's geometry. That is what made the arrow jump around and
+              // the line redraw mid-turn.
+              lastRouteFetch.current = now;
+              lastRouteFetchPos.current = { lat, lng };
+
               console.log(`[NAV] Off-route detected at ${lat},${lng} — rerouting...`);
               if (!isMuted) Speech.speak(navLanguage === 'hi-IN' ? 'Naya raasta dhundh rahe hain' : 'Rerouting', { rate: 1.1, pitch: 1.0, language: navLanguage });
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
