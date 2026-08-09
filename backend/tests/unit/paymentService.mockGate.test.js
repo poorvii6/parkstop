@@ -13,9 +13,14 @@
  */
 
 jest.mock('../../src/config/prisma', () => ({
-  bookings: { findUnique: jest.fn(), update: jest.fn() },
+  bookings: { findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
   users: { update: jest.fn() },
+  payment_methods: { create: jest.fn(), findFirst: jest.fn(), updateMany: jest.fn() },
   $transaction: jest.fn(),
+}));
+// The success path settles the booking, which queues a spotter payout.
+jest.mock('../../src/services/payments/PayoutService', () => ({
+  processBookingPayout: jest.fn().mockResolvedValue(null),
 }));
 jest.mock('../../src/services/payments/RazorpayAdapter', () => ({
   verifyPaymentSignature: jest.fn(() => false), // a real signature check would fail here
@@ -63,6 +68,10 @@ beforeEach(() => {
   jest.clearAllMocks();
   prisma.bookings.findUnique.mockResolvedValue(BOOKING);
   prisma.bookings.update.mockResolvedValue({ ...BOOKING, payment_status: 'paid' });
+  // _finalizeClaimedBooking claims the booking atomically via a conditional
+  // updateMany; count > 0 means this caller won the claim and should settle.
+  prisma.bookings.updateMany.mockResolvedValue({ count: 1 });
+  prisma.users.update.mockResolvedValue({});
   prisma.$transaction.mockImplementation(async (fn) =>
     typeof fn === 'function' ? fn(prisma) : Promise.all(fn)
   );
