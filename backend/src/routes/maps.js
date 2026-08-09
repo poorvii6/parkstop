@@ -618,7 +618,20 @@ router.get('/route', async (req, res) => {
                     origin: { location: { latLng: { latitude: startCoords.lat, longitude: startCoords.lng } } },
                     destination: { location: { latLng: { latitude: endCoords.lat, longitude: endCoords.lng } } },
                     travelMode: 'DRIVE',
-                    routingPreference: 'TRAFFIC_AWARE',
+                    // TRAFFIC_AWARE_OPTIMAL, not TRAFFIC_AWARE.
+                    //
+                    // TRAFFIC_AWARE is a fast approximation: it applies traffic
+                    // to a route chosen with limited optimisation, which is why
+                    // our line zigzagged through residential lanes while the
+                    // Google Maps app returned a clean main-road route for the
+                    // same trip in the same time. _OPTIMAL runs the full
+                    // traffic-aware optimisation the Maps app itself uses, so
+                    // road class and turn cost are weighed properly.
+                    //
+                    // Costs more latency (a few hundred ms) and bills at a
+                    // higher tier. Worth it: this is the difference between
+                    // sending a rider down a back lane and down the main road.
+                    routingPreference: 'TRAFFIC_AWARE_OPTIMAL',
                     computeAlternativeRoutes: alternativesVal,
                     polylineEncoding: 'ENCODED_POLYLINE',
                     languageCode: 'en-IN',
