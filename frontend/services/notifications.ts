@@ -57,6 +57,24 @@ export function getCurrentPushToken(): string | null {
 /** Save a device token against the current user (all devices are kept). */
 async function sendTokenToBackend(token: string): Promise<void> {
   currentPushToken = token;
+
+  // Don't post the token before there is a signed-in Firebase user. This call
+  // races the login handshake: it fires the moment Expo hands us a token,
+  // which can be before /auth/social-login has created the user's row. The
+  // request then 401s for a reason that has nothing to do with an expired
+  // session. Retrying later is free — the token is cached above, and the
+  // AppState/token listeners re-register on the next foreground.
+  try {
+    const { auth } = require('./firebase');
+    if (!auth?.currentUser) {
+      console.log('[Push] No signed-in user yet — deferring token registration.');
+      return;
+    }
+  } catch {
+    // If the auth module isn't ready, defer rather than guess.
+    return;
+  }
+
   try {
     await apiClient.post('/auth/push-token', { push_token: token, platform: Platform.OS });
     console.log('[Push] Token registered with backend.');
