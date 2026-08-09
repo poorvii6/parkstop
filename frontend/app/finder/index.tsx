@@ -186,6 +186,9 @@ export default function FinderDashboard() {
   const lastRouteFetch = useRef(0);
   const lastRouteDest = useRef<string | null>(null);
   const lastRouteFetchPos = useRef<{ lat: number; lng: number } | null>(null);
+  // Backoff after a failed route fetch, so retrying cannot become a 1/sec
+  // hammer while the server is unhappy.
+  const routeRetryAfter = useRef(0);
   const lastUpdateCoords = useRef({ lat: 0, lng: 0 });
   const lastRerouteTime = useRef(0);
   const lastVoiceInstruction = useRef('');
@@ -951,7 +954,7 @@ export default function FinderDashboard() {
       movedEnough = Math.sqrt(dLat * dLat + dLng * dLng) > 30; // meters
     }
 
-    if (destination && userLocation && (isActiveNav || isNewDest) && (now - lastRouteFetch.current > 4000 || isNewDest) && movedEnough) {
+    if (destination && userLocation && (isActiveNav || isNewDest) && (now - lastRouteFetch.current > 4000 || isNewDest) && movedEnough && now >= routeRetryAfter.current) {
       lastRouteFetch.current = now;
       lastRouteDest.current = destId;
       lastRouteFetchPos.current = { lat: userLocation.lat, lng: userLocation.lng };
@@ -971,7 +974,12 @@ export default function FinderDashboard() {
             // Shortest sensible route, not merely the fastest — see
             // utils/routeSelection.ts for why those differ.
             const route = pickBestRoute(routes);
-            if (!route) return;
+            if (!route) {
+              // The server answered but gave nothing usable. Treat it as a
+              // failure so the destination is un-marked and we try again,
+              // rather than silently leaving the map with no route forever.
+              throw new Error('no usable route in response');
+            }
             console.log(`[API] Route found! ${route.geometry.coordinates.length} points. ${routes.length} alternatives. Best: ${(route.distance / 1000).toFixed(1)}km/${Math.ceil(route.duration / 60)}min`);
             setRouteCoords(route.geometry.coordinates.map((p: any) => ({ latitude: p[1], longitude: p[0] })));
             setDistanceInfo({ km: (route.distance / 1000).toFixed(1), mins: Math.ceil(route.duration / 60).toString() });
@@ -1013,12 +1021,28 @@ export default function FinderDashboard() {
             }
           }
         } catch (e) {
-          console.log("Route fetch throttled/failed");
+          // Un-mark the destination so the effect will try again.
+          //
+          // Previously this only logged. Because `lastRouteDest` was set
+          // BEFORE the request, a single failed fetch (429, timeout, slow
+          // response, or a response with no usable route) left the spot
+          // permanently marked as "already routed" — so no route was ever
+          // drawn for it and nothing retried. That is the "sometimes there is
+          // no route" behaviour.
+          console.log('[Route] fetch failed — will retry', e);
+          lastRouteDest.current = null;
+          routeRetryAfter.current = Date.now() + 4000; // bounded backoff
         }
       })();
     } else if (!destination) {
       setRouteCoords([]);
       setAltRoutes([]);
+      // Forget which destination we routed to. Without this, cancelling a spot
+      // and then re-selecting the SAME spot left isNewDest false, so no fetch
+      // ran and the map sat there with no route — another source of the
+      // "sometimes there's no route" behaviour.
+      lastRouteDest.current = null;
+      routeRetryAfter.current = 0;
     }
   }, [selectedSpotId, userLocation, spots, step]);
 

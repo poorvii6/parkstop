@@ -453,9 +453,19 @@ const MapLibreView = React.forwardRef((props: MapProps, ref: any) => {
     setDisplayPos(targetPos);
   }, [userLocation, isActiveNavigation, routeCoords]);
 
+  // While a route-fit is playing, the follow camera must stand down.
+  //
+  // Releasing follow mode goes child -> onMapInteraction -> finder state ->
+  // prop back down, which takes a render or two. GPS ticks arrive every ~1s and
+  // the follow effect below re-centres on the user at zoom 16, so a tick
+  // landing inside that gap snaps the camera off the fitted route and zooms
+  // back in. A local ref applies instantly and closes the race.
+  const suppressFollowUntil = useRef(0);
+
   // Camera follow
   useEffect(() => {
     if (!cameraRef.current || !isFollowing || !userLocation) return;
+    if (Date.now() < suppressFollowUntil.current) return;
 
     bearRef.current = isActiveNavigation
       ? lerpAngle(bearRef.current, heading, 0.18)
@@ -508,6 +518,9 @@ const MapLibreView = React.forwardRef((props: MapProps, ref: any) => {
     if (lastFittedDest.current === destFitKey) return;
 
     lastFittedDest.current = destFitKey;
+    // Hold the follow camera off for the animation plus a margin, so it cannot
+    // fight the fit while the release propagates back through props.
+    suppressFollowUntil.current = Date.now() + 2500;
 
     let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
     for (const c of routeCoords) {
