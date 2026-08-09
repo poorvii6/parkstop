@@ -97,6 +97,22 @@ export function forceOffline(message: string = DEFAULT_MSG): void {
   DeviceEventEmitter.emit(OFFLINE_EVENT, message);
 }
 
+/**
+ * Best-known device connectivity, kept live by the NetInfo monitor below.
+ *
+ * `null` means "not determined yet" — NetInfo hasn't reported, or its native
+ * module isn't linked in this build. Callers must treat null as ONLINE and
+ * proceed: blocking on an unknown state would lock out every user on a build
+ * without NetInfo, which is far worse than occasionally letting someone
+ * through who then gets a normal request failure.
+ */
+let deviceOnline: boolean | null = null;
+
+/** True only when we positively know the device has no connection. */
+export function isDefinitelyOffline(): boolean {
+  return deviceOnline === false;
+}
+
 let monitorStarted = false;
 /**
  * Start listening to the OS connectivity state via @react-native-community/netinfo
@@ -118,8 +134,10 @@ export function initConnectivityMonitor(): void {
     if (!NetInfo?.addEventListener) return;
     NetInfo.addEventListener((state: any) => {
       if (state?.isConnected === false) {
+        deviceOnline = false;
         forceOffline(); // device is genuinely offline — show now, no grace
       } else if (state?.isConnected === true) {
+        deviceOnline = true;
         reportNetworkSuccess(); // back online — hide banner + trigger refetch
       }
     });

@@ -1,9 +1,10 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Platform, Dimensions, Image } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Platform, Dimensions, Image, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import apiClient from '../api/client';
+import { isDefinitelyOffline } from '../utils/networkStatus';
 import { BlueprintTheme, BlueprintColors } from '../constants/BlueprintTheme';
 
 export default function RoleSelectionScreen() {
@@ -18,6 +19,24 @@ export default function RoleSelectionScreen() {
 
   const handleContinue = async () => {
     if (!activeRole) return;
+
+    // Stop here when the device is offline. Both dashboards are useless without
+    // the network — the finder can't fetch spots, place a booking or route, and
+    // the spotter can't load earnings or verify anyone. Letting the tap through
+    // produced a dashboard full of empty state that looked broken rather than
+    // disconnected. Better to say so plainly and let them retry.
+    if (isDefinitelyOffline()) {
+      Alert.alert(
+        'No internet connection',
+        'ParkStop needs a connection to load parking spots and bookings. Check your connection and try again.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Try again', onPress: () => handleContinue() },
+        ]
+      );
+      return;
+    }
+
     setLoading(true);
     const r = activeRole.toUpperCase();
     try {
