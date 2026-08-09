@@ -240,6 +240,10 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
   // the imperative handle below can set it.
   const didInitialPosition = useRef(false);
 
+  // Holds the follow camera off while a deliberate move (recenter) animates,
+  // so the two never run at once.
+  const suppressFollowUntil = useRef(0);
+
   // ── Imperative ref: the finder drives the whole map through animateCamera ──
   useImperativeHandle(ref, () => ({
     animateCamera: (cfg: any, opts?: any) => {
@@ -334,6 +338,11 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
   useEffect(() => {
     if (!props.isFollowing || !props.userLocation || !mapRef.current) return;
     if (Date.now() - lastInteraction.current < 2000) return; // don't fight a fresh gesture
+    // Nor fight a recenter that is still animating. handleRecenter flips
+    // isFollowing back on, which re-runs this effect immediately — without the
+    // hold that started a second animation on top of the first, which is the
+    // stutter the recenter button had.
+    if (Date.now() < suppressFollowUntil.current) return;
     markProgrammatic(FOLLOW_EASE_MS + 200);
     const center = { latitude: props.userLocation.lat, longitude: props.userLocation.lng };
     if (props.isActiveNavigation) {
@@ -449,6 +458,7 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
         : (currentZoom.current || USER_MAP_ZOOM);
 
       markProgrammatic(RECENTER_MS + 200);
+      suppressFollowUntil.current = Date.now() + RECENTER_MS + 100;
       mapRef.current.animateCamera(
         {
           center: { latitude: u.lat, longitude: u.lng },
