@@ -30,6 +30,15 @@ const FOLLOW_EASE_MS = 1000;
  * ease is for continuous tracking, where smoothness matters more than speed.
  */
 const RECENTER_MS = 350;
+
+/**
+ * Idle time after the last gesture before the camera resumes following.
+ *
+ * Without this, a single touch — including one misread from a bump while
+ * riding — turned following off permanently, so the blue dot kept moving while
+ * the map sat still. Google resumes after a few seconds; so do we.
+ */
+const AUTO_RESUME_FOLLOW_MS = 6000;
 const GESTURE_PRESS_GUARD_MS = 350;
 const OFF_ROUTE_BASE_M = 50;
 const OFF_ROUTE_CONFIRMATIONS = 2;
@@ -334,6 +343,31 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
     return () => { clearInterval(iv); clearTimeout(stop); };
   }, [trySnapToUser]);
 
+  // ── Auto-resume following after the user stops interacting ────
+  //
+  // A gesture releases follow so the camera doesn't fight the user's fingers.
+  // But nothing ever restored it, so the map stayed frozen while the dot moved
+  // on — the "I'm riding and the map won't track me" problem. Once they've
+  // stopped touching the screen, resume.
+  //
+  // Skipped while a destination is being previewed but not yet driven: there
+  // the user is deliberately looking at the whole route, and yanking the camera
+  // back to them after six seconds would be worse than leaving it.
+  useEffect(() => {
+    if (props.isFollowing) return;
+    const previewingRoute = !props.isActiveNavigation && (props.destination || props.searchedPlace);
+    if (previewingRoute) return;
+
+    const iv = setInterval(() => {
+      if (propsRef.current.isFollowing) return;
+      if (Date.now() - lastInteraction.current < AUTO_RESUME_FOLLOW_MS) return;
+      // onRecenter just flips isFollowing back on in the finder; the follow
+      // effect below then takes over smoothly from wherever the camera is.
+      propsRef.current.onRecenter?.();
+    }, 1000);
+    return () => clearInterval(iv);
+  }, [props.isFollowing, props.isActiveNavigation, props.destination, props.searchedPlace]);
+
   // ── Camera follow ─────────────────────────────────────────────
   useEffect(() => {
     if (!props.isFollowing || !props.userLocation || !mapRef.current) return;
@@ -445,17 +479,17 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
     lastInteraction.current = 0;
     const u = props.userLocation;
     if (u && mapRef.current) {
-      // Zoom MUST match what the follow effect will use. Recenter previously
-      // animated to a hardcoded 15 while follow animated to currentZoom — so
-      // one tap produced two animations to different zoom levels, 800ms then
-      // another 1000ms. That fighting pair is what felt slow and "stuck".
-      // Matching them makes the follow pass a visual no-op.
-      //
-      // Keeping the user's current zoom is also what Google does: recenter
-      // moves you, it doesn't decide how far in you should be looking.
-      const targetZoom = props.isActiveNavigation
-        ? 17.5
-        : (currentZoom.current || USER_MAP_ZOOM);
+      // Recenter restores the SAME framing the map opens with — the identical
+      // center/zoom/pitch/heading that trySnapToUser applies on the first fix.
+      // So however far the user has panned or pinched, one tap puts them back
+      // to the familiar "here I am" view rather than their location at some
+      // arbitrary zoom they'd wandered to.
+      const targetZoom = props.isActiveNavigation ? 17.5 : USER_MAP_ZOOM;
+
+      // Keep currentZoom in step, otherwise the follow effect (which animates
+      // to currentZoom) would immediately pull the camera back to the old zoom
+      // and undo the reset — the same two-animations-fighting bug as before.
+      currentZoom.current = targetZoom;
 
       markProgrammatic(RECENTER_MS + 200);
       suppressFollowUntil.current = Date.now() + RECENTER_MS + 100;

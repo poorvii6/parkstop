@@ -460,7 +460,16 @@ export default function FinderDashboard() {
   useEffect(() => {
     let locationSub: Location.LocationSubscription | null = null;
 
-    if (step === 'en_route' && selectedSpotId) {
+    // Run for EVERY navigating state, not just 'en_route'.
+    //
+    // This watcher is what feeds navigationData.heading — and the map rotates
+    // to that heading whenever isActiveNavigation is true, which the finder
+    // defines as en_route OR navigating OR arriving. Gating the watcher on
+    // en_route alone meant that in the other two states the heading froze at
+    // its last value, so the map stopped turning with the rider and sat
+    // north-up while they travelled south. Speed froze the same way, which
+    // also pinned the speed-adaptive zoom.
+    if (['en_route', 'navigating', 'arriving'].includes(step) && selectedSpotId) {
       const spot = spots.find(s => s.id === selectedSpotId);
       if (!spot) return;
 
