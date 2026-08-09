@@ -23,6 +23,13 @@ import * as Location from 'expo-location';
 import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM, USER_MAP_ZOOM, HINT_MAP_ZOOM } from '../constants/mapDefaults';
 
 const FOLLOW_EASE_MS = 1000;
+
+/**
+ * Recenter animation length. Deliberately short — a recenter is a direct
+ * response to a tap, so it should feel immediate. The follow camera's longer
+ * ease is for continuous tracking, where smoothness matters more than speed.
+ */
+const RECENTER_MS = 350;
 const GESTURE_PRESS_GUARD_MS = 350;
 const OFF_ROUTE_BASE_M = 50;
 const OFF_ROUTE_CONFIRMATIONS = 2;
@@ -228,11 +235,25 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
     return () => clearInterval(iv);
   }, []);
 
+  // Latched once the camera has been positioned deliberately — either by the
+  // open-on-first-fix snap or by an explicit app-driven move. Declared here so
+  // the imperative handle below can set it.
+  const didInitialPosition = useRef(false);
+
   // ── Imperative ref: the finder drives the whole map through animateCamera ──
   useImperativeHandle(ref, () => ({
     animateCamera: (cfg: any, opts?: any) => {
       const c = cfg?.center;
       if (!c || !mapRef.current) return;
+
+      // An explicit camera move from the app (search result, spot selection)
+      // supersedes the open-on-first-fix snap. Without this latch, the retry
+      // loop behind trySnapToUser would fire a moment later and yank the camera
+      // back to the user — which is why the FIRST search never appeared to move
+      // the map while every search after it worked (by then the latch was
+      // already set for other reasons).
+      didInitialPosition.current = true;
+
       markProgrammatic(opts?.duration ?? 1000);
       mapRef.current.animateCamera(
         {
@@ -250,7 +271,6 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
   // initialCamera handles a cold start with a known location. But when the fix
   // arrives AFTER mount, snap once to it — unless the screen already has a
   // destination/searched place to frame.
-  const didInitialPosition = useRef(false);
   // mapReady is STATE (not a ref) so the positioning effect below actually
   // re-runs when the map becomes ready — a ref change never re-triggers it,
   // which is why the camera kept getting stuck on the country-wide view.
@@ -416,15 +436,27 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
     lastInteraction.current = 0;
     const u = props.userLocation;
     if (u && mapRef.current) {
-      markProgrammatic(800);
+      // Zoom MUST match what the follow effect will use. Recenter previously
+      // animated to a hardcoded 15 while follow animated to currentZoom — so
+      // one tap produced two animations to different zoom levels, 800ms then
+      // another 1000ms. That fighting pair is what felt slow and "stuck".
+      // Matching them makes the follow pass a visual no-op.
+      //
+      // Keeping the user's current zoom is also what Google does: recenter
+      // moves you, it doesn't decide how far in you should be looking.
+      const targetZoom = props.isActiveNavigation
+        ? 17.5
+        : (currentZoom.current || USER_MAP_ZOOM);
+
+      markProgrammatic(RECENTER_MS + 200);
       mapRef.current.animateCamera(
         {
           center: { latitude: u.lat, longitude: u.lng },
-          zoom: props.isActiveNavigation ? 17.5 : 15,
+          zoom: targetZoom,
           pitch: props.isActiveNavigation ? 55 : 0,
           heading: props.isActiveNavigation ? props.heading || 0 : 0,
         },
-        { duration: 800 }
+        { duration: RECENTER_MS }
       );
     }
     props.onRecenter?.();
