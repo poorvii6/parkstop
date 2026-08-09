@@ -476,12 +476,18 @@ const MapLibreView = React.forwardRef((props: MapProps, ref: any) => {
    * recenter does, and the callback still restores follow mode afterwards.
    */
   const handleRecenter = useCallback(() => {
-    // Cancel any fit-bounds hold — an explicit tap outranks it.
-    suppressFollowUntil.current = 0;
-
-    const target = userLocation
-      ? [userLocation.lng, userLocation.lat] as [number, number]
-      : displayPos;
+    // Aim at displayPos — the SAME point the follow camera uses. Targeting
+    // userLocation instead meant the follow effect (which fires the moment
+    // isFollowing flips) immediately animated again to a slightly different
+    // place: two stacked animations, which is what made the button feel slow
+    // and imprecise. displayPos is route-snapped and updated on every GPS
+    // tick, so it is both current and consistent with follow.
+    const hasDisplay = Array.isArray(displayPos) && (displayPos[0] !== 0 || displayPos[1] !== 0);
+    const target: [number, number] | null = hasDisplay
+      ? displayPos
+      : userLocation
+        ? [userLocation.lng, userLocation.lat]
+        : null;
 
     if (cameraRef.current && target) {
       cameraRef.current.setCamera({
@@ -491,9 +497,15 @@ const MapLibreView = React.forwardRef((props: MapProps, ref: any) => {
         zoomLevel: isActiveNavigation ? 17.5 : 16,
         pitch: isActiveNavigation ? 55 : 0,
         heading: isActiveNavigation ? bearRef.current : 0,
-        animationDuration: 450,
+        animationDuration: 350,
       });
     }
+
+    // Hold the follow effect off just long enough for this animation to land,
+    // so it cannot start a competing one on top. It resumes on the next GPS
+    // tick (~1s), which is the behaviour we want anyway. This also overrides
+    // any longer fit-bounds hold — an explicit tap outranks it.
+    suppressFollowUntil.current = Date.now() + 400;
 
     onRecenter?.();
   }, [userLocation, displayPos, isActiveNavigation, onRecenter]);
