@@ -999,19 +999,23 @@ export default function FinderDashboard() {
               const segments: Array<{ coords: Array<[number, number]>; congestion: 'low' | 'moderate' | 'heavy' | 'severe' }> = [];
               for (const s of steps) {
                 if (s.geometry?.coordinates && s.geometry.coordinates.length >= 2 && s.duration > 0) {
-                  // Speed in km/h for this segment.
+                  // NOT REAL TRAFFIC — every segment is reported as free-flowing.
                   //
-                  // Thresholds tuned for INDIAN CITY driving. The previous set
-                  // (<10 severe, <25 heavy, <45 moderate) was highway logic:
-                  // ordinary town traffic runs 20-40 km/h, so nearly every
-                  // segment was flagged congested and the route rendered
-                  // orange end to end. Congestion should mean "slower than
-                  // this road normally moves", not "slower than a motorway".
-                  const segSpeedKmh = (s.distance / s.duration) * 3.6;
-                  let congestion: 'low' | 'moderate' | 'heavy' | 'severe' = 'low';
-                  if (segSpeedKmh < 7) congestion = 'severe';        // crawling
-                  else if (segSpeedKmh < 15) congestion = 'heavy';   // stop-start
-                  else if (segSpeedKmh < 25) congestion = 'moderate';
+                  // This used to derive congestion from step.distance /
+                  // step.duration, but the Google field mask requests
+                  // `staticDuration` — the time with NO traffic. So the figure
+                  // was free-flow speed being labelled as congestion. Short
+                  // manoeuvring steps (20m in 5s ~ 14 km/h) always scored as
+                  // heavy, which is why turns painted orange and, with the old
+                  // 45 km/h threshold, the entire route did.
+                  //
+                  // Inventing congestion is worse than showing none: it tells
+                  // the rider a clear road is jammed. Real traffic colouring
+                  // needs Google's travelAdvisory.speedReadingIntervals, which
+                  // classifies stretches as SLOW / TRAFFIC_JAM against normal
+                  // conditions. Until that is wired through, report free-flow
+                  // so the route renders as a clean blue line.
+                  const congestion: 'low' | 'moderate' | 'heavy' | 'severe' = 'low';
                   segments.push({ coords: s.geometry.coordinates, congestion });
                 }
               }
