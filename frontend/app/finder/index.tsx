@@ -44,6 +44,46 @@ const getSocketUrl = () => {
 
 const SOCKET_URL = getSocketUrl();
 
+/**
+ * Turn a routing step into a human action + icon.
+ *
+ * Module scope so BOTH the live navigation watcher and the reroute handler
+ * can use it — the reroute needs it to show the first turn of the new route
+ * immediately instead of leaving a "Calculating..." placeholder on screen.
+ */
+const parseManeuver = (s: any) => {
+  if (!s?.maneuver) return { action: 'Head straight', icon: '⬆️' };
+  const type = s.maneuver.type;
+  const modifier = s.maneuver.modifier || '';
+  const sName = s.name || '';
+  let action = 'Head straight';
+  let icon = '⬆️';
+  if (type === 'turn' || type === 'end of road' || type === 'fork') {
+    if (modifier.includes('sharp right')) { action = 'Sharp right'; icon = '↪️'; }
+    else if (modifier.includes('slight right')) { action = 'Bear right'; icon = '↗️'; }
+    else if (modifier.includes('right')) { action = 'Turn right'; icon = '➡️'; }
+    else if (modifier.includes('sharp left')) { action = 'Sharp left'; icon = '↩️'; }
+    else if (modifier.includes('slight left')) { action = 'Bear left'; icon = '↖️'; }
+    else if (modifier.includes('left')) { action = 'Turn left'; icon = '⬅️'; }
+    else if (modifier.includes('uturn')) { action = 'Make a U-turn'; icon = '↩️'; }
+    else { action = 'Continue'; icon = '⬆️'; }
+  } else if (type === 'roundabout' || type === 'rotary') {
+    action = 'Enter roundabout'; icon = '🔄';
+  } else if (type === 'merge') {
+    if (modifier.includes('left')) { action = 'Merge left'; icon = '↖️'; }
+    else if (modifier.includes('right')) { action = 'Merge right'; icon = '↗️'; }
+    else { action = 'Merge'; icon = '↗️'; }
+  } else if (type === 'depart') {
+    action = 'Head ' + (modifier || 'straight'); icon = '⬆️';
+  } else if (type === 'arrive') {
+    action = 'Arriving at destination'; icon = '📍';
+  } else if (type === 'new name' || type === 'continue') {
+    action = sName ? `Continue on ${sName}` : 'Continue straight';
+    icon = '⬆️';
+  }
+  return { action, icon };
+};
+
 export default function FinderDashboard() {
   const router = useRouter();
   const mapRef = useRef<any>(null);
@@ -597,7 +637,7 @@ export default function FinderDashboard() {
                     // Same selection rule as everywhere else — this used to
                     // take routes[0] blindly and could disagree with the route
                     // drawn by the main fetch.
-                    const rRoute = pickBestRoute(rRes.data.data.routes || []);
+                    const rRoute = pickBestRoute(rRes.data.data.routes || [], { trustProviderOrder: rRes.data.provider === 'google' });
                     if (rRoute?.legs?.[0]?.steps) {
                       routeStepsRef.current = rRoute.legs[0].steps;
                       // Update traffic segments
@@ -660,38 +700,6 @@ export default function FinderDashboard() {
             routeStepsRef.current = stepsArr;
 
             // Helper: parse a maneuver step into action + icon
-            const parseManeuver = (s: any) => {
-              if (!s?.maneuver) return { action: 'Head straight', icon: '⬆️' };
-              const type = s.maneuver.type;
-              const modifier = s.maneuver.modifier || '';
-              const sName = s.name || '';
-              let action = 'Head straight';
-              let icon = '⬆️';
-              if (type === 'turn' || type === 'end of road' || type === 'fork') {
-                if (modifier.includes('sharp right')) { action = 'Sharp right'; icon = '↪️'; }
-                else if (modifier.includes('slight right')) { action = 'Bear right'; icon = '↗️'; }
-                else if (modifier.includes('right')) { action = 'Turn right'; icon = '➡️'; }
-                else if (modifier.includes('sharp left')) { action = 'Sharp left'; icon = '↩️'; }
-                else if (modifier.includes('slight left')) { action = 'Bear left'; icon = '↖️'; }
-                else if (modifier.includes('left')) { action = 'Turn left'; icon = '⬅️'; }
-                else if (modifier.includes('uturn')) { action = 'Make a U-turn'; icon = '↩️'; }
-                else { action = 'Continue'; icon = '⬆️'; }
-              } else if (type === 'roundabout' || type === 'rotary') {
-                action = 'Enter roundabout'; icon = '🔄';
-              } else if (type === 'merge') {
-                if (modifier.includes('left')) { action = 'Merge left'; icon = '↖️'; }
-                else if (modifier.includes('right')) { action = 'Merge right'; icon = '↗️'; }
-                else { action = 'Merge'; icon = '↗️'; }
-              } else if (type === 'depart') {
-                action = 'Head ' + (modifier || 'straight'); icon = '⬆️';
-              } else if (type === 'arrive') {
-                action = 'Arriving at destination'; icon = '📍';
-              } else if (type === 'new name' || type === 'continue') {
-                action = sName ? `Continue on ${sName}` : 'Continue straight';
-                icon = '⬆️';
-              }
-              return { action, icon };
-            };
 
             // Find next meaningful turn (skip 'continue' / 'depart' / 'new name' steps)
             let displayStep = stepsArr[0];
@@ -982,7 +990,7 @@ export default function FinderDashboard() {
             const routes = res.data.data.routes || [];
             // Shortest sensible route, not merely the fastest — see
             // utils/routeSelection.ts for why those differ.
-            const route = pickBestRoute(routes);
+            const route = pickBestRoute(routes, { trustProviderOrder: res.data.provider === 'google' });
             if (!route) {
               // The server answered but gave nothing usable. Treat it as a
               // failure so the destination is un-marked and we try again,
@@ -1727,7 +1735,7 @@ export default function FinderDashboard() {
     try {
       const res = await apiClient.get(`/maps/route?start=${userLocation.lng},${userLocation.lat}&end=${searchedPlace.lng},${searchedPlace.lat}&alternatives=true`);
       if (res.data?.success) {
-        const route = pickBestRoute(res.data.data.routes || []);
+        const route = pickBestRoute(res.data.data.routes || [], { trustProviderOrder: res.data.provider === 'google' });
         if (route && route.geometry?.coordinates?.length) {
           setRouteCoords(route.geometry.coordinates.map((p: any) => ({ latitude: p[1], longitude: p[0] })));
           setDistanceInfo({ km: (route.distance / 1000).toFixed(1), mins: Math.ceil(route.duration / 60).toString() });
@@ -2699,15 +2707,35 @@ export default function FinderDashboard() {
                   // than whatever the provider happens to return first.
                   const res = await apiClient.get(`/maps/route?start=${lng},${lat}&end=${dest.lng},${dest.lat}&alternatives=true`);
                   if (res.data.success) {
-                    const route = pickBestRoute(res.data.data.routes || []);
+                    const route = pickBestRoute(res.data.data.routes || [], { trustProviderOrder: res.data.provider === 'google' });
                     if (route) {
                       setRouteCoords(route.geometry.coordinates.map((p: any) => ({ latitude: p[1], longitude: p[0] })));
                       setDistanceInfo({ km: (route.distance / 1000).toFixed(1), mins: Math.ceil(route.duration / 60).toString() });
                       if (route.legs?.[0]?.steps) routeStepsRef.current = route.legs[0].steps;
-                      // Clear the stale turn banner immediately — the next GPS
-                      // tick recomputes the correct instruction from the NEW
-                      // route instead of leaving "turn left 50m" from the old one.
-                      setCurrentInstruction({ turn: 'Route updated', street: '', icon: '🔄' });
+                      // Show the FIRST turn of the new route immediately rather
+                      // than a placeholder. The old code blanked the banner to
+                      // "Route updated" with an empty street, which the UI
+                      // renders as "Calculating..." — and if step-matching then
+                      // failed to produce anything, that placeholder stuck on
+                      // screen for the rest of the drive with no instruction.
+                      const firstStep = route.legs?.[0]?.steps?.[0];
+                      if (firstStep?.maneuver) {
+                        const { action, icon } = parseManeuver(firstStep);
+                        const d = firstStep.distance || 0;
+                        const distText = d < 50
+                          ? 'Now'
+                          : d < 1000
+                            ? `${Math.round(d / 10) * 10} m`
+                            : `${(d / 1000).toFixed(1)} km`;
+                        const nm = firstStep.name || '';
+                        setCurrentInstruction({
+                          turn: action,
+                          street: nm ? (distText === 'Now' ? nm : `${distText} · ${nm}`) : distText,
+                          icon,
+                        });
+                      } else {
+                        setCurrentInstruction({ turn: 'Route updated', street: '', icon: '🔄' });
+                      }
                       setNextTurnPreview({ turn: '', icon: '' });
                       setIsFollowing(true);
                       console.log(`[NAV] Rerouted! ${route.geometry.coordinates.length} points`);

@@ -16,13 +16,38 @@
  * additive and do not block the basemap swap.
  */
 import React, { forwardRef, useImperativeHandle, useRef, useMemo, useEffect, useState, useCallback } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity } from 'react-native';
+import { StyleSheet, View, Text, TouchableOpacity, Dimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM, USER_MAP_ZOOM, HINT_MAP_ZOOM } from '../constants/mapDefaults';
 
 const FOLLOW_EASE_MS = 1000;
+
+/**
+ * Camera ease WHILE NAVIGATING. Much shorter than the idle follow.
+ *
+ * GPS ticks arrive about once a second. Easing over a full second meant the
+ * camera was always finishing the *previous* fix as the next one landed — the
+ * view permanently trailed the rider, which is the latency that made
+ * navigation feel sluggish. A short ease lets the camera settle well before
+ * the next fix, so the map reads as being where you are.
+ */
+const NAV_FOLLOW_MS = 400;
+
+/**
+ * Navigation zoom. Google sits noticeably closer than a browsing view — you
+ * need to read the next junction, not the neighbourhood. 17.5 was wide enough
+ * that turns arrived with no time to react.
+ */
+const NAV_ZOOM = 18.5;
+const NAV_PITCH = 60;
+
+/**
+ * Top padding while navigating, as a share of screen height. Pushes the camera
+ * centre down so the rider sits low and the road ahead fills the view.
+ */
+const NAV_TOP_PADDING = Math.round(Dimensions.get('window').height * 0.38);
 
 /**
  * Recenter animation length. Deliberately short — a recenter is a direct
@@ -377,14 +402,15 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
     // hold that started a second animation on top of the first, which is the
     // stutter the recenter button had.
     if (Date.now() < suppressFollowUntil.current) return;
-    markProgrammatic(FOLLOW_EASE_MS + 200);
     const center = { latitude: props.userLocation.lat, longitude: props.userLocation.lng };
     if (props.isActiveNavigation) {
+      markProgrammatic(NAV_FOLLOW_MS + 200);
       mapRef.current.animateCamera(
-        { center, zoom: 17.5, pitch: 55, heading: props.heading || 0 },
-        { duration: FOLLOW_EASE_MS }
+        { center, zoom: NAV_ZOOM, pitch: NAV_PITCH, heading: props.heading || 0 },
+        { duration: NAV_FOLLOW_MS }
       );
     } else {
+      markProgrammatic(FOLLOW_EASE_MS + 200);
       // Recenter but keep zoom EXPLICIT — a partial camera resets zoom to a
       // default on Android, which read as the map "slowly zooming out".
       mapRef.current.animateCamera({ center, zoom: currentZoom.current || USER_MAP_ZOOM }, { duration: FOLLOW_EASE_MS });
@@ -647,7 +673,17 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
         onUserLocationChange={handleUserLocationChange}
         // Push Google's native controls (My Location button, compass) below the
         // search bar and above the bottom sheet, and lift the Google logo clear.
-        mapPadding={{ top: 100, right: 6, bottom: props.controlsBottomOffset ?? 210, left: 6 }}
+        /* While navigating, weight the padding to the TOP so the camera centre
+           sits low on screen — that is how Google frames it: you appear near
+           the bottom with the road ahead filling the view, rather than centred
+           with half the screen showing where you have already been. Outside
+           navigation the bottom sheet is what needs clearing, so the padding
+           flips back. */
+        mapPadding={
+          props.isActiveNavigation
+            ? { top: NAV_TOP_PADDING, right: 6, bottom: 80, left: 6 }
+            : { top: 100, right: 6, bottom: props.controlsBottomOffset ?? 210, left: 6 }
+        }
         // Authentic Google location dot + controls when idle; during navigation
         // we hide them and draw the directional arrow puck instead.
         showsUserLocation={!props.isActiveNavigation}
