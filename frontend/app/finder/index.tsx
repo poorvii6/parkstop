@@ -118,7 +118,13 @@ export default function FinderDashboard() {
   const [arrivalDetected, setArrivalDetected] = useState(false);
   const [simulatedLocation, setSimulatedLocation] = useState<{ lat: number, lng: number } | null>(null);
   const [routeCoords, setRouteCoords] = useState<{ latitude: number, longitude: number }[]>([]);
-  const [altRoutes, setAltRoutes] = useState<Array<{ coords: Array<{ latitude: number; longitude: number }>; duration: number; distance: number }>>([]);
+  const [altRoutes, setAltRoutes] = useState<Array<{ coords: Array<{ latitude: number; longitude: number }>; duration: number; distance: number; steps?: any[] }>>([]);
+
+  // Set when the rider taps an alternative route. While it holds, background
+  // refreshes must not replace their choice with the algorithm's preference.
+  // Cleared whenever we legitimately pick a new route: new destination, or a
+  // reroute after going off-route.
+  const userSelectedRoute = useRef(false);
   const [currentRouteIndex, setCurrentRouteIndex] = useState(0);
   const [distanceInfo, setDistanceInfo] = useState({ km: '0', mins: '0' });
   const [currentInstruction, setCurrentInstruction] = useState({ turn: '', street: '', icon: '' });
@@ -699,21 +705,37 @@ export default function FinderDashboard() {
                     const rRoute = pickBestRoute(rRes.data.data.routes || [], { trustProviderOrder: rRes.data.provider === 'google' });
                     if (rRoute?.legs?.[0]?.steps) {
                       routeStepsRef.current = rRoute.legs[0].steps;
-                      // Update traffic segments
-                      const segs: Array<{ coords: Array<[number, number]>; congestion: 'low' | 'moderate' | 'heavy' | 'severe' }> = [];
-                      for (const s of rRoute.legs[0].steps) {
-                        if (s.geometry?.coordinates && s.geometry.coordinates.length >= 2 && s.duration > 0) {
-                          const segSpd = (s.distance / s.duration) * 3.6;
-                          let cong: 'low' | 'moderate' | 'heavy' | 'severe' = 'low';
-                          if (segSpd < 10) cong = 'severe';
-                          else if (segSpd < 25) cong = 'heavy';
-                          else if (segSpd < 45) cong = 'moderate';
-                          segs.push({ coords: s.geometry.coordinates, congestion: cong });
-                        }
-                      }
-                      setTrafficSegments(segs);
+                      // Free-flow for every segment, exactly as the main fetch
+                      // reports it.
+                      //
+                      // This block used to derive congestion from
+                      // step.distance / step.duration and paint anything under
+                      // 25 km/h orange. But the field mask asks Google for
+                      // staticDuration — the time with NO traffic — so that
+                      // figure is free-flow speed, not congestion. Short steps
+                      // (junction slip roads, roundabout arms) always come out
+                      // slow, which is why orange blobs appeared at junctions
+                      // on a completely clear road. The main fetch was fixed
+                      // for this; this copy was missed, so the orange came
+                      // back 60 seconds into every trip.
+                      setTrafficSegments(
+                        rRoute.legs[0].steps
+                          .filter((s: any) => s.geometry?.coordinates?.length >= 2)
+                          .map((s: any) => ({
+                            coords: s.geometry.coordinates,
+                            congestion: 'low' as const,
+                          }))
+                      );
                     }
-                    if (rRoute) {
+                    // Never silently replace a route the rider chose.
+                    //
+                    // This refresh exists to keep the ETA honest, but it also
+                    // overwrote routeCoords with whatever pickBestRoute
+                    // returned. So after tapping an alternative, roughly a
+                    // minute later the map snapped back to the route they had
+                    // just rejected. Their choice stands until the destination
+                    // changes or they go off-route and we genuinely reroute.
+                    if (rRoute && !userSelectedRoute.current) {
                       setRouteCoords(rRoute.geometry.coordinates.map((p: any) => ({ latitude: p[1], longitude: p[0] })));
                     }
                   }
@@ -1034,6 +1056,9 @@ export default function FinderDashboard() {
       lastRouteFetch.current = now;
       lastRouteDest.current = destId;
       lastRouteFetchPos.current = { lat: userLocation.lat, lng: userLocation.lng };
+      // A new destination means the rider's earlier route choice was about a
+      // different journey; it must not carry over and block this one.
+      if (isNewDest) userSelectedRoute.current = false;
       (async () => {
         try {
           console.log(`[API] Fetching route from ${userLocation.lat},${userLocation.lng} to ${destination.lat},${destination.lng}`);
@@ -1057,6 +1082,20 @@ export default function FinderDashboard() {
               throw new Error('no usable route in response');
             }
             console.log(`[API] Route found! ${route.geometry.coordinates.length} points. ${routes.length} alternatives. Best: ${(route.distance / 1000).toFixed(1)}km/${Math.ceil(route.duration / 60)}min`);
+
+            // While navigating this effect refires every 30m of movement. If
+            // the rider picked an alternative, that refire would quietly put
+            // them back on the algorithm's route — the choice would survive
+            // maybe half a minute of riding. Leave everything alone.
+            //
+            // Note the ETA is deliberately NOT refreshed here either: `route`
+            // is the algorithm's pick, so its distance and duration describe a
+            // road the rider is not on. Showing that under their chosen route
+            // would be worse than showing a slightly stale figure. The live
+            // ETA comes from the navigation watcher, which measures against
+            // the route actually drawn.
+            if (userSelectedRoute.current) return;
+
             setRouteCoords(route.geometry.coordinates.map((p: any) => ({ latitude: p[1], longitude: p[0] })));
             setDistanceInfo({ km: (route.distance / 1000).toFixed(1), mins: Math.ceil(route.duration / 60).toString() });
             if (route.legs?.[0]?.steps) {
@@ -1102,6 +1141,11 @@ export default function FinderDashboard() {
                 coords: r.geometry.coordinates.map((p: any) => ({ latitude: p[1], longitude: p[0] })),
                 duration: r.duration,
                 distance: r.distance,
+                // Carry the turn list with each alternative. Without it,
+                // tapping an alternative drew the new line but left the turn
+                // card reading from the old route's steps — so the app
+                // confidently announced turns for a road you were no longer on.
+                steps: r.legs?.[0]?.steps,
               })));
             } else {
               setAltRoutes([]);
@@ -1791,6 +1835,9 @@ export default function FinderDashboard() {
       return;
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    // Directions to a searched place is a fresh journey — any route the rider
+    // chose for a previous trip is irrelevant and must not hold here.
+    userSelectedRoute.current = false;
     try {
       const res = await apiClient.get(`/maps/route?start=${userLocation.lng},${userLocation.lat}&end=${searchedPlace.lng},${searchedPlace.lat}&alternatives=true`);
       if (res.data?.success) {
@@ -2689,6 +2736,22 @@ export default function FinderDashboard() {
                 setRouteCoords(alt.coords);
                 setDistanceInfo({ km: (alt.distance / 1000).toFixed(1), mins: Math.ceil(alt.duration / 60).toString() });
                 setAltRoutes([]);
+
+                // Everything derived from the OLD route has to go with it.
+                // Previously only the line was swapped, so the discarded
+                // route's traffic overlay stayed painted on the map (the
+                // leftover marks) and its turn list kept driving the
+                // instruction card.
+                routeStepsRef.current = alt.steps || [];
+                setTrafficSegments(
+                  (alt.steps || [])
+                    .filter((s: any) => s.geometry?.coordinates?.length >= 2)
+                    .map((s: any) => ({ coords: s.geometry.coordinates, congestion: 'low' as const }))
+                );
+                setLaneGuidance([]);
+
+                // This is a deliberate choice, not a suggestion — hold it.
+                userSelectedRoute.current = true;
               }
             }}
             destination={(() => {
@@ -2738,6 +2801,11 @@ export default function FinderDashboard() {
               // the line redraw mid-turn.
               lastRouteFetch.current = now;
               lastRouteFetchPos.current = { lat, lng };
+
+              // The rider has left the route they picked, so that choice no
+              // longer applies — otherwise the hold would block the reroute
+              // and strand them on a line they are not driving.
+              userSelectedRoute.current = false;
 
               console.log(`[NAV] Off-route detected at ${lat},${lng} — rerouting...`);
               if (!isMuted) Speech.speak(navLanguage === 'hi-IN' ? 'Naya raasta dhundh rahe hain' : 'Rerouting', { rate: 1.1, pitch: 1.0, language: navLanguage });
