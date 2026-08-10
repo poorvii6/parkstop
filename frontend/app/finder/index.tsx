@@ -223,6 +223,9 @@ export default function FinderDashboard() {
   const [deviceHeading, setDeviceHeading] = useState(0);
   // Refs for GPS tracking logic
   const lastAnimatedHeading = useRef(0);
+  // Reference point for deriving heading from displacement when the GPS
+  // heading is unusable (slow speeds, where Android often omits it).
+  const lastHeadingPos = useRef<{ lat: number; lng: number } | null>(null);
   const lastRouteFetch = useRef(0);
   const lastRouteDest = useRef<string | null>(null);
   const lastRouteFetchPos = useRef<{ lat: number; lng: number } | null>(null);
@@ -565,9 +568,50 @@ export default function FinderDashboard() {
             const gpsOk = (loc.coords.accuracy || 99) < 30;
             const isMoving = gpsOk && speedKmh > 6;
 
-            // Use GPS heading when moving, keep last heading when stationary
-            if (isMoving && loc.coords.heading != null && loc.coords.heading >= 0) {
-              lastAnimatedHeading.current = smoothHeading(loc.coords.heading, lastAnimatedHeading.current, 0.35);
+            // Heading, best source first.
+            //
+            // GPS heading only when genuinely moving — below ~6 km/h Android
+            // either omits it or reports noise. But keeping the LAST heading
+            // whenever that test failed left the arrow pointing the wrong way
+            // through every slow crawl, queue and junction, which on a bike in
+            // town is most of the ride.
+            //
+            // So when GPS heading is unusable, derive the bearing from actual
+            // displacement between fixes. Requires >8m of movement, comfortably
+            // above the Kalman-smoothed jitter floor, so a stationary rider
+            // does not spin the arrow.
+            const gpsHeading =
+              isMoving && loc.coords.heading != null && loc.coords.heading >= 0
+                ? loc.coords.heading
+                : null;
+
+            if (gpsHeading != null) {
+              lastAnimatedHeading.current = smoothHeading(gpsHeading, lastAnimatedHeading.current, 0.35);
+            } else if (lastHeadingPos.current) {
+              const p = lastHeadingPos.current;
+              const dyM = (coords.lat - p.lat) * 110540;
+              const dxM = (coords.lng - p.lng) * 111320 * Math.cos((coords.lat * Math.PI) / 180);
+              const movedM = Math.sqrt(dxM * dxM + dyM * dyM);
+              if (movedM > 8) {
+                // atan2(east, north) -> compass bearing, 0 = north.
+                const bearing = (Math.atan2(dxM, dyM) * 180) / Math.PI;
+                lastAnimatedHeading.current = smoothHeading(
+                  (bearing + 360) % 360,
+                  lastAnimatedHeading.current,
+                  0.35
+                );
+              }
+            }
+
+            // Only advance the reference once we have moved far enough to have
+            // learned something; otherwise jitter would keep resetting it and
+            // the 8m gate could never be met.
+            if (
+              !lastHeadingPos.current ||
+              Math.abs(coords.lat - lastHeadingPos.current.lat) > 0.00007 ||
+              Math.abs(coords.lng - lastHeadingPos.current.lng) > 0.00007
+            ) {
+              lastHeadingPos.current = { lat: coords.lat, lng: coords.lng };
             }
 
             setNavigationData({
