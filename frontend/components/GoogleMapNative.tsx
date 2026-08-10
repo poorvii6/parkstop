@@ -16,7 +16,7 @@
  * additive and do not block the basemap swap.
  */
 import React, { forwardRef, useImperativeHandle, useRef, useMemo, useEffect, useState, useCallback } from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, Dimensions } from 'react-native';
+import { StyleSheet, View, Text, TouchableOpacity, Dimensions, Animated, Easing } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
@@ -258,8 +258,60 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
     programmaticUntil.current = Date.now() + durationMs + 400;
   };
 
-  // Current map rotation (deg), so the custom compass button can reflect it.
+  // Current map rotation and tilt (deg), so the compass button can reflect the
+  // camera and know whether it should be visible at all.
   const [mapHeading, setMapHeading] = useState(0);
+  const [mapPitch, setMapPitch] = useState(0);
+
+  // Compass ("heading-up") browsing mode — the third state of Google's My
+  // Location button. Only meaningful outside navigation.
+  const [headingMode, setHeadingMode] = useState(false);
+  const deviceHeading = useRef(0);
+
+  // The device compass is only watched while heading-up mode is actually on.
+  // Subscribing all the time would spin the magnetometer for a view nobody is
+  // looking at, which costs battery on a phone already running GPS.
+  useEffect(() => {
+    if (!headingMode || props.isActiveNavigation) return;
+    let sub: any;
+    let alive = true;
+    (async () => {
+      try {
+        sub = await Location.watchHeadingAsync((h) => {
+          if (!alive) return;
+          // trueHeading is -1 until the magnetometer calibrates; fall back to
+          // magnetic so the map still turns instead of sitting frozen at north.
+          const deg = h.trueHeading >= 0 ? h.trueHeading : h.magHeading;
+          if (deg >= 0) deviceHeading.current = deg;
+        });
+      } catch {}
+    })();
+    return () => { alive = false; try { sub?.remove?.(); } catch {} };
+  }, [headingMode, props.isActiveNavigation]);
+
+  // Google shows the compass ONLY when the camera is actually turned or tilted,
+  // and fades it away once you are back to plain north-up. Ours sat on screen
+  // permanently, which is both visual noise and a control that does nothing
+  // most of the time. Treat sub-degree rotation as north to avoid it flickering
+  // in on rounding error.
+  const compassVisible =
+    !props.isActiveNavigation && (Math.abs(mapHeading) > 0.5 || mapPitch > 0.5);
+  const compassOpacity = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(compassOpacity, {
+      toValue: compassVisible ? 1 : 0,
+      duration: compassVisible ? 120 : 300, // in fast, out gently — as Google does
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    }).start();
+  }, [compassVisible, compassOpacity]);
+
+  // Panning away drops follow, and Google drops compass mode with it — the
+  // rotated view is a *following* view, so it must not survive the user
+  // wandering off somewhere else on the map.
+  useEffect(() => {
+    if (!props.isFollowing && headingMode) setHeadingMode(false);
+  }, [props.isFollowing, headingMode]);
 
   // Day/night theme like Google: light by day, night palette 7pm–6am.
   // Re-checked every 5 minutes so a session crossing 7pm flips live.
@@ -413,9 +465,64 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
       markProgrammatic(FOLLOW_EASE_MS + 200);
       // Recenter but keep zoom EXPLICIT — a partial camera resets zoom to a
       // default on Android, which read as the map "slowly zooming out".
-      mapRef.current.animateCamera({ center, zoom: currentZoom.current || USER_MAP_ZOOM }, { duration: FOLLOW_EASE_MS });
+      mapRef.current.animateCamera(
+        {
+          center,
+          zoom: currentZoom.current || USER_MAP_ZOOM,
+          ...(headingMode ? { heading: deviceHeading.current } : {}),
+        },
+        { duration: FOLLOW_EASE_MS }
+      );
     }
-  }, [props.userLocation, props.isFollowing, props.isActiveNavigation, props.heading]);
+  }, [props.userLocation, props.isFollowing, props.isActiveNavigation, props.heading, headingMode]);
+
+  // In heading-up mode the map must turn as the phone turns, not only when a
+  // new GPS fix lands — standing still and rotating on the spot is exactly when
+  // you use this mode, and that produces no position updates at all.
+  useEffect(() => {
+    if (!headingMode || props.isActiveNavigation || !props.isFollowing) return;
+    const iv = setInterval(() => {
+      if (!mapRef.current) return;
+      if (Date.now() - lastInteraction.current < 2000) return;
+      if (Date.now() < suppressFollowUntil.current) return;
+      // Only move for a turn big enough to see; below that it is compass noise
+      // and animating it just makes the map shimmer.
+      const delta = Math.abs((((deviceHeading.current - mapHeading + 540) % 360) - 180));
+      if (delta < 3) return;
+      markProgrammatic(400);
+      mapRef.current.animateCamera({ heading: deviceHeading.current }, { duration: 300 });
+    }, 250);
+    return () => clearInterval(iv);
+  }, [headingMode, props.isActiveNavigation, props.isFollowing, mapHeading]);
+
+  // ── Entering navigation: snap to the driving camera ──────────
+  // The follow effect only moves the camera when one of its inputs changes, so
+  // a rider who starts navigation while stationary would sit on the browsing
+  // camera until the next GPS fix happened to differ. Starting navigation is an
+  // explicit app transition, so it gets its own decisive move — and it
+  // deliberately ignores the recent-gesture guard, which exists to stop the
+  // follow camera fighting the user's fingers, not to block a deliberate start.
+  const wasNavigating = useRef(false);
+  useEffect(() => {
+    const nav = !!props.isActiveNavigation;
+    const entering = nav && !wasNavigating.current;
+    wasNavigating.current = nav;
+    if (!entering || !mapRef.current) return;
+    const u = props.userLocation;
+    if (!u) return;
+    currentZoom.current = NAV_ZOOM;
+    markProgrammatic(700);
+    suppressFollowUntil.current = Date.now() + 700;
+    mapRef.current.animateCamera(
+      {
+        center: { latitude: u.lat, longitude: u.lng },
+        zoom: NAV_ZOOM,
+        pitch: NAV_PITCH,
+        heading: props.heading || 0,
+      },
+      { duration: 600 }
+    );
+  }, [props.isActiveNavigation, props.userLocation, props.heading]);
 
   // ── Fit route into view when it first appears (spot preview) ───
   const hadRouteRef = useRef(false);
@@ -504,13 +611,33 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
   const handleRecenter = () => {
     lastInteraction.current = 0;
     const u = props.userLocation;
+
+    // Google's My Location button is a THREE-state cycle, not a toggle:
+    //   off  -> tap: follow me, map stays north-up
+    //   follow -> tap: compass mode, map rotates to face the way I'm facing
+    //   compass -> tap: back to north-up follow
+    // Ours was binary, so there was no way to get the heading-up browsing view
+    // Google gives you. During navigation none of this applies — the camera is
+    // always heading-up and the button is purely "re-centre".
+    let nextHeadingMode = false;
+    if (!props.isActiveNavigation) {
+      if (!props.isFollowing) nextHeadingMode = false;      // off -> follow
+      else nextHeadingMode = !headingMode;                  // follow <-> compass
+      setHeadingMode(nextHeadingMode);
+    }
     if (u && mapRef.current) {
       // Recenter restores the SAME framing the map opens with — the identical
       // center/zoom/pitch/heading that trySnapToUser applies on the first fix.
       // So however far the user has panned or pinched, one tap puts them back
       // to the familiar "here I am" view rather than their location at some
       // arbitrary zoom they'd wandered to.
-      const targetZoom = props.isActiveNavigation ? 17.5 : USER_MAP_ZOOM;
+      //
+      // While navigating this MUST be the exact camera the follow effect uses.
+      // It used to be zoom 17.5 / pitch 55 while follow used NAV_ZOOM 18.5 /
+      // NAV_PITCH 60, so recentring flew to one camera and the next GPS fix
+      // immediately dragged it to a different one — you saw a wide view snap
+      // in, then creep closer. That double move is why recenter "showed far".
+      const targetZoom = props.isActiveNavigation ? NAV_ZOOM : USER_MAP_ZOOM;
 
       // Keep currentZoom in step, otherwise the follow effect (which animates
       // to currentZoom) would immediately pull the camera back to the old zoom
@@ -523,8 +650,12 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
         {
           center: { latitude: u.lat, longitude: u.lng },
           zoom: targetZoom,
-          pitch: props.isActiveNavigation ? 55 : 0,
-          heading: props.isActiveNavigation ? props.heading || 0 : 0,
+          pitch: props.isActiveNavigation ? NAV_PITCH : 0,
+          heading: props.isActiveNavigation
+            ? props.heading || 0
+            : nextHeadingMode
+              ? deviceHeading.current
+              : 0,
         },
         { duration: RECENTER_MS }
       );
@@ -542,6 +673,7 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
     lastHeadingRead.current = now;
     mapRef.current?.getCamera?.().then((cam: any) => {
       if (cam && typeof cam.heading === 'number') setMapHeading(cam.heading);
+      if (cam && typeof cam.pitch === 'number') setMapPitch(cam.pitch);
       if (cam && typeof cam.zoom === 'number') currentZoom.current = cam.zoom;
     }).catch(() => {});
   };
@@ -751,18 +883,40 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
       {/* Google-style control cluster, bottom-right: compass, zoom, my-location */}
       {!props.hideControls ? (
         <>
-          {/* Compass — rotates with the map; tap to snap back to north */}
-          <TouchableOpacity
-            style={[styles.mapCtrlBtn, { bottom: (props.controlsBottomOffset ?? 210) + 168 }]}
-            onPress={() => { markProgrammatic(500); mapRef.current?.animateCamera({ heading: 0 }, { duration: 350 }); setMapHeading(0); }}
-            activeOpacity={0.85}
+          {/* Compass — appears only when the map is turned or tilted, rotates
+              with the camera, and resets BOTH rotation and tilt on tap. */}
+          <Animated.View
+            style={[
+              styles.mapCtrlBtn,
+              { bottom: (props.controlsBottomOffset ?? 210) + 168, opacity: compassOpacity },
+            ]}
+            pointerEvents={compassVisible ? 'auto' : 'none'}
           >
-            <View style={[styles.compassNeedle, { transform: [{ rotate: `${-mapHeading}deg` }] }]}>
-              <View style={styles.compassN} />
-              <View style={styles.compassS} />
-              {Math.abs(mapHeading) > 1 ? <Text style={styles.compassNLabel}>N</Text> : null}
-            </View>
-          </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.mapCtrlHit}
+              activeOpacity={0.85}
+              onPress={() => {
+                markProgrammatic(500);
+                // Google's compass returns you to north-up AND flat. Resetting
+                // heading alone left the map tilted with a compass claiming it
+                // was already north, so there was no way back to a flat view
+                // except pinching with two fingers.
+                mapRef.current?.animateCamera({ heading: 0, pitch: 0 }, { duration: 350 });
+                setMapHeading(0);
+                setMapPitch(0);
+                // Rotating by hand is an explicit choice to look a certain way;
+                // holding heading-up mode on afterwards would immediately spin
+                // the map back and undo the tap.
+                setHeadingMode(false);
+              }}
+            >
+              <View style={[styles.compassNeedle, { transform: [{ rotate: `${-mapHeading}deg` }] }]}>
+                <View style={styles.compassN} />
+                <View style={styles.compassS} />
+                <Text style={styles.compassNLabel}>N</Text>
+              </View>
+            </TouchableOpacity>
+          </Animated.View>
 
           {/* Zoom + / - pill */}
           <View style={[styles.zoomPill, { bottom: (props.controlsBottomOffset ?? 210) + 60 }]}>
@@ -781,8 +935,16 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
             onPress={handleRecenter}
             activeOpacity={0.8}
           >
+            {/* Three states, matching Google: hollow grey = not following,
+                solid blue = following north-up, arrow = heading-up. */}
             <Ionicons
-              name={props.isFollowing ? 'locate' : 'locate-outline'}
+              name={
+                headingMode && props.isFollowing
+                  ? 'navigate'
+                  : props.isFollowing
+                    ? 'locate'
+                    : 'locate-outline'
+              }
               size={22}
               color={props.isFollowing ? '#1a73e8' : '#5f6368'}
             />
@@ -828,6 +990,9 @@ const styles = StyleSheet.create({
   navChevronRot: { transform: [{ rotate: '-45deg' }], alignItems: 'center', justifyContent: 'center' },
   recenterBtn: { position: 'absolute', right: 16, width: 48, height: 48, borderRadius: 24, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 6, shadowOffset: { width: 0, height: 3 }, elevation: 6 },
   mapCtrlBtn: { position: 'absolute', right: 16, width: 46, height: 46, borderRadius: 23, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 6 },
+  // The touchable now lives INSIDE the animated wrapper, so it has to fill it
+  // for the whole circle to stay tappable.
+  mapCtrlHit: { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center', borderRadius: 23 },
   zoomPill: { position: 'absolute', right: 16, width: 46, borderRadius: 23, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', paddingVertical: 2, shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 6 },
   zoomBtn: { width: 46, height: 42, alignItems: 'center', justifyContent: 'center' },
   zoomDivider: { width: 24, height: 1, backgroundColor: 'rgba(0,0,0,0.08)' },

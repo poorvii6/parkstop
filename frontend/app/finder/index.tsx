@@ -194,7 +194,17 @@ export default function FinderDashboard() {
     setSelectedSpotId(spotObj.id);
     setBookingDetails((prev: any) => prev || b);
     setResumableBooking(null);
-    setStep('booking_confirm');
+
+    // Straight into navigation — NOT via 'booking_confirm'.
+    //
+    // booking_confirm exists to confirm a booking you are about to make, and it
+    // runs the "navigation starts in 3…" countdown. Resuming is neither: the
+    // booking already exists and the user has just explicitly asked to carry on
+    // to it. Sending resume through that screen made them watch a confirmation
+    // and a countdown for a decision they made minutes ago.
+    setIsFollowing(true);
+    setStep('en_route');
+    startBackgroundLocation().catch(() => {});
   };
 
   useEffect(() => {
@@ -368,13 +378,18 @@ export default function FinderDashboard() {
     if (navCountdown === null || navCountdown <= 0) {
       if (navCountdown === 0 && step === 'booking_confirm') {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        if (userLocation && mapRef.current) {
-          mapRef.current.animateCamera({
-            center: { latitude: userLocation.lat, longitude: userLocation.lng },
-            zoom: 17, pitch: 60, heading: 0
-          }, { duration: 1200 });
-        }
-        centerRoute();
+        // The map owns the navigation camera. Setting isFollowing + the
+        // navigating step makes GoogleMapNative animate to its own NAV_ZOOM /
+        // NAV_PITCH / heading, which is the single definition of that camera.
+        //
+        // This used to fire TWO camera moves of its own here. The first went to
+        // the user at zoom 17 pitch 60; then centerRoute() immediately
+        // overrode it with the MIDPOINT between user and spot at zoom 15, flat.
+        // On a 30km trip that midpoint is 15km away, so navigation opened on a
+        // flat, zoomed-out view of empty countryside with the rider off-screen
+        // entirely — and the follow camera then had to drag it all the way back.
+        // Neither move belonged here: a route overview is a preview, not the
+        // camera you drive with.
         if (routeCoords.length > 0) {
           setSimulatedLocation({ lat: routeCoords[0].latitude, lng: routeCoords[0].longitude });
         }
@@ -1794,23 +1809,6 @@ export default function FinderDashboard() {
   };
 
 
-  const centerRoute = () => {
-    if (userLocation && selectedSpotId) {
-      const spot = spots.find(s => s.id === selectedSpotId);
-      if (spot && spot.lat && spot.lng) {
-        if (mapRef.current) {
-          mapRef.current.animateCamera({
-            center: {
-              latitude: (userLocation.lat + spot.lat) / 2,
-              longitude: (userLocation.lng + spot.lng) / 2
-            },
-            zoom: 15
-          });
-        }
-      }
-    }
-  };
-
   const recenterCamera = () => {
     setIsFollowing(true); // The map component will fly to userLocation automatically when isFollowing=true
   };
@@ -2340,10 +2338,10 @@ export default function FinderDashboard() {
               <Text style={{ color: '#94a3b8', fontSize: 10, fontWeight: '700', marginBottom: 12, textAlign: 'center', letterSpacing: 1.2 }}>SELECT CAR CATEGORY</Text>
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
                 {[
-                  { label: 'Sedan', image: require('../../assets/images/vehicles/sedan.png') },
-                  { label: 'SUV', image: require('../../assets/images/vehicles/suv.png') },
-                  { label: 'Hatchback', image: require('../../assets/images/vehicles/hatchback.png') },
-                  { label: 'Minivan', image: require('../../assets/images/vehicles/minivan.png') },
+                  { label: 'Sedan', image: require('../../assets/images/vehicles/sedan.jpg') },
+                  { label: 'SUV', image: require('../../assets/images/vehicles/suv.jpg') },
+                  { label: 'Hatchback', image: require('../../assets/images/vehicles/hatchback.jpg') },
+                  { label: 'Minivan', image: require('../../assets/images/vehicles/minivan.jpg') },
                 ].map(t => (
                   <TouchableOpacity
                     key={t.label}
@@ -3152,10 +3150,10 @@ export default function FinderDashboard() {
                   <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>Car Category</Text>
                   <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
                     {[
-                      { label: 'Sedan', image: require('../../assets/images/vehicles/sedan.png') },
-                      { label: 'SUV', image: require('../../assets/images/vehicles/suv.png') },
-                      { label: 'Hatchback', image: require('../../assets/images/vehicles/hatchback.png') },
-                      { label: 'Minivan', image: require('../../assets/images/vehicles/minivan.png') },
+                      { label: 'Sedan', image: require('../../assets/images/vehicles/sedan.jpg') },
+                      { label: 'SUV', image: require('../../assets/images/vehicles/suv.jpg') },
+                      { label: 'Hatchback', image: require('../../assets/images/vehicles/hatchback.jpg') },
+                      { label: 'Minivan', image: require('../../assets/images/vehicles/minivan.jpg') },
                     ].map(t => (
                       <TouchableOpacity
                         key={t.label}
@@ -3528,16 +3526,11 @@ export default function FinderDashboard() {
                       }} 
                       onPress={() => {
                         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                        // Recenter map to user location before starting navigation
-                        if (userLocation && mapRef.current) {
-                          mapRef.current.animateCamera({
-                            center: { latitude: userLocation.lat, longitude: userLocation.lng },
-                            zoom: 17,
-                            pitch: 60,
-                            heading: 0
-                          }, { duration: 1200 });
-                        }
-                        centerRoute();
+                        // No camera work here — the map owns the navigation
+                        // camera. See the countdown handler for why the two
+                        // moves that used to be here (user @ zoom 17, then the
+                        // route midpoint @ zoom 15 flat) fought each other and
+                        // opened navigation on empty countryside.
                         if (routeCoords.length > 0) {
                           setSimulatedLocation({ lat: routeCoords[0].latitude, lng: routeCoords[0].longitude });
                         }
