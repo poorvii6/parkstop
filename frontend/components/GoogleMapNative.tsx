@@ -225,13 +225,23 @@ function AnimatedNavPuck({ lat, lng, heading }: { lat: number; lng: number; head
       zIndex={10}
       style={{ width: 56, height: 56 }}
     >
-      <View collapsable={false} style={styles.navChevronWrap}>
-        <View style={styles.navChevronRot}>
-          <Ionicons name="navigate" size={46} color="#fff" />
-        </View>
-        <View style={[styles.navChevronRot, StyleSheet.absoluteFill, { alignItems: 'center', justifyContent: 'center' }]}>
-          <Ionicons name="navigate" size={34} color="#1a73e8" />
-        </View>
+      {/* Google's navigation arrow: a solid blue arrowhead with a white casing
+          and a soft shadow, drawn flat on the map and rotated to heading.
+
+          This was previously the Ionicons "navigate" glyph — a paper plane —
+          drawn twice and rotated -45deg to fake an arrow. Two problems: it
+          reads as a paper plane rather than Google's arrow, and the glyph is
+          not symmetric about its own centre, so once rotated its tip sat off
+          centre inside the marker box. The marker anchors at that box centre,
+          so the arrow was drawn slightly away from the real GPS position and
+          span about the wrong point when turning.
+
+          Built from border triangles, the shape is exactly symmetric about the
+          vertical axis and points straight up at rotation 0, so heading maps
+          directly onto it with no correction. */}
+      <View collapsable={false} style={styles.navArrowWrap}>
+        <View style={styles.navArrowCasing} />
+        <View style={styles.navArrowCore} />
       </View>
     </Marker>
   );
@@ -984,10 +994,36 @@ const styles = StyleSheet.create({
   spotPLetter: { color: '#4285F4', fontWeight: '900', fontSize: 11, lineHeight: 13 },
   spotPillText: { color: '#fff', fontWeight: '800', fontSize: 12, lineHeight: 14, flexShrink: 0 },
   spotPillPerHr: { color: 'rgba(255,255,255,0.85)', fontWeight: '600', fontSize: 10, marginLeft: 1, flexShrink: 0 },
-  navArrowWrap: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#1a73e8', borderWidth: 3, borderColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 6 },
-  navArrow: { width: 0, height: 0, borderLeftWidth: 9, borderRightWidth: 9, borderBottomWidth: 18, borderLeftColor: 'transparent', borderRightColor: 'transparent', borderBottomColor: '#fff', marginTop: -3 },
-  navChevronWrap: { width: 56, height: 56, alignItems: 'center', justifyContent: 'center' },
-  navChevronRot: { transform: [{ rotate: '-45deg' }], alignItems: 'center', justifyContent: 'center' },
+  // Navigation arrow. The wrapper is square and the triangles are centred in
+  // it, so the marker's 0.5/0.5 anchor lands on the arrow's own centre of
+  // rotation — the arrow turns on the spot instead of orbiting a point.
+  navArrowWrap: { width: 56, height: 56, alignItems: 'center', justifyContent: 'center' },
+  // White casing, drawn first and slightly larger so it reads as an outline.
+  navArrowCasing: {
+    position: 'absolute',
+    width: 0, height: 0,
+    borderLeftWidth: 15, borderRightWidth: 15, borderBottomWidth: 34,
+    borderLeftColor: 'transparent', borderRightColor: 'transparent',
+    borderBottomColor: '#fff',
+    shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 4, shadowOffset: { width: 0, height: 2 },
+    elevation: 6,
+  },
+  // Google's puck blue, inset evenly inside the casing.
+  //
+  // The geometry is deliberate, not eyeballed. Simply centring a smaller
+  // triangle inside a larger one gives an uneven outline — thin at the tip,
+  // thick at the base — because the two triangles' edges are not parallel
+  // unless the inner one is both scaled AND pushed down. Half-width/height
+  // held at 15/34 keeps the edges parallel; the 6px offset then sets the
+  // stroke to a uniform ~2.5px, which is Google's weight.
+  navArrowCore: {
+    position: 'absolute',
+    marginTop: 6,
+    width: 0, height: 0,
+    borderLeftWidth: 10.5, borderRightWidth: 10.5, borderBottomWidth: 24,
+    borderLeftColor: 'transparent', borderRightColor: 'transparent',
+    borderBottomColor: '#4285F4',
+  },
   recenterBtn: { position: 'absolute', right: 16, width: 48, height: 48, borderRadius: 24, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 6, shadowOffset: { width: 0, height: 3 }, elevation: 6 },
   mapCtrlBtn: { position: 'absolute', right: 16, width: 46, height: 46, borderRadius: 23, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 6 },
   // The touchable now lives INSIDE the animated wrapper, so it has to fill it
