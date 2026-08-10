@@ -78,7 +78,8 @@
         }
       ],
       "expo-font",
-      "@react-native-google-signin/google-signin"
+      "@react-native-google-signin/google-signin",
+      "./plugins/withCoreLibraryDesugaring"
     ],
     "extra": {
       "router": {},
