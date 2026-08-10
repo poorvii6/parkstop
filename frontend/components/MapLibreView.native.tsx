@@ -380,9 +380,26 @@ map.on('load',function(){
 // `<MapLibreView ref={...}>` call site a type error — on a component whose ref
 // (animateCamera) is how the whole map is driven. Let forwardRef infer it.
 const MapLibreView = React.forwardRef((props: MapProps, ref: any) => {
-  // If native module didn't load, use the full WebView-based fallback
+  // If the native map module didn't load we show a plain message rather than
+  // falling back to the Carto/Ola WebView map.
+  //
+  // LICENSING, not preference: Google Maps Platform Terms 3.2.3(e) ("No Use
+  // With Non-Google Maps") prohibits displaying Google Maps Content — which
+  // includes Routes/Directions results — on a non-Google basemap. The old
+  // fallback rendered Carto tiles while still receiving routeCoords derived
+  // from the Google Routes API, which is exactly that. It was unreachable in
+  // practice (NATIVE_AVAILABLE is true in our builds), but it shipped in the
+  // APK and was one broken native module away from running.
   if (!NATIVE_AVAILABLE) {
-    return <WebViewFallback {...props} ref={ref} />;
+    return (
+      <View style={[StyleSheet.absoluteFill, styles.mapUnavailable, props.style]}>
+        <Text style={styles.mapUnavailableTitle}>Map unavailable</Text>
+        <Text style={styles.mapUnavailableBody}>
+          The map couldn&apos;t start on this device. Please restart the app, or
+          reinstall if it keeps happening.
+        </Text>
+      </View>
+    );
   }
 
   // Map surface — Google (react-native-maps) basemap.
@@ -878,6 +895,24 @@ const MapLibreView = React.forwardRef((props: MapProps, ref: any) => {
 });
 
 const styles = StyleSheet.create({
+  mapUnavailable: {
+    backgroundColor: '#0f172a',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 28,
+  },
+  mapUnavailableTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '800',
+    marginBottom: 8,
+  },
+  mapUnavailableBody: {
+    color: '#94a3b8',
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: 'center',
+  },
   container: { flex: 1 },
   map: { flex: 1, backgroundColor: '#0a0e17' },
   // User dot

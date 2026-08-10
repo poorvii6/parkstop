@@ -51,12 +51,25 @@ const isUsable = (r: any): r is RouteLike =>
  *
  * @returns the chosen route, or null when nothing usable was returned.
  */
-export function pickBestRoute<T extends RouteLike>(routes: T[] | null | undefined): T | null {
+export function pickBestRoute<T extends RouteLike>(
+  routes: T[] | null | undefined,
+  opts?: { trustProviderOrder?: boolean }
+): T | null {
   if (!Array.isArray(routes)) return null;
 
   const usable = routes.filter(isUsable) as T[];
   if (usable.length === 0) return null;
   if (usable.length === 1) return usable[0];
+
+  // Google already weighs road class, turns and live traffic — its first route
+  // is the considered answer, not just the fastest. Re-ranking it by raw
+  // distance sent riders down narrow residential lanes because those are
+  // shorter, which is exactly the "why is it not using good roads" problem.
+  //
+  // The shortest-within-tolerance rule below exists to compensate for Ola and
+  // OSRM, which order poorly and will happily return a long motorway loop.
+  // Apply it only to them.
+  if (opts?.trustProviderOrder) return usable[0];
 
   // Fastest route: the provider's own objective, and our reference point.
   const fastest = usable.reduce((a, b) => (b.duration < a.duration ? b : a));
