@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { View, Text, StyleSheet, Platform, TouchableOpacity, TextInput, Dimensions, Modal, Alert, ScrollView, Linking, Keyboard, ActivityIndicator, BackHandler, AppState, Image, Animated, KeyboardAvoidingView, DeviceEventEmitter } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import MapLibreView from '../../components/MapLibreView';
+import GoogleNavigation from '../../components/GoogleNavigation';
 import { useStripe } from '../../components/StripeImports';
 import RazorpayCheckout from '../../components/RazorpayCheckout';
 import razorpayService from '../../services/razorpayService';
@@ -253,6 +254,12 @@ export default function FinderDashboard() {
   const lastVoiceInstruction = useRef('');
   const lastVoiceDistance = useRef(0);
   const isMutedRef = useRef(false);
+
+  // Read inside the GPS watcher's closure, which cannot see React state.
+  // Everything ParkStop used to announce — turns, rerouting, arrival — is now
+  // spoken by Google, so ours must fall silent or the rider hears both voices
+  // saying different things a second apart.
+  const isGoogleNavRef = useRef(false);
 
 
   const [selectedSpotId, setSelectedSpotId] = useState<string | null>(null);
@@ -952,7 +959,10 @@ export default function FinderDashboard() {
                         .replace(/Continue straight/gi, 'Neravagi hogiri');
                     }
 
-                    Speech.speak(voiceText, { rate: 1.0, pitch: 1.0, language: ttsLang });
+                    // Silent while Google is guiding — Google speaks the turns.
+                    if (!isGoogleNavRef.current) {
+                      Speech.speak(voiceText, { rate: 1.0, pitch: 1.0, language: ttsLang });
+                    }
                   }
                 }
               }
@@ -970,10 +980,18 @@ export default function FinderDashboard() {
             const withinGeofence = straightKm <= 0.025 && gpsAcc <= 30;
             arrivalHits.current = withinGeofence ? arrivalHits.current + 1 : 0;
 
+            // Kept as a BACKSTOP behind Google's own arrival event.
+            //
+            // Google's setOnArrival is more accurate — it knows the route and
+            // the destination geometry, not just a radius. But arrival gates
+            // check-in, and check-in gates payment, so this is not a path to
+            // leave with a single trigger while the Navigation SDK is still
+            // Beta. Both set the same state and the !arrivalDetected guard
+            // means whichever fires first wins; the other is a no-op.
             if (arrivalHits.current >= 2 && !arrivalDetected) {
               setArrivalDetected(true);
               setIsFollowing(false);
-              if (!isMutedRef.current) {
+              if (!isMutedRef.current && !isGoogleNavRef.current) {
                 const arrText = navLanguage === 'hi-IN' ? 'Aap apni manzil par pahunch gaye hain'
                   : 'You have arrived at your destination';
                 Speech.speak(arrText, { rate: 1.0, pitch: 1.0, language: navLanguage });
@@ -1856,6 +1874,37 @@ export default function FinderDashboard() {
   };
 
 
+  /**
+   * True while Google's Navigation SDK owns the screen.
+   *
+   * Requires a selected spot as well as a navigating step: without a
+   * destination the SDK has nothing to route to, and mounting NavigationView
+   * with a null waypoint gives the rider a live map that never starts guiding
+   * and never explains why.
+   */
+  const isGoogleNavigating =
+    ['en_route', 'navigating', 'arriving'].includes(step) && !!selectedSpotId;
+
+  // Mirrored into a ref so the GPS watcher's closure can read it — that
+  // callback is created once and never sees updated state.
+  useEffect(() => { isGoogleNavRef.current = isGoogleNavigating; }, [isGoogleNavigating]);
+
+  /**
+   * Google reports arrival at the booked spot.
+   *
+   * Deliberately does the same work as the geofence backstop rather than
+   * anything new, so there is exactly one definition of "arrived" for the
+   * check-in and payment flow to depend on.
+   */
+  const handleGoogleArrival = useCallback(() => {
+    if (arrivalDetected) return;
+    setArrivalDetected(true);
+    setIsFollowing(false);
+    // No speech here: Google announces arrival itself, and speaking over it
+    // produced two overlapping voices saying the same thing.
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+  }, [arrivalDetected]);
+
   const recenterCamera = () => {
     setIsFollowing(true); // The map component will fly to userLocation automatically when isFollowing=true
   };
@@ -2548,15 +2597,32 @@ export default function FinderDashboard() {
                       const km = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
                       d = km < 1 ? `${Math.round(km * 1000)} m away` : `${km.toFixed(1)} km away`;
                     }
-                    const n = spots.filter((s: any) => s.available).length;
-                    return [d, n > 0 ? `${n} parking nearby` : 'searching parking…'].filter(Boolean).join(' • ');
+                    const open = spots.filter((s: any) => s.available);
+                    // Cheapest rate in the area — the number someone searching
+                    // a neighbourhood actually wants, alongside how many spots
+                    // there are.
+                    const cheapest = open.length
+                      ? Math.min(...open.map((s: any) => Number(s.price) || 0))
+                      : null;
+                    const spotText = open.length
+                      ? `${open.length} spot${open.length > 1 ? 's' : ''}${cheapest != null ? ` · from ₹${cheapest}/hr` : ''}`
+                      : 'no parking here yet';
+                    return [d, spotText].filter(Boolean).join(' • ');
                   })()}
                 </Text>
               </View>
-              <TouchableOpacity onPress={handleDirectionsToPlace} activeOpacity={0.85} style={{ backgroundColor: '#1a73e8', borderRadius: 22, paddingHorizontal: 16, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', marginLeft: 8 }}>
-                <Ionicons name="navigate" size={15} color="#fff" style={{ marginRight: 5 }} />
-                <Text style={{ color: '#fff', fontSize: 13, fontWeight: '800' }}>Directions</Text>
-              </TouchableOpacity>
+              {/* No Directions button.
+                *
+                * Searching a neighbourhood is a question about parking, not a
+                * request to be driven to the middle of it. Routing to the
+                * area's centre point sends the rider somewhere no spot exists,
+                * and it is not what they asked for. Directions belong to a
+                * chosen spot, which the list below provides. */}
+              <View style={{ backgroundColor: 'rgba(26,115,232,0.15)', borderRadius: 22, paddingHorizontal: 14, paddingVertical: 8, marginLeft: 8 }}>
+                <Text style={{ color: '#60a5fa', fontSize: 12, fontWeight: '800' }}>
+                  {spots.filter((s: any) => s.available).length > 0 ? 'Pick a spot' : '—'}
+                </Text>
+              </View>
             </View>
           )}
           {/* Nearby Spots Bottom Sheet */}
@@ -2724,6 +2790,28 @@ export default function FinderDashboard() {
           style={styles.fullMapContainer}
           pointerEvents="auto"
         >
+          {isGoogleNavigating ? (
+            /* Google's own navigation owns the whole surface while guiding.
+             * It is not an overlay on our map — it IS the map, with Google's
+             * camera, chevron, turn cards, voice, lane guidance and rerouting.
+             * Our map is unmounted underneath so two map surfaces are never
+             * alive at once. */
+            <GoogleNavigation
+              destination={
+                (() => {
+                  const s = selectedSpotId ? spots.find((x) => x.id === selectedSpotId) : null;
+                  return s ? { lat: s.lat, lng: s.lng, title: s.title } : null;
+                })()
+              }
+              muted={isMuted}
+              onArrive={handleGoogleArrival}
+              /* No onExit: the app's own back control (repositioned above
+               * Google's footer during guidance) already owns leaving
+               * navigation, including the confirmation prompt and the full
+               * teardown of booking state. A second exit button was both
+               * visual clutter and a second, weaker cleanup path. */
+            />
+          ) : (
           <MapLibreView
             ref={mapRef}
             viewportHint={viewportHint}
@@ -2808,7 +2896,8 @@ export default function FinderDashboard() {
               userSelectedRoute.current = false;
 
               console.log(`[NAV] Off-route detected at ${lat},${lng} — rerouting...`);
-              if (!isMuted) Speech.speak(navLanguage === 'hi-IN' ? 'Naya raasta dhundh rahe hain' : 'Rerouting', { rate: 1.1, pitch: 1.0, language: navLanguage });
+              // Google detects going off-route and announces its own reroute.
+              if (!isMuted && !isGoogleNavRef.current) Speech.speak(navLanguage === 'hi-IN' ? 'Naya raasta dhundh rahe hain' : 'Rerouting', { rate: 1.1, pitch: 1.0, language: navLanguage });
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
               (async () => {
                 try {
@@ -2906,6 +2995,7 @@ export default function FinderDashboard() {
             }}
             hideControls={['spot_booking'].includes(step)}
           />
+          )}
 
           {/* Floating OTP Badge — only on arrival, not during navigation */}
         </View>
@@ -2918,13 +3008,27 @@ export default function FinderDashboard() {
         <TouchableOpacity
           style={{
             position: 'absolute',
-            top: Platform.OS === 'ios' ? 58 : 38,
-            left: 16,
+            // During guidance this sits in the empty right-hand end of Google's
+            // header, beside the turn instruction — where a rider looking at
+            // the instruction will already be looking. At the bottom it was
+            // both far from the eye's focus and sitting on top of the street
+            // name label.
+            // BELOW Google's instruction block, not on it. Placing it top-right
+            // put it directly over the road name — "Chikkaballapur Rd" was
+            // partly hidden behind it, obscuring the one word that tells the
+            // rider where they are being sent. Google keeps that whole banner
+            // clear of controls for the same reason.
+            ...(isGoogleNavigating
+              ? { top: Platform.OS === 'ios' ? 210 : 196, left: 16 }
+              : { top: Platform.OS === 'ios' ? 58 : 38, left: 16 }),
             zIndex: 99999,
-            backgroundColor: 'rgba(15,23,42,0.95)',
-            width: 46,
-            height: 46,
-            borderRadius: 23,
+            // A white circular control on the map, matching Google's own
+            // floating buttons, now that it sits on the map rather than on the
+            // banner.
+            backgroundColor: isGoogleNavigating ? '#ffffff' : 'rgba(15,23,42,0.95)',
+            width: 40,
+            height: 40,
+            borderRadius: 20,
             alignItems: 'center',
             justifyContent: 'center',
             borderWidth: 1.5,
@@ -2980,11 +3084,23 @@ export default function FinderDashboard() {
             }
           }}
         >
-          <Ionicons name="arrow-back" size={24} color="#fff" />
+          {/* Dark glyph on the white navigation button, white on the dark one
+              used elsewhere — otherwise the arrow disappears into its own
+              background during guidance. */}
+          <Ionicons name="arrow-back" size={22} color={isGoogleNavigating ? '#3c4043' : '#fff'} />
         </TouchableOpacity>
       )}
-      {/* Directions Banner / Arrival Banner */}
-      {['navigating', 'en_route', 'arriving'].includes(step) && !isInPip && (
+      {/* Directions Banner / Arrival Banner
+       *
+       * During Google navigation only the ARRIVAL banner survives. Google draws
+       * its own turn card, street name, lane guidance, distance and ETA, so
+       * ours stacked on top of theirs — two instruction cards saying the same
+       * thing, with Google's partially hidden behind ours.
+       *
+       * The arrival banner stays because it is not navigation: it carries
+       * ParkStop's check-in, which gates the booking and the payment. */}
+      {['navigating', 'en_route', 'arriving'].includes(step) && !isInPip &&
+       (arrivalDetected || !isGoogleNavigating) && (
         arrivalDetected ? (
           /* ── Arrival banner with Check In button ── */
           <View style={{ position: 'absolute', top: 50, left: 16, right: 16, backgroundColor: '#0f172a', borderRadius: 24, padding: 20, alignItems: 'center', shadowColor: '#10b981', shadowOpacity: 0.4, shadowRadius: 20, zIndex: 1000, borderWidth: 1.5, borderColor: 'rgba(16,185,129,0.4)' }}>
@@ -3420,7 +3536,11 @@ export default function FinderDashboard() {
       {!['welcome', 'vehicle_select', 'home', 'spot_booking'].includes(step) && (
         <>
 
-          {step === 'en_route' && !isInPip && (
+          {/* Hidden while Google is guiding: this sheet sits across the bottom
+            * and would bury Google's own ETA / distance / arrival-time footer.
+            * It returns the moment arrival is detected, because from then on it
+            * is carrying check-in rather than trip information. */}
+          {step === 'en_route' && !isInPip && (arrivalDetected || !isGoogleNavigating) && (
             <>
 
               <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#0f172a', borderTopLeftRadius: 32, borderTopRightRadius: 32, paddingBottom: 40, paddingTop: 20, shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 30, elevation: 30, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' }}>

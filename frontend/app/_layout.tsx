@@ -1,5 +1,6 @@
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationProvider, TaskRemovedBehavior } from '@googlemaps/react-native-navigation-sdk';
 import { StripeProvider } from '../components/StripeImports';
 import OfflineBanner from '../components/OfflineBanner';
@@ -17,6 +18,10 @@ export default function RootLayout() {
      * recents. For a parking app that is the safe default — someone riding to a
      * spot with the phone in a pocket must not lose directions because Android
      * tidied up the task list. */
+    /* Required ancestor for useSafeAreaInsets(). Without it the hook returns
+     * zeros with no warning, which is why the navigation banner sat under the
+     * status bar despite being given insets. */
+    <SafeAreaProvider>
     <NavigationProvider
       termsAndConditionsDialogOptions={{
         title: 'Navigation Terms',
@@ -26,9 +31,19 @@ export default function RootLayout() {
         // than a full terms wall, which is what a rider tapping "navigate"
         // expects to see.
         showOnlyDisclaimer: true,
+        // EVERY colour must be set, not just the ones that looked important.
+        //
+        // Setting only backgroundColor and titleColor left the body text,
+        // "Learn more" and the buttons at their defaults — which are dark, and
+        // therefore invisible on a dark background. The result was a legal
+        // notice the rider physically could not read before agreeing to it.
+        // The SDK does not derive the remaining colours from the ones given.
         uiParams: {
           backgroundColor: '#0f172a',
           titleColor: '#ffffff',
+          mainTextColor: '#e2e8f0',
+          acceptButtonTextColor: '#60a5fa',
+          cancelButtonTextColor: '#94a3b8',
         },
       }}
       taskRemovedBehavior={TaskRemovedBehavior.CONTINUE_SERVICE}
@@ -69,5 +84,6 @@ export default function RootLayout() {
       <StatusBar style="light" />
     </StripeProvider>
     </NavigationProvider>
+    </SafeAreaProvider>
   );
 }

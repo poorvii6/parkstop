@@ -10,7 +10,7 @@
 import React, { useEffect, useRef, useState, useImperativeHandle, useCallback, useMemo } from 'react';
 import { View, StyleSheet, TouchableOpacity, Text, Platform, Animated as RNAnimated } from 'react-native';
 import { WebView } from 'react-native-webview';
-import GoogleMapNative from './GoogleMapNative';
+import GoogleBrowseMap from './GoogleBrowseMap';
 
 // Try to load native MapLibre
 let MapLibreGL: any = null;
@@ -402,8 +402,14 @@ const MapLibreView = React.forwardRef((props: MapProps, ref: any) => {
     );
   }
 
-  // Map surface — Google (react-native-maps) basemap.
-  return <GoogleMapNative {...props} ref={ref} />;
+  // Browsing map — Google Navigation SDK's MapView.
+  //
+  // Everything below this return is dead code from the MapLibre and WebView
+  // eras. It is left in place for one release so a bad Navigation SDK
+  // experience can be reverted by changing this one line, rather than by
+  // reconstructing a deleted component from history. It should be deleted once
+  // the SDK has been proven on real rides.
+  return <GoogleBrowseMap {...props} ref={ref} />;
 
   const {
     userLocation,
