@@ -6,6 +6,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import MapLibreView from '../../components/MapLibreView';
 import GoogleNavigation from '../../components/GoogleNavigation';
+import { useNavigation as useGoogleNav, TravelMode } from '@googlemaps/react-native-navigation-sdk';
+import { prepareDestination, clearPreparedDestination } from '../../utils/navSession';
 import { useStripe } from '../../components/StripeImports';
 import RazorpayCheckout from '../../components/RazorpayCheckout';
 import razorpayService from '../../services/razorpayService';
@@ -260,6 +262,14 @@ export default function FinderDashboard() {
   // spoken by Google, so ours must fall silent or the rider hears both voices
   // saying different things a second apart.
   const isGoogleNavRef = useRef(false);
+
+  // Consecutive road-snapped fixes within the arrival radius. Reset whenever
+  // the rider moves back out, so only a genuine stop counts.
+  const googleArrivalHits = useRef(0);
+  // Fallback confirmation timer for arrival — see the backstop below. Held in a
+  // ref so it can be cancelled if the rider moves back out of the radius.
+  const arrivalTimer = useRef<any>(null);
+  useEffect(() => () => { if (arrivalTimer.current) clearTimeout(arrivalTimer.current); }, []);
 
 
   const [selectedSpotId, setSelectedSpotId] = useState<string | null>(null);
@@ -540,7 +550,32 @@ export default function FinderDashboard() {
     // its last value, so the map stopped turning with the rider and sat
     // north-up while they travelled south. Speed froze the same way, which
     // also pinned the speed-adaptive zoom.
-    if (['en_route', 'navigating', 'arriving'].includes(step) && selectedSpotId) {
+    // NOT while Google is guiding.
+    //
+    // Google runs its own location engine during navigation, and it is the one
+    // that matters: its fixes are road-snapped, so a stationary rider stays put
+    // instead of wandering. Running our own high-accuracy watcher alongside it
+    // means two consumers competing for the same GPS hardware and two different
+    // answers about where the rider is — which is why the blue dot drifted
+    // while standing still, something Google Maps itself does not do.
+    //
+    // Everything this watcher provided during navigation is now Google's:
+    // position comes from setOnLocationChanged, arrival from setOnArrival,
+    // rerouting and heading from the SDK. It still runs outside navigation,
+    // where the app genuinely needs its own fixes.
+    // `!arrivalDetected` matters as much as `!isGoogleNavigating` here.
+    //
+    // Navigation now ends at arrival, which flips isGoogleNavigating false —
+    // and without this guard that alone would wake this legacy watcher up on
+    // the check-in screen: a second GPS consumer, turn-by-turn instructions
+    // recomputed from a finished route, and the app speaking directions at a
+    // rider who has already parked. The trip is over; nothing here should run.
+    if (
+      !isGoogleNavigating &&
+      !arrivalDetected &&
+      ['en_route', 'navigating', 'arriving'].includes(step) &&
+      selectedSpotId
+    ) {
       const spot = spots.find(s => s.id === selectedSpotId);
       if (!spot) return;
 
@@ -1882,8 +1917,66 @@ export default function FinderDashboard() {
    * with a null waypoint gives the rider a live map that never starts guiding
    * and never explains why.
    */
+  // ── Pre-warm the route at booking confirmation ───────────────
+  //
+  // Computing a route is a network round-trip, and it only begins when the
+  // destination reaches the SDK. Doing that when the navigation screen opens
+  // meant the rider watched a blank banner while Google worked. Sending it at
+  // booking confirmation means the route is computed while they finish paying,
+  // so guidance appears almost immediately.
+  //
+  // Confirmation, not spot selection: Navigation SDK bills per destination sent
+  // to it, so pre-warming on every spot someone merely looks at would charge
+  // for browsing. Here it only ever fires for a booking that is going ahead.
+  //
+  // Guidance is NOT started — only the route is built.
+  const { navigationController: googleNavController } = useGoogleNav();
+  useEffect(() => {
+    if (step !== 'booking_confirm' || !selectedSpotId) return;
+    const spot = spots.find(s => s.id === selectedSpotId);
+    if (!spot) return;
+    prepareDestination(
+      googleNavController,
+      { lat: spot.lat, lng: spot.lng, title: spot.title },
+      {
+        routingOptions: {
+          travelMode: TravelMode.TWO_WHEELER,
+          avoidFerries: true,
+          avoidTolls: false,
+        },
+        // MUST match GoogleNavigation's options exactly. When the pre-warm
+        // succeeds, navigation skips its own setDestination — so anything set
+        // only there would silently never apply. That includes Google's red
+        // destination pin, which would have gone missing on precisely the
+        // journeys this optimisation succeeds on.
+        displayOptions: { showDestinationMarkers: true },
+      }
+    );
+  }, [step, selectedSpotId, spots, googleNavController]);
+
+  // NAVIGATION ENDS AT ARRIVAL — including the navigation VIEW.
+  //
+  // This used to stay true after the rider arrived, so the screen was still
+  // Google's NavigationView long after the trip was over. That is the whole
+  // reason the arrival screen kept breaking in new ways:
+  //
+  //   * Guidance had been stopped, so nothing owned the camera any more and no
+  //     destination was left to frame — the SDK fell back to lat 0, lng 0,
+  //     zoom 0 and showed the rider the Atlantic Ocean.
+  //   * Google's own "Re-center" button and navigation chrome stayed on a
+  //     screen that is not navigation, which is what made it look scattered.
+  //   * Its layout is built for driving (full-bleed map, chrome at both
+  //     edges), not for a check-in card.
+  //
+  // Dropping out of navigation on arrival hands the screen to the browsing
+  // map, which already positions its camera on the rider, covers itself until
+  // it has done so, and carries no driving chrome. It also lets the app's own
+  // GPS watcher resume, which matters because Google stops feeding positions
+  // once guidance is stopped.
   const isGoogleNavigating =
-    ['en_route', 'navigating', 'arriving'].includes(step) && !!selectedSpotId;
+    ['en_route', 'navigating', 'arriving'].includes(step) &&
+    !!selectedSpotId &&
+    !arrivalDetected;
 
   // Mirrored into a ref so the GPS watcher's closure can read it — that
   // callback is created once and never sees updated state.
@@ -2805,6 +2898,63 @@ export default function FinderDashboard() {
               }
               muted={isMuted}
               onArrive={handleGoogleArrival}
+              /* Google's fixes are road-snapped, so this is a BETTER position
+               * than our own watcher produced — it is where the rider actually
+               * is on the road, not a raw sample that drifts against buildings.
+               * Feeding it back keeps bookings and distance current while our
+               * watcher is paused. */
+              onLocation={(loc) => {
+                setUserLocation(loc);
+
+                // ARRIVAL BACKSTOP, on Google's own road-snapped fixes.
+                //
+                // Stopping our GPS watcher during guidance also removed the
+                // geofence that used to detect arrival, leaving Google's event
+                // as the only path. That event is the better detector, but it
+                // has never fired in production and arrival gates check-in,
+                // which gates payment — not a single point of failure worth
+                // accepting while the SDK is still Beta.
+                //
+                // This costs nothing: it reuses positions Google is already
+                // sending us, so there is no second GPS consumer and none of
+                // the drift that caused.
+                const spot = selectedSpotId ? spots.find(x => x.id === selectedSpotId) : null;
+                if (!spot || arrivalDetected) return;
+                const dLat = (loc.lat - spot.lat) * 110540;
+                const dLng = (loc.lng - spot.lng) * 111320 * Math.cos((loc.lat * Math.PI) / 180);
+                const metres = Math.sqrt(dLat * dLat + dLng * dLng);
+                // Two consecutive fixes inside 30m, OR one fix and a short
+                // wait.
+                //
+                // "Two consecutive fixes" alone had a hole that swallowed
+                // check-in entirely: location updates are driven by MOVEMENT,
+                // and a rider who has just parked stops moving. The first fix
+                // inside the radius arrives, the second never does, the counter
+                // sits at 1 forever — and because arrival gates check-in, which
+                // gates payment, the whole booking stalls on a screen with no
+                // button on it. That is exactly the "no Check In button" case.
+                //
+                // So the second fix is now only the FAST path. Once inside the
+                // radius a timer also runs, and standing still for a few
+                // seconds counts as arriving — which is, after all, what
+                // parking is. Leaving the radius cancels it, so a rider merely
+                // passing the spot still does not check in.
+                if (metres <= 30) {
+                  googleArrivalHits.current += 1;
+                  if (googleArrivalHits.current >= 2) {
+                    if (arrivalTimer.current) { clearTimeout(arrivalTimer.current); arrivalTimer.current = null; }
+                    handleGoogleArrival();
+                  } else if (!arrivalTimer.current) {
+                    arrivalTimer.current = setTimeout(() => {
+                      arrivalTimer.current = null;
+                      handleGoogleArrival();
+                    }, 6000);
+                  }
+                } else {
+                  googleArrivalHits.current = 0;
+                  if (arrivalTimer.current) { clearTimeout(arrivalTimer.current); arrivalTimer.current = null; }
+                }
+              }}
               /* No onExit: the app's own back control (repositioned above
                * Google's footer during guidance) already owns leaving
                * navigation, including the confirmation prompt and the full
@@ -3018,7 +3168,14 @@ export default function FinderDashboard() {
             // partly hidden behind it, obscuring the one word that tells the
             // rider where they are being sent. Google keeps that whole banner
             // clear of controls for the same reason.
-            ...(isGoogleNavigating
+            //
+            // ONCE ARRIVED, BACK TO THE TOP. Arrival stops guidance, so
+            // Google's instruction banner is gone and the top-left is empty —
+            // while this button, still parked at the mid-screen offset that
+            // cleared that banner, ended up sitting on the corner of the
+            // "You have arrived" card. Low is only correct while there is
+            // something above it to avoid.
+            ...(isGoogleNavigating && !arrivalDetected
               ? { top: Platform.OS === 'ios' ? 210 : 196, left: 16 }
               : { top: Platform.OS === 'ios' ? 58 : 38, left: 16 }),
             zIndex: 99999,
@@ -3103,7 +3260,7 @@ export default function FinderDashboard() {
        (arrivalDetected || !isGoogleNavigating) && (
         arrivalDetected ? (
           /* ── Arrival banner with Check In button ── */
-          <View style={{ position: 'absolute', top: 50, left: 16, right: 16, backgroundColor: '#0f172a', borderRadius: 24, padding: 20, alignItems: 'center', shadowColor: '#10b981', shadowOpacity: 0.4, shadowRadius: 20, zIndex: 1000, borderWidth: 1.5, borderColor: 'rgba(16,185,129,0.4)' }}>
+          <View style={{ position: 'absolute', top: Platform.OS === 'ios' ? 108 : 88, left: 16, right: 16, backgroundColor: '#0f172a', borderRadius: 24, padding: 20, alignItems: 'center', shadowColor: '#10b981', shadowOpacity: 0.4, shadowRadius: 20, zIndex: 1000, borderWidth: 1.5, borderColor: 'rgba(16,185,129,0.4)' }}>
             <Text style={{ fontSize: 28, marginBottom: 8 }}>🎉</Text>
             <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900', marginBottom: 4 }}>You have arrived!</Text>
             <Text style={{ color: '#94a3b8', fontSize: 13, fontWeight: '500', marginBottom: 16 }} numberOfLines={1}>{spots.find(s => s.id === selectedSpotId)?.title || 'Parking Spot'}</Text>

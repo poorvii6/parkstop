@@ -22,7 +22,7 @@
  * know that navigation changed at all.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Platform, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   NavigationView,
@@ -34,7 +34,7 @@ import {
   type ArrivalEvent,
   type Location as NavLocation,
 } from '@googlemaps/react-native-navigation-sdk';
-import { ensureNavSession } from '../utils/navSession';
+import { ensureNavSession, isDestinationPrepared, clearPreparedDestination } from '../utils/navSession';
 
 type Props = {
   /** Where the rider is going — the booked parking spot. */
@@ -111,37 +111,56 @@ export default function GoogleNavigation({
   const [ready, setReady] = useState(false);
 
   /**
-   * Size taken from the WINDOW, not from measuring our own container.
+   * MEASURE THE CONTAINER, THEN FILL IT EXACTLY.
    *
-   * Google's navigation chrome is laid out once, when the native view is
-   * created, against the size it has at that instant — and never re-laid-out
-   * afterwards. Measuring the container with onLayout could not work: mounting
-   * the navigation view INTO that container changes the container's layout, so
-   * Google measured one geometry and then received another. The symptom was an
-   * empty banner at the top with the instruction stranded at the bottom, and it
-   * came and went depending on which frame won.
+   * This replaces an earlier approach that derived the size from
+   * useWindowDimensions minus the safe-area insets, with extra padding on the
+   * container. That produced the blank strip along the bottom of the screen,
+   * and it did so for three compounding reasons:
    *
-   * Window dimensions are known before anything mounts and do not change except
-   * on rotation, which useWindowDimensions reports. Subtracting the insets
-   * gives exactly the space this view occupies, with no measurement race.
+   *  1. The padding IS the strip. `paddingBottom: insets.bottom + clearance`
+   *     reserves space inside this view that the map is not allowed to draw
+   *     into, and the backdrop colour paints it. Removing only the clearance
+   *     left the inset behind — a smaller strip, but the same strip.
+   *
+   *  2. The top inset was applied TWICE. The finder already wraps this screen
+   *     in <SafeAreaView edges={['top']}>, so the container handed to us has
+   *     already been pushed below the status bar; padding by insets.top again
+   *     subtracted it a second time.
+   *
+   *  3. `useWindowDimensions().height` is not this view's height. On Android it
+   *     does not include the system navigation bar, while `insets.bottom` still
+   *     reports one — so the arithmetic subtracted a bar that was never in the
+   *     number to begin with.
+   *
+   * Measuring removes all three: whatever box this component is given, the
+   * navigation view is exactly that size, with no padding and no assumptions
+   * about who inset what.
+   *
+   * The original objection to measuring was a race — mounting the view changed
+   * the container it was being measured against. That is avoided here by giving
+   * the wrapper no padding and positioning the navigation view absolutely, so
+   * mounting it cannot alter the wrapper's layout. Google still receives an
+   * explicit pixel size, which is its actual requirement.
+   *
+   * WHY THE INSETS ARE BACK — AND WHY THEY NO LONGER SHOW
+   * -----------------------------------------------------
+   * Removing the padding outright fixed the blank strip but broke the chrome:
+   * the SDK has no padding prop of its own (only *Enabled booleans), so the
+   * container really is the only way to keep Google's banner out from under the
+   * status bar and its ETA card off the navigation buttons. Without it the
+   * banner was clipped by the clock and the ETA card sat behind the back button.
+   *
+   * The insets are therefore restored, but WITHOUT the extra clearance and,
+   * critically, on an OUTER view while the navigation view is measured against
+   * an INNER one. That is the difference between this and the version that
+   * produced the strip: each padded edge is now exactly the size of the system
+   * bar that covers it, so the bar is drawn over it and nothing shows. The old
+   * code added 34px on top of the inset and sized the view from window
+   * dimensions that did not match, so the reserved space was visibly larger
+   * than the bar — a band of bare backdrop above the buttons.
    */
-  const win = useWindowDimensions();
-
-  /**
-   * Extra clearance under Google's ETA bar, on top of the system inset.
-   *
-   * The inset alone stops the bar sitting UNDER the gesture indicator, but it
-   * still ends up flush against it — close enough that the arrival time reads
-   * as part of the system UI rather than the app. A little breathing room lifts
-   * it clear, which is how Google Maps itself frames that card.
-   */
-  const BOTTOM_CLEARANCE = 14;
-
-  const navWidth = win.width;
-  const navHeight = Math.max(
-    1,
-    win.height - insets.top - insets.bottom - BOTTOM_CLEARANCE
-  );
+  const [box, setBox] = useState<{ w: number; h: number } | null>(null);
 
   // Guards against re-running the whole start sequence. `destination` is an
   // object literal from the finder's render, so it is a new reference on every
@@ -202,7 +221,7 @@ export default function GoogleNavigation({
   // ── Start guidance ───────────────────────────────────────────
   const start = useCallback(async () => {
     if (!destination) return;
-    const key = `${destination.lat.toFixed(6)},${destination.lng.toFixed(6)}`;
+    const key = `${destination.lat.toFixed(6)},${destination.lng.toFixed(6)}`; // matches destKey()
     if (startedFor.current === key) return;
     startedFor.current = key;
     setError(null);
@@ -216,6 +235,15 @@ export default function GoogleNavigation({
       if (status !== NavigationSessionStatus.OK) {
         startedFor.current = null;
         setError(describeSessionFailure(status));
+        return;
+      }
+
+      // Already computed during booking confirmation? Then skip straight to
+      // guidance — this is the whole point of the pre-warm, and it removes the
+      // network round-trip the rider used to watch.
+      if (isDestinationPrepared(key)) {
+        await navigationController.startGuidance();
+        if (mounted.current) setError(null);
         return;
       }
 
@@ -236,10 +264,13 @@ export default function GoogleNavigation({
             avoidTolls: false,
           },
           displayOptions: {
-            // The spot already has ParkStop's own marker on the map behind
-            // navigation; Google adding a second pin on top of it just reads
-            // as a duplicate.
-            showDestinationMarkers: false,
+            // Google's red destination pin, ON.
+            //
+            // I turned this off originally to avoid a duplicate with ParkStop's
+            // own marker — but our map is unmounted during guidance, so there
+            // was no other pin and the rider had nothing marking where they
+            // were actually going. Google Maps always shows the destination.
+            showDestinationMarkers: true,
           },
         }
       );
@@ -307,6 +338,10 @@ export default function GoogleNavigation({
       // turns after the rider has parked and moved on to check-in.
       navigationController.stopGuidance().catch(() => {});
       navigationController.clearDestinations().catch(() => {});
+      // The SDK no longer holds that destination, so the pre-warm record must
+      // not claim it does — otherwise the next trip skips setDestination and
+      // starts guidance with nothing to guide along.
+      clearPreparedDestination();
     };
   }, [navigationController]);
 
@@ -319,34 +354,52 @@ export default function GoogleNavigation({
   //
   // So: measure first, then mount with explicit pixel dimensions.
   return (
-    /* Inset by the system bars.
+    /* NO PADDING. The map fills this view edge to edge.
      *
-     * Google's chrome draws to the very edges of whatever view it is given, so
-     * on a phone with a status bar and a gesture bar the instruction banner
-     * sits under the clock and the ETA bar under the home indicator. The SDK
-     * has no padding prop for its chrome — mapPadding moves the MAP, not the
-     * UI — so the container itself is inset instead.
+     * Any padding here is, by definition, a band the map cannot draw into —
+     * which is precisely the blank strip that kept appearing under the map.
+     * The status bar is already handled by the finder's SafeAreaView, and
+     * Google's own chrome floats above the map rather than being clipped by
+     * it, which is how Google Maps itself is laid out.
      *
-     * The dark background matters: the inset strips are outside the map, and
-     * left unpainted they show whatever is behind, which reads as the map
-     * having come loose from the screen. */
+     * The dark background still matters: it is what shows for the one frame
+     * between measuring and mounting, and it matches the app rather than
+     * flashing white. */
     <View
       style={[
         styles.fill,
         styles.insetBackdrop,
-        { paddingTop: insets.top, paddingBottom: insets.bottom + BOTTOM_CLEARANCE },
+        // Exactly the system bars, nothing more. Each padded edge ends up
+        // underneath the bar that covers it, so it is never visible as a band.
+        { paddingTop: insets.top, paddingBottom: insets.bottom },
         style,
       ]}
     >
+    <View
+      style={styles.fill}
+      onLayout={e => {
+        const { width, height } = e.nativeEvent.layout;
+        if (width <= 0 || height <= 0) return;
+        // Only react to REAL changes (rotation, or the first measurement).
+        // Re-setting an identical size would remount Google's view and restart
+        // its layout for nothing.
+        setBox(prev =>
+          prev && Math.abs(prev.w - width) < 1 && Math.abs(prev.h - height) < 1
+            ? prev
+            : { w: width, h: height }
+        );
+      }}
+    >
+      {box ? (
       <NavigationView
-        /* The settled pixel size, NOT absoluteFill.
+        /* Absolutely positioned at the measured size.
          *
-         * absoluteFill resolves against the parent's padding box, so with the
-         * safe-area padding applied the view Google measured did not match the
-         * space it was actually given. Explicit dimensions from the settled
-         * layout are unambiguous: this is exactly how big the view is, and it
-         * will not change under Google after creation. */
-        style={{ width: navWidth, height: navHeight }}
+         * Absolute is what makes measuring safe: this view cannot influence
+         * the layout of the container it was measured from, so there is no
+         * feedback loop between mounting and measuring. Google still gets the
+         * explicit pixel size it needs, and it is now the size this component
+         * was actually given rather than a number derived from the window. */
+        style={{ position: 'absolute', left: 0, top: 0, width: box.w, height: box.h }}
         androidStylingOptions={{
           // ParkStop's indigo, so Google's header reads as part of the app
           // rather than a different product bolted on.
@@ -378,6 +431,7 @@ export default function GoogleNavigation({
         reportIncidentButtonEnabled={false}
         onMapReady={() => setReady(true)}
       />
+      ) : null}
 
       {/* Exit control. Google's own UI has no concept of "leave this app's
           navigation", so ParkStop supplies it. */}
@@ -387,11 +441,22 @@ export default function GoogleNavigation({
         </TouchableOpacity>
       ) : null}
 
+      {/* Google's chrome is blank until it has computed the route, which is a
+        * network round-trip. Left unlabelled that gap reads as the app having
+        * frozen; naming it makes the same delay feel like progress. It clears
+        * the moment guidance is ready. */}
+      {!ready && !error ? (
+        <View style={styles.errorBar} pointerEvents="none">
+          <Text style={styles.errorText}>Starting navigation…</Text>
+        </View>
+      ) : null}
+
       {error ? (
         <View style={styles.errorBar} pointerEvents="box-none">
           <Text style={styles.errorText}>{error}</Text>
         </View>
       ) : null}
+    </View>
     </View>
   );
 }

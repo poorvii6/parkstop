@@ -64,7 +64,30 @@ export function ensureNavSession(
       // resolves immediately for returning riders.
       const accepted = await controller.areTermsAccepted().catch(() => false);
       if (!accepted) {
-        const ok = await controller.showTermsAndConditionsDialog();
+        // Branded, not bare.
+        //
+        // Called with no options, the SDK renders its stock dialog: a generic
+        // title, no company name, and the FULL legal text with most of it
+        // greyed out. On a phone that reads like a system error the rider has
+        // to dismiss, not like a step in ParkStop — which is exactly how it
+        // was being reported.
+        //
+        // `showOnlyDisclaimer` (Android) drops the wall of greyed licence text
+        // and keeps just the driver-awareness message, which is the part that
+        // actually concerns the rider. The colours are ParkStop's own, so the
+        // dialog reads as ours rather than as a Google interstitial.
+        const ok = await controller.showTermsAndConditionsDialog({
+          title: 'Navigate with ParkStop',
+          companyName: 'ParkStop',
+          showOnlyDisclaimer: true,
+          uiParams: {
+            backgroundColor: '#0f172a',
+            titleColor: '#ffffff',
+            mainTextColor: '#cbd5e1',
+            acceptButtonTextColor: '#818cf8',
+            cancelButtonTextColor: '#94a3b8',
+          },
+        });
         if (!ok) return NavigationSessionStatus.TERMS_NOT_ACCEPTED;
       }
       return await controller.init();
@@ -89,4 +112,64 @@ export function ensureNavSession(
 /** Forget the cached session, so the next call retries from scratch. */
 export function resetNavSession(): void {
   sessionPromise = null;
+}
+
+// ── Destination pre-warm ─────────────────────────────────────────
+//
+// Computing a route is a network round-trip, and it only starts when
+// setDestination is called. Doing that when the navigation screen opens means
+// the rider watches a blank banner while Google works. Doing it at booking
+// confirmation instead means the route is computed while they finish paying,
+// and guidance appears almost immediately.
+//
+// This is an OPTIMISATION and must never become a dependency: if the pre-warm
+// is slow, fails, or never ran, navigation sets the destination itself exactly
+// as before. The only thing tracked here is whether a given destination has
+// already been handed to the SDK, so it is not requested twice.
+
+/** Stable key for a destination, at roughly 10cm precision. */
+export const destKey = (lat: number, lng: number) =>
+  `${lat.toFixed(6)},${lng.toFixed(6)}`;
+
+let preparedDest: string | null = null;
+
+/** True when this exact destination has already been sent to the SDK. */
+export function isDestinationPrepared(key: string): boolean {
+  return preparedDest === key;
+}
+
+/** Forget the pre-warm — call when the rider abandons or changes the booking. */
+export function clearPreparedDestination(): void {
+  preparedDest = null;
+}
+
+/**
+ * Send the destination to Google early, WITHOUT starting guidance.
+ *
+ * Guidance deliberately does not start here: the rider is still on the booking
+ * sheet, and hearing "head south" while choosing a slot would be alarming. Only
+ * the route is computed.
+ */
+export async function prepareDestination(
+  controller: NavigationController,
+  dest: { lat: number; lng: number; title?: string },
+  routingOptions: any
+): Promise<void> {
+  const key = destKey(dest.lat, dest.lng);
+  if (preparedDest === key) return;
+  try {
+    const status = await ensureNavSession(controller);
+    if (status !== NavigationSessionStatus.OK) return;
+    const res = await controller.setDestination(
+      { title: dest.title || 'Parking spot', position: { lat: dest.lat, lng: dest.lng } },
+      routingOptions
+    );
+    // Only claim it if Google actually built a route. Marking a failed attempt
+    // as prepared would make navigation skip its own setDestination and start
+    // guidance with no route at all.
+    if (res === 'OK' || res === undefined) preparedDest = key;
+  } catch {
+    // Silent: the rider is mid-booking and this is invisible groundwork.
+    // Navigation will do it properly when it opens.
+  }
 }

@@ -235,14 +235,43 @@ const GoogleBrowseMap = forwardRef((props: Props, ref: any) => {
     let alive = true;
     (async () => {
       try {
-        const last = await Location.getLastKnownPositionAsync();
+        // Bounded, not "whatever was cached". Unqualified, this happily returns
+        // a fix from yesterday in another city and the map opens there —
+        // confidently, in the wrong place. Five minutes and 500m is recent and
+        // close enough to be a useful first frame; worse than that is better
+        // replaced by the real fix below.
+        const last = await Location.getLastKnownPositionAsync({
+          maxAge: 5 * 60 * 1000,
+          requiredAccuracy: 500,
+        });
         if (alive && last?.coords) setSelfLoc({ lat: last.coords.latitude, lng: last.coords.longitude });
-        const cur = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        // HIGH, not Balanced. Balanced is roughly 100m, and in a parking app
+        // that is the difference between the right driveway and the next
+        // street. This fix decides where the map opens and which spots count
+        // as nearby, so it is worth the extra second and battery.
+        const cur = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
         if (alive && cur?.coords) setSelfLoc({ lat: cur.coords.latitude, lng: cur.coords.longitude });
       } catch {}
     })();
     return () => { alive = false; };
   }, []);
+
+  /**
+   * Has the camera been put somewhere real yet?
+   *
+   * This gates a cover over the map, and it exists because of what the SDK
+   * does before we say otherwise: a freshly created MapView starts at lat 0,
+   * lng 0, zoom 0 — the entire planet, centred in the Atlantic off West
+   * Africa. `cam` above is initialised to the India fallback, but that is only
+   * OUR record; nothing is pushed to the native camera until applyCamera runs,
+   * and that cannot run until the map is ready AND a position is known.
+   *
+   * On the browse screen that gap is short. Coming back from navigation it is
+   * not: GoogleNavigation unmounts and this map mounts FRESH, so the rider
+   * arriving at their spot was shown the whole world while the camera caught
+   * up — with the "You have arrived / Check In" card floating over it.
+   */
+  const [positioned, setPositioned] = useState(false);
 
   useEffect(() => {
     if (!mapReady || didInitialPosition.current) return;
@@ -250,14 +279,41 @@ const GoogleBrowseMap = forwardRef((props: Props, ref: any) => {
     if (u) {
       didInitialPosition.current = true;
       applyCamera({ lat: u.lat, lng: u.lng, zoom: USER_MAP_ZOOM, tilt: 0, bearing: 0 }, 0);
+      setPositioned(true);
       return;
     }
     if (props.viewportHint) {
+      // Also mark this as the initial position — without it the effect re-ran
+      // and re-applied the hint on every render until a fix arrived, fighting
+      // any camera move made in between.
+      didInitialPosition.current = true;
       applyCamera(
         { lat: props.viewportHint.lat, lng: props.viewportHint.lng, zoom: HINT_MAP_ZOOM, tilt: 0, bearing: 0 },
         0
       );
+      setPositioned(true);
+      return;
     }
+
+    // Nothing known yet. Rather than leave the planet on screen, fall back to
+    // the country-wide view after a short grace period. `didInitialPosition`
+    // is deliberately NOT set here: this is a placeholder, and a real fix
+    // arriving later must still move the camera to the rider.
+    const t = setTimeout(() => {
+      if (didInitialPosition.current) return;
+      applyCamera(
+        {
+          lat: DEFAULT_MAP_CENTER.lat,
+          lng: DEFAULT_MAP_CENTER.lng,
+          zoom: DEFAULT_MAP_ZOOM,
+          tilt: 0,
+          bearing: 0,
+        },
+        0
+      );
+      setPositioned(true);
+    }, 1200);
+    return () => clearTimeout(t);
   }, [mapReady, props.userLocation, props.viewportHint, selfLoc, applyCamera]);
 
   // ── Follow the rider while browsing ──────────────────────────
@@ -277,13 +333,19 @@ const GoogleBrowseMap = forwardRef((props: Props, ref: any) => {
   // So we watch the camera instead of the fingers: compare where the map
   // actually is against where we last put it. Anything beyond a small tolerance
   // was not us, so it was them.
+  // The compass is fed from this same read, so the poll rate is also the
+  // compass's frame rate. At a flat 700ms the needle updated barely twice a
+  // second: it visibly stepped and lagged behind a two-finger rotate, settling
+  // correct only once the fingers stopped. So while the map is actually turned
+  // or tilted — the only time the compass is on screen — poll fast enough to
+  // look live, and drop back to the slow rate when it is north-up and there is
+  // nothing to animate.
+  const compassVisible = Math.abs(mapBearing) > 0.5 || mapTilt > 0.5;
   useEffect(() => {
     if (!mapReady || !sessionReady) return;
     const iv = setInterval(async () => {
       const c = controller.current;
-      // Skip while we are animating — mid-ease the camera legitimately differs
-      // from the target and would read as a gesture on every frame.
-      if (!c || easer.isEasing()) return;
+      if (!c) return;
       try {
         const pos: any = await c.getCameraPosition();
         const t = pos?.target;
@@ -293,16 +355,42 @@ const GoogleBrowseMap = forwardRef((props: Props, ref: any) => {
         // overlay we cannot position, so it ends up underneath ParkStop's
         // search bar; drawing our own is the only way to guarantee it is
         // reachable.
+        //
+        // Deliberately updated BEFORE the easing check below: during a
+        // programmatic rotate (including the compass's own tap-to-reset) the
+        // camera is easing, and skipping the read froze the needle for the
+        // whole animation — the one moment it most needs to move.
         setMapBearing(pos.bearing ?? 0);
         setMapTilt(pos.tilt ?? 0);
-        // ~11m per 0.0001 degree of latitude. A 30m tolerance sits above GPS
-        // wobble and rounding, below any deliberate pan.
+
+        // Gesture detection only from here. Mid-ease the camera legitimately
+        // differs from the target, which would read as a gesture every frame.
+        if (easer.isEasing()) return;
+
+        // Tolerance scaled to the ZOOM, not a fixed distance.
+        //
+        // A flat 30m was two different bugs at once. Zoomed out it is a few
+        // pixels, so rounding could register as a pan; at street zoom the whole
+        // screen is only 50-150m across, so a deliberate short drag fell under
+        // the threshold, was dismissed as noise, and follow-mode yanked the map
+        // straight back — the map fighting the rider precisely when they were
+        // looking at a specific driveway.
+        //
+        // Metres-per-pixel in Web Mercator, so the threshold is a constant
+        // ~24px of movement at every zoom level. Bounded at both ends so a
+        // wild zoom value cannot make the map either hair-trigger or deaf.
+        const zoomNow = pos.zoom ?? cam.current.zoom;
+        const metresPerPx =
+          (156543.03392 * Math.cos((t.lat * Math.PI) / 180)) / Math.pow(2, zoomNow);
+        const tolM = Math.min(120, Math.max(6, metresPerPx * 24));
+
+        // ~11m per 0.0001 degree of latitude.
         const dLat = (t.lat - cam.current.lat) * 110540;
         const dLng = (t.lng - cam.current.lng) * 111320 * Math.cos((t.lat * Math.PI) / 180);
         const movedM = Math.sqrt(dLat * dLat + dLng * dLng);
-        const zoomed = Math.abs((pos.zoom ?? cam.current.zoom) - cam.current.zoom) > 0.3;
+        const zoomed = Math.abs(zoomNow - cam.current.zoom) > 0.3;
 
-        if (movedM > 30 || zoomed) {
+        if (movedM > tolM || zoomed) {
           // Adopt what the user chose as our new baseline, otherwise the next
           // tick sees the same difference and re-reports it forever.
           cam.current = {
@@ -316,9 +404,13 @@ const GoogleBrowseMap = forwardRef((props: Props, ref: any) => {
           if (propsRef.current.isFollowing) propsRef.current.onMapInteraction?.();
         }
       } catch {}
-    }, 700);
+      // 140ms only while the compass is on screen — fast enough that the needle
+      // tracks a rotate instead of stepping after it. Note this depends on
+      // `compassVisible`, so the interval is rebuilt when the map returns to
+      // north-up and the cost goes away.
+    }, compassVisible ? 140 : 700);
     return () => clearInterval(iv);
-  }, [mapReady, sessionReady, easer]);
+  }, [mapReady, sessionReady, easer, compassVisible]);
 
   // NO auto-resume of following.
   //
@@ -498,8 +590,34 @@ const GoogleBrowseMap = forwardRef((props: Props, ref: any) => {
     props.onRecenter?.();
   };
 
-  const zoomBy = (delta: number) => {
+  const zoomBy = async (delta: number) => {
     lastInteraction.current = Date.now();
+
+    // Step from where the map ACTUALLY is, not from our cached copy.
+    //
+    // `cam.current` only catches up with a pinch when the poll above notices
+    // it, so pinching and then immediately tapping +/- stepped from a stale
+    // level and the map jumped. The same staleness applied to the centre: pan,
+    // then zoom, and it snapped back to the pre-pan position.
+    //
+    // One read costs a few milliseconds and makes the buttons exact whatever
+    // the rider did with their fingers a moment earlier.
+    try {
+      const pos: any = await controller.current?.getCameraPosition();
+      if (pos && Number.isFinite(pos.zoom)) {
+        cam.current = {
+          lat: pos.target?.lat ?? cam.current.lat,
+          lng: pos.target?.lng ?? cam.current.lng,
+          zoom: pos.zoom,
+          tilt: pos.tilt ?? cam.current.tilt,
+          bearing: pos.bearing ?? cam.current.bearing,
+        };
+      }
+    } catch {
+      // Fall back to the cached camera — a slightly stale step is better than
+      // a button that does nothing.
+    }
+
     const next = Math.min(21, Math.max(3, cam.current.zoom + delta));
     applyCamera({ zoom: next }, 220);
   };
@@ -545,7 +663,20 @@ const GoogleBrowseMap = forwardRef((props: Props, ref: any) => {
         // Google Maps app shows while browsing.
         myLocationEnabled
         myLocationButtonEnabled={false}
-        compassEnabled
+        // Google's OWN compass, off.
+        //
+        // The SDK draws it unstyled at the top-left and fades it out on its
+        // own a couple of seconds after the map settles back to north-up. That
+        // is the badge that kept flashing in the corner on launch and again on
+        // the way back from navigation (the map remounts there, coming from a
+        // rotated, tilted navigation camera).
+        //
+        // ParkStop already renders its own compass, bottom-right, in the app's
+        // styling and with a tap target that resets tilt as well as bearing —
+        // see mapCtrlBtn below. Two compasses, one of them Google's default
+        // chrome, is exactly the "system UI bolted on" look we removed
+        // everywhere else.
+        compassEnabled={false}
         mapToolbarEnabled={false}
         zoomControlsEnabled={false}
         buildingsEnabled
@@ -564,6 +695,22 @@ const GoogleBrowseMap = forwardRef((props: Props, ref: any) => {
           }
         }}
       />
+
+      {/* Cover the map until its camera is somewhere real.
+        *
+        * Drawn AFTER the MapView, so it sits on top. Two things hide behind
+        * it: the SDK's initial whole-planet camera, and the offscreen price
+        * pills above, which have to be genuinely on screen at (0,0) to be
+        * capturable on Android and are otherwise only hidden by the map once
+        * the map has painted its first frame.
+        *
+        * pointerEvents none is wrong here — while this is up the map beneath
+        * is showing the wrong place, so taps on it should not reach it. */}
+      {!positioned ? (
+        <View style={[StyleSheet.absoluteFill, styles.placeholder]}>
+          <Text style={styles.placeholderText}>Starting map…</Text>
+        </View>
+      ) : null}
 
       {!props.hideControls ? (
         <>
