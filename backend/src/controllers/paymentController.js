@@ -402,6 +402,31 @@ class PaymentController {
         return res.status(400).json({ success: false, message: 'Booking ID and PaymentIntent ID are required' });
       }
 
+      // Ownership: a finder may only settle their OWN booking. Without this,
+      // any authenticated finder could mark ANY booking paid (and trigger that
+      // spotter's payout) with an arbitrary paymentIntentId.
+      const existing = await prisma.bookings.findUnique({ where: { id: parseInt(bookingId) } });
+      if (!existing) {
+        return res.status(404).json({ success: false, message: 'Booking not found' });
+      }
+      if (existing.user_id !== req.user.id) {
+        return res.status(403).json({ success: false, message: 'Unauthorized access to this booking' });
+      }
+      if (existing.payment_status === 'paid') {
+        return res.json({ success: true, message: 'Payment already recorded' });
+      }
+
+      // Never trust a client-supplied PaymentIntent id: verify it with Stripe,
+      // confirm it actually succeeded and was created for THIS booking.
+      const stripeAdapter = require('../services/payments/StripeAdapter');
+      const intent = await stripeAdapter.retrievePaymentIntent(paymentIntentId);
+      if (!intent || intent.status !== 'succeeded') {
+        return res.status(400).json({ success: false, message: 'Stripe payment not completed' });
+      }
+      if (String(intent.metadata?.booking_id || '') !== String(bookingId)) {
+        return res.status(400).json({ success: false, message: 'Payment does not match this booking' });
+      }
+
       const booking = await prisma.bookings.update({
         where: { id: parseInt(bookingId) },
         data: {
@@ -492,15 +517,35 @@ class PaymentController {
   static async verifyClearDuesPayment(req, res) {
     try {
       const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
-      const isValid = require('../services/payments/RazorpayAdapter').verifyPaymentSignature(
+      const RazorpayAdapter = require('../services/payments/RazorpayAdapter');
+      const isValid = RazorpayAdapter.verifyPaymentSignature(
         razorpay_order_id, razorpay_payment_id, razorpay_signature
       );
       if (!isValid) return res.status(400).json({ success: false, message: 'Invalid payment signature' });
 
-      // Reset balance to 0
+      const user = await prisma.users.findUnique({ where: { id: req.user.id } });
+      if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+      const dues = user.balance < 0 ? Math.abs(Number(user.balance)) : 0;
+      if (dues <= 0) return res.json({ success: true, message: 'No dues to clear' });
+
+      // A valid signature only proves *some* payment happened — not that it was
+      // for THESE dues. Bind it: the order must have been created for clear_dues
+      // by this user, the payment must be captured, and it must cover the dues.
+      const order = await RazorpayAdapter.fetchOrder(razorpay_order_id);
+      const payment = await RazorpayAdapter.fetchPayment(razorpay_payment_id);
+      const paidPaise = Number(payment?.amount || 0);
+      const duesPaise = Math.round(dues * 100);
+      const purposeOk =
+        order?.notes?.purpose === 'clear_dues' &&
+        String(order?.notes?.user_id) === String(req.user.id);
+      if (!payment || payment.status !== 'captured' || !purposeOk || paidPaise < duesPaise) {
+        return res.status(400).json({ success: false, message: 'Payment does not match the outstanding dues' });
+      }
+
+      // Credit exactly the dues that were owed (never more).
       await prisma.users.update({
         where: { id: req.user.id },
-        data: { balance: 0 }
+        data: { balance: { increment: dues } }
       });
 
       res.json({ success: true, message: 'Dues cleared successfully' });
@@ -543,20 +588,35 @@ class PaymentController {
 
   static async confirmWalletTopUp(req, res) {
     try {
-      const { order_id, payment_id, signature, amount } = req.body;
+      const { order_id, payment_id, signature } = req.body;
+      const RazorpayAdapter = require('../services/payments/RazorpayAdapter');
 
-      const isValid = require('../services/payments/RazorpayAdapter').verifyPaymentSignature(order_id, payment_id, signature);
-
+      const isValid = RazorpayAdapter.verifyPaymentSignature(order_id, payment_id, signature);
       if (!isValid) {
         return res.status(400).json({ success: false, message: 'Payment verification failed' });
       }
 
+      // Never trust the client-supplied amount. Fetch the real payment + order
+      // and credit exactly what Razorpay actually captured, for a wallet-top-up
+      // order that belongs to this user. (The old code credited req.body.amount,
+      // so a ₹50 payment could be replayed to claim up to ₹10,000.)
+      const order = await RazorpayAdapter.fetchOrder(order_id);
+      const payment = await RazorpayAdapter.fetchPayment(payment_id);
+      const ownsOrder = String(order?.notes?.user_id) === String(req.user.id);
+      const isTopup =
+        order?.notes?.booking_id === 'wallet_topup' ||
+        order?.notes?.purpose === 'wallet_topup';
+      if (!payment || payment.status !== 'captured' || payment.order_id !== order_id || !ownsOrder || !isTopup) {
+        return res.status(400).json({ success: false, message: 'Payment not captured or does not match a wallet top-up' });
+      }
+
+      const creditRupees = Number(payment.amount) / 100;
       await prisma.users.update({
         where: { id: req.user.id },
-        data: { balance: { increment: parseFloat(amount) } }
+        data: { balance: { increment: creditRupees } }
       });
 
-      res.json({ success: true, message: `₹${amount} added to your wallet successfully` });
+      res.json({ success: true, message: `₹${creditRupees} added to your wallet successfully` });
     } catch (error) {
       logger.error('Wallet confirm error:', error);
       res.status(500).json({ success: false, message: 'Failed to confirm top-up' });

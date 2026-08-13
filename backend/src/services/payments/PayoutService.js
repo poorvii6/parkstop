@@ -355,6 +355,22 @@ class PayoutService {
         return null;
       }
 
+      // Idempotency: never pay the same booking twice. Both the payment-capture
+      // path (PaymentService._finalizeClaimedBooking) and the checkout-settlement
+      // path (BookingSettlementService) can fire for one online booking; without
+      // this guard the spotter is paid twice. A DB unique index on
+      // payouts(booking_id) is the airtight backstop for concurrent callers.
+      const alreadyPaid = await prisma.payouts.findFirst({
+        where: {
+          booking_id: parseInt(bookingId),
+          status: { notIn: ['failed_needs_retry', 'failed_queued'] },
+        },
+      });
+      if (alreadyPaid) {
+        logger.info(`Payout already recorded for booking ${bookingId} (status ${alreadyPaid.status}) — skipping duplicate`);
+        return alreadyPaid;
+      }
+
       const narration = `ParkStop earnings - Booking #${bookingId}`;
 
       // If Spotter has a fund account, do a real payout
