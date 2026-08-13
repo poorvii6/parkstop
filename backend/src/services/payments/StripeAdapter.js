@@ -67,6 +67,20 @@ class StripeAdapter {
   }
 
   /**
+   * RETRIEVE PAYMENT INTENT (server-side verification)
+   * Used by verifyStripePayment to confirm a PaymentIntent actually succeeded
+   * before marking a booking paid — never trust a client-supplied id.
+   */
+  async retrievePaymentIntent(paymentIntentId) {
+    try {
+      return await stripe.paymentIntents.retrieve(paymentIntentId);
+    } catch (error) {
+      logger.error('Stripe Retrieve PaymentIntent Error:', error);
+      return null;
+    }
+  }
+
+  /**
    * PAYOUT TO SPOTTER
    */
   async payout(amount, destinationAccountId, metadata) {
