@@ -371,7 +371,15 @@ export default function GoogleNavigation({
         styles.insetBackdrop,
         // Exactly the system bars, nothing more. Each padded edge ends up
         // underneath the bar that covers it, so it is never visible as a band.
-        { paddingTop: insets.top, paddingBottom: insets.bottom },
+        // A little air under Google's ETA card. The inset alone ends the map
+        // exactly where the system bar starts, so the card's rounded bottom
+        // corners sit flush against the buttons and read as clipped. 12px is
+        // the margin Google Maps itself leaves there.
+        //
+        // Safe to add now in a way it was not before: this component only
+        // renders while guidance is actually running, so this can never be an
+        // empty strip on the check-in screen — Google's card fills it.
+        { paddingTop: insets.top, paddingBottom: insets.bottom + 12 },
         style,
       ]}
     >

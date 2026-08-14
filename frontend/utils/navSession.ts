@@ -80,12 +80,28 @@ export function ensureNavSession(
           title: 'Navigate with ParkStop',
           companyName: 'ParkStop',
           showOnlyDisclaimer: true,
+          // LIGHT, deliberately — this is not a styling preference.
+          //
+          // The SDK exposes exactly five colours: background, title, main text
+          // and the two button labels. Everything else in this dialog — the
+          // "How navigation data is used" headings and the paragraphs under
+          // them — is styled internally by Google for a LIGHT background, and
+          // there is no parameter that reaches it.
+          //
+          // Setting a dark background therefore left most of the text dark grey
+          // on dark navy: technically branded, practically unreadable, on a
+          // consent dialog where the user is being asked to agree to something.
+          //
+          // So the surface stays light, matching the text we cannot recolour,
+          // and ParkStop's identity is carried by the title, the company name
+          // and the indigo accent on the accept button — which is exactly how
+          // Google Maps presents its own version of this dialog.
           uiParams: {
-            backgroundColor: '#0f172a',
-            titleColor: '#ffffff',
-            mainTextColor: '#cbd5e1',
-            acceptButtonTextColor: '#818cf8',
-            cancelButtonTextColor: '#94a3b8',
+            backgroundColor: '#ffffff',
+            titleColor: '#202124',
+            mainTextColor: '#3c4043',
+            acceptButtonTextColor: '#4f46e5',
+            cancelButtonTextColor: '#5f6368',
           },
         });
         if (!ok) return NavigationSessionStatus.TERMS_NOT_ACCEPTED;

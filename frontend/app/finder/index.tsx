@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { View, Text, StyleSheet, Platform, TouchableOpacity, TextInput, Dimensions, Modal, Alert, ScrollView, Linking, Keyboard, ActivityIndicator, BackHandler, AppState, Image, Animated, KeyboardAvoidingView, DeviceEventEmitter } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import MapLibreView from '../../components/MapLibreView';
@@ -27,7 +27,6 @@ import { getDistanceKm } from '../../utils/geo';
 import { BlueprintTheme, BlueprintColors } from '../../constants/BlueprintTheme';
 import apiClient from '../../api/client';
 import { startBackgroundLocation, stopBackgroundLocation, onBackgroundLocation } from '../../services/backgroundLocation';
-import { cacheRouteCorridor, clearOfflinePack } from '../../services/offlineTileCache';
 import { saveLastLocation, loadLastLocation } from '../../services/lastLocation';
 import { pickBestRoute, otherRoutes } from '../../utils/routeSelection';
 import { Spot, PricingBreakdown, AppStep } from '../../types/finder';
@@ -149,6 +148,10 @@ export default function FinderDashboard() {
 
 
   const { isInPipMode: isInPip } = ExpoPip.useIsInPip();
+  // Real status-bar height for this device, rather than a hard-coded guess.
+  // Used to sit the arrival card just under the status bar on any phone —
+  // notch, punch-hole or neither.
+  const insets = useSafeAreaInsets();
 
   // Ensure the backend's active role matches this dashboard so Finder actions
   // (price calculation, booking, cancel, etc.) are authorized. Finding requires
@@ -420,10 +423,10 @@ export default function FinderDashboard() {
         setStep('en_route');
         // Phase 3: Start background location + cache tiles
         startBackgroundLocation().catch(() => {});
-        if (routeCoords.length > 2) {
-          const styleUrl = mapStyleConfig.provider === 'ola' ? mapStyleConfig.styleUrl : undefined;
-          cacheRouteCorridor(routeCoords, styleUrl).catch(() => {});
-        }
+        // Offline tile caching removed. It downloaded MapLibre offline packs
+        // for a MapLibre map this app no longer renders — mobile data, storage
+        // and battery spent on tiles that could never be displayed. Google's
+        // SDK manages its own tile cache.
       }
       return;
     }
@@ -1060,7 +1063,6 @@ export default function FinderDashboard() {
         }
         removeBgListener();
         stopBackgroundLocation().catch(() => {});
-        clearOfflinePack().catch(() => {});
         Speech.stop();
       };
     } else if (!['arriving'].includes(step)) {
@@ -1978,6 +1980,16 @@ export default function FinderDashboard() {
     !!selectedSpotId &&
     !arrivalDetected;
 
+  // Is the arrival card on screen? The back control lives INSIDE that card
+  // when it is, so the floating one must stand down — otherwise there are two
+  // back buttons a few pixels apart.
+  //
+  // Deliberately not just `arrivalDetected`: that stays true through
+  // active_parking, checkout and payment, and keying off it alone would strip
+  // the back button from all of those screens.
+  const arrivalCardVisible =
+    ['navigating', 'en_route', 'arriving'].includes(step) && !isInPip && arrivalDetected;
+
   // Mirrored into a ref so the GPS watcher's closure can read it — that
   // callback is created once and never sees updated state.
   useEffect(() => { isGoogleNavRef.current = isGoogleNavigating; }, [isGoogleNavigating]);
@@ -2483,6 +2495,56 @@ export default function FinderDashboard() {
     finally { setIsLoading(false); }
   };
 
+  // ONE back action, used by both the floating control and the copy that sits
+  // inside the arrival card. Extracted rather than duplicated: this decides
+  // what 'back' means for every step of the flow, and two drifting copies of
+  // that is how a back button quietly stops tearing navigation down properly.
+  const handleBackPress = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    if (step === 'home' && searchedPlace !== null) {
+      setSearchedPlace(null);
+      setSearchQuery('');
+    } else if (['en_route', 'navigating', 'arriving'].includes(step)) {
+      Alert.alert('Exit Navigation', 'Are you sure you want to exit navigation?', [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Yes, Exit', onPress: () => {
+            setStep('home');
+            setSelectedSpotId(null);
+            setRouteCoords([]);
+            setSimulatedLocation(null);
+            setArrivalDetected(false);
+            setCurrentInstruction({ turn: '', street: '', icon: '' });
+            setTrafficSegments([]);
+            setSpeedLimit(null);
+            setLaneGuidance([]);
+            if (userLocation) {
+              fetchNearbySpots(userLocation.lat, userLocation.lng);
+              if (mapRef.current) {
+        mapRef.current.animateCamera({
+          center: { latitude: userLocation.lat, longitude: userLocation.lng },
+          zoom: 15
+        }, { duration: 1000 });
+              }
+            }
+          }
+        }
+      ]);
+    } else if (['spot_booking', 'booking_confirm'].includes(step)) {
+      setStep('home');
+      setSelectedSpotId(null);
+      setSlotData([]);
+    } else if (step === 'active_parking') {
+      // Stay on active parking — use End Session button
+    } else if (step === 'checkout_verification') {
+      setStep('active_parking');
+    } else if (step === 'payment') {
+      setStep('checkout_verification');
+    } else {
+      setStep('home');
+    }
+  };
+
   return (
     <SafeAreaView style={[BlueprintTheme.container, { backgroundColor: '#000' }]} edges={['top']}>
       
@@ -2941,14 +3003,27 @@ export default function FinderDashboard() {
                 // passing the spot still does not check in.
                 if (metres <= 30) {
                   googleArrivalHits.current += 1;
-                  if (googleArrivalHits.current >= 2) {
+                  // 10m is inside GPS's own margin of error — at that range the
+                  // rider IS at the spot, so waiting for confirmation only adds
+                  // a delay before the Check In card appears. This is the case
+                  // that should feel instant, and normally is: the last fix
+                  // before someone stops is the one that lands here.
+                  if (metres <= 10 || googleArrivalHits.current >= 2) {
                     if (arrivalTimer.current) { clearTimeout(arrivalTimer.current); arrivalTimer.current = null; }
                     handleGoogleArrival();
                   } else if (!arrivalTimer.current) {
+                    // 10-30m out, on a single fix. Short dwell rather than a
+                    // long one: if they are driving past, the next fix lands
+                    // outside 30m and cancels this; if they have parked, no
+                    // further fix is coming and this is what confirms it.
+                    //
+                    // Deliberately not shorter. Arrival now also ENDS guidance,
+                    // so firing it early would cut navigation off mid-approach
+                    // — the cost of being wrong is much higher than a 2.5s wait.
                     arrivalTimer.current = setTimeout(() => {
                       arrivalTimer.current = null;
                       handleGoogleArrival();
-                    }, 6000);
+                    }, 2500);
                   }
                 } else {
                   googleArrivalHits.current = 0;
@@ -3154,7 +3229,24 @@ export default function FinderDashboard() {
       {/* Google Maps Style Instruction Banner */}
 
       {/* FLOATING BACK/HOME BUTTON — rendered AFTER map so it sits on top of WebView */}
-      {['spot_booking', 'en_route', 'navigating', 'arriving', 'booking_confirm', 'active_parking', 'checkout_verification', 'awaiting_owner', 'payment'].includes(step) && (
+      {/* NOT DURING GUIDANCE.
+        *
+        * Google Maps has no floating back arrow while navigating, and this was
+        * the only ParkStop element on that screen — so it was also the only
+        * thing making it look like something other than Google Maps.
+        *
+        * It also had nowhere safe to live. Google's chrome CHANGES SIZE as you
+        * drive: a one-line instruction, a two-line one, and a "Then" card for
+        * the following turn all stack downward from the top. Any fixed offset
+        * is either too low (an obvious hole under a one-line banner) or too
+        * high (sitting on top of the "Then" card, which is what happened). The
+        * SDK exposes no way to ask how tall its header currently is, so there
+        * is no offset that is correct in every frame.
+        *
+        * Exit is unaffected: the hardware back button already prompts
+        * "Exit Navigation" and tears the trip down, which is exactly how
+        * Google Maps behaves. */}
+      {['spot_booking', 'en_route', 'navigating', 'arriving', 'booking_confirm', 'active_parking', 'checkout_verification', 'awaiting_owner', 'payment'].includes(step) && !arrivalCardVisible && !isGoogleNavigating && (
         <TouchableOpacity
           style={{
             position: 'absolute',
@@ -3175,9 +3267,16 @@ export default function FinderDashboard() {
             // cleared that banner, ended up sitting on the corner of the
             // "You have arrived" card. Low is only correct while there is
             // something above it to avoid.
+            //
+            // Measured from the real status bar rather than a hard-coded
+            // guess, so it lands the same distance under Google's banner on
+            // any phone. 132 clears the primary instruction card; the old
+            // fixed 196 was tuned to clear a two-line banner as well and left
+            // an obvious hole between the banner and this button on the far
+            // more common one-line case.
             ...(isGoogleNavigating && !arrivalDetected
-              ? { top: Platform.OS === 'ios' ? 210 : 196, left: 16 }
-              : { top: Platform.OS === 'ios' ? 58 : 38, left: 16 }),
+              ? { top: insets.top + 132, left: 16 }
+              : { top: insets.top + 8, left: 16 }),
             zIndex: 99999,
             // A white circular control on the map, matching Google's own
             // floating buttons, now that it sits on the map rather than on the
@@ -3195,51 +3294,7 @@ export default function FinderDashboard() {
             shadowRadius: 10,
             elevation: 50,
           }}
-          onPress={() => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-            if (step === 'home' && searchedPlace !== null) {
-              setSearchedPlace(null);
-              setSearchQuery('');
-            } else if (['en_route', 'navigating', 'arriving'].includes(step)) {
-              Alert.alert('Exit Navigation', 'Are you sure you want to exit navigation?', [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                  text: 'Yes, Exit', onPress: () => {
-                    setStep('home');
-                    setSelectedSpotId(null);
-                    setRouteCoords([]);
-                    setSimulatedLocation(null);
-                    setArrivalDetected(false);
-                    setCurrentInstruction({ turn: '', street: '', icon: '' });
-                    setTrafficSegments([]);
-                    setSpeedLimit(null);
-                    setLaneGuidance([]);
-                    if (userLocation) {
-                      fetchNearbySpots(userLocation.lat, userLocation.lng);
-                      if (mapRef.current) {
-                        mapRef.current.animateCamera({
-                          center: { latitude: userLocation.lat, longitude: userLocation.lng },
-                          zoom: 15
-                        }, { duration: 1000 });
-                      }
-                    }
-                  }
-                }
-              ]);
-            } else if (['spot_booking', 'booking_confirm'].includes(step)) {
-              setStep('home');
-              setSelectedSpotId(null);
-              setSlotData([]);
-            } else if (step === 'active_parking') {
-              // Stay on active parking — use End Session button
-            } else if (step === 'checkout_verification') {
-              setStep('active_parking');
-            } else if (step === 'payment') {
-              setStep('checkout_verification');
-            } else {
-              setStep('home');
-            }
-          }}
+          onPress={handleBackPress}
         >
           {/* Dark glyph on the white navigation button, white on the dark one
               used elsewhere — otherwise the arrow disappears into its own
@@ -3260,7 +3315,18 @@ export default function FinderDashboard() {
        (arrivalDetected || !isGoogleNavigating) && (
         arrivalDetected ? (
           /* ── Arrival banner with Check In button ── */
-          <View style={{ position: 'absolute', top: Platform.OS === 'ios' ? 108 : 88, left: 16, right: 16, backgroundColor: '#0f172a', borderRadius: 24, padding: 20, alignItems: 'center', shadowColor: '#10b981', shadowOpacity: 0.4, shadowRadius: 20, zIndex: 1000, borderWidth: 1.5, borderColor: 'rgba(16,185,129,0.4)' }}>
+          <View style={{ position: 'absolute', top: insets.top + 8, left: 16, right: 16, backgroundColor: '#0f172a', borderRadius: 24, padding: 20, alignItems: 'center', shadowColor: '#10b981', shadowOpacity: 0.4, shadowRadius: 20, zIndex: 1000, borderWidth: 1.5, borderColor: 'rgba(16,185,129,0.4)' }}>
+            {/* Back, ON the card rather than floating over the map beside it.
+                A control with nothing to belong to reads as debris; sitting in
+                the card's own corner it reads as part of the card. */}
+            <TouchableOpacity
+              onPress={handleBackPress}
+              activeOpacity={0.7}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              style={{ position: 'absolute', top: 12, left: 12, width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.07)' }}
+            >
+              <Ionicons name="arrow-back" size={19} color="#94a3b8" />
+            </TouchableOpacity>
             <Text style={{ fontSize: 28, marginBottom: 8 }}>🎉</Text>
             <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900', marginBottom: 4 }}>You have arrived!</Text>
             <Text style={{ color: '#94a3b8', fontSize: 13, fontWeight: '500', marginBottom: 16 }} numberOfLines={1}>{spots.find(s => s.id === selectedSpotId)?.title || 'Parking Spot'}</Text>

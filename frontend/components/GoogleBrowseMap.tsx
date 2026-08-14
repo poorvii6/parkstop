@@ -139,6 +139,16 @@ const GoogleBrowseMap = forwardRef((props: Props, ref: any) => {
   }, []);
 
   const [everActive, setEverActive] = useState(AppState.currentState === 'active');
+  // Separate from `everActive`, which latches on at the first foreground and
+  // never goes back. This tracks the CURRENT state so the camera poll below can
+  // stop while the app is backgrounded — it was otherwise running every 700ms
+  // indefinitely, waking the JS thread and the native map for a screen nobody
+  // is looking at.
+  const [appActive, setAppActive] = useState(AppState.currentState === 'active');
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', s => setAppActive(s === 'active'));
+    return () => sub.remove();
+  }, []);
   useEffect(() => {
     if (everActive) return;
     const sub = AppState.addEventListener('change', s => {
@@ -342,7 +352,7 @@ const GoogleBrowseMap = forwardRef((props: Props, ref: any) => {
   // nothing to animate.
   const compassVisible = Math.abs(mapBearing) > 0.5 || mapTilt > 0.5;
   useEffect(() => {
-    if (!mapReady || !sessionReady) return;
+    if (!mapReady || !sessionReady || !appActive) return;
     const iv = setInterval(async () => {
       const c = controller.current;
       if (!c) return;
@@ -410,7 +420,7 @@ const GoogleBrowseMap = forwardRef((props: Props, ref: any) => {
       // north-up and the cost goes away.
     }, compassVisible ? 140 : 700);
     return () => clearInterval(iv);
-  }, [mapReady, sessionReady, easer, compassVisible]);
+  }, [mapReady, sessionReady, easer, compassVisible, appActive]);
 
   // NO auto-resume of following.
   //
