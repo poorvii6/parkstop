@@ -143,6 +143,17 @@ export default function FinderDashboard() {
   const lastHapticTurn = useRef('');
   const routeStepsRef = useRef<any[]>([]);
   const ignoreNextQueryChange = useRef(false);
+  /**
+   * True from the moment a search is SUBMITTED until the user types again.
+   *
+   * `ignoreNextQueryChange` cannot cover this case. It is only consulted when
+   * the autocomplete effect RE-RUNS, and submitting does not change
+   * searchQuery — so the effect never re-runs, its already-scheduled debounce
+   * timer is never cancelled, and that timer lands a second later and refills
+   * the dropdown over the map. That is why the list stayed up after pressing
+   * search: the results arriving were requested before the search, not after.
+   */
+  const searchSubmitted = useRef(false);
   const [chatOpen, setChatOpen] = useState(false);
 
 
@@ -1621,7 +1632,11 @@ export default function FinderDashboard() {
     if (!searchQuery.trim()) return;
     setIsSearching(true);
     ignoreNextQueryChange.current = true;
+    // Suppress the in-flight debounce as well as clearing what is on screen —
+    // otherwise the request already in the air repopulates the list.
+    searchSubmitted.current = true;
     setSuggestions([]);
+    setSearchFocused(false);
     Keyboard.dismiss();
 
     // Support searching by Latitude, Longitude (e.g. 37.7749, -122.4194)
@@ -1748,6 +1763,7 @@ export default function FinderDashboard() {
       ignoreNextQueryChange.current = false;
       return;
     }
+    if (searchSubmitted.current) return;
     if (searchQuery.length < 2) {
       setSuggestions([]);
       return;
@@ -1777,6 +1793,11 @@ export default function FinderDashboard() {
               isInternal: true,
               spotId: s.id
             }));
+          // Re-checked HERE, not just before scheduling: this callback was
+          // queued while the user was still typing, and by the time it
+          // resolves they may have submitted. Applying results now would put
+          // the dropdown back over the pin they just dropped.
+          if (searchSubmitted.current) return;
           setSuggestions([...internalMatches, ...results]);
         }
       } catch (e) {
@@ -2648,14 +2669,19 @@ export default function FinderDashboard() {
                 placeholder="Search for a destination..."
                 placeholderTextColor="#94a3b8"
                 value={searchQuery}
-                onChangeText={setSearchQuery}
+                onChangeText={(t) => {
+                  // Typing means they are searching again, so suggestions are
+                  // wanted once more.
+                  searchSubmitted.current = false;
+                  setSearchQuery(t);
+                }}
                 onSubmitEditing={handleSearch}
                 onFocus={() => setSearchFocused(true)}
                 onBlur={() => setTimeout(() => setSearchFocused(false), 200)}
                 returnKeyType="search"
               />
               {searchQuery.length > 0 && (
-                <TouchableOpacity onPress={() => { setSearchQuery(''); setSuggestions([]); setSearchedPlace(null); setSearchFocused(false); }} style={{ padding: 6, marginRight: 6 }}>
+                <TouchableOpacity onPress={() => { searchSubmitted.current = false; setSearchQuery(''); setSuggestions([]); setSearchedPlace(null); setSearchFocused(false); }} style={{ padding: 6, marginRight: 6 }}>
                   <Text style={{ color: '#94a3b8', fontSize: 16 }}>✕</Text>
                 </TouchableOpacity>
               )}
@@ -2959,6 +2985,32 @@ export default function FinderDashboard() {
                 })()
               }
               muted={isMuted}
+              /* The X on the trip sheet. Google's own footer cannot host a
+               * control, so GoogleNavigation draws that sheet itself and this
+               * is what its close button calls. */
+              onExit={handleBackPress}
+              /* ARRIVAL, from Google's own routing engine.
+               *
+               * This is a better signal than the geofence below it: that
+               * compares two GPS points and needs a fix to arrive, so a rider
+               * who has already stopped produces nothing and we fall back to a
+               * timer. This number comes from the routing engine tracking the
+               * route itself, and it keeps updating on approach — so the Check
+               * In card appears as soon as Google says the spot is reached,
+               * rather than after a confirmation wait.
+               *
+               * 25m rather than 0: the destination is a spot's centre point,
+               * and a rider parked at it is metres away, not on top of it. */
+              onRemaining={(meters) => {
+                if (arrivalDetected) return;
+                if (meters > 0 && meters <= 25) {
+                  if (arrivalTimer.current) {
+                    clearTimeout(arrivalTimer.current);
+                    arrivalTimer.current = null;
+                  }
+                  handleGoogleArrival();
+                }
+              }}
               onArrive={handleGoogleArrival}
               /* Google's fixes are road-snapped, so this is a BETTER position
                * than our own watcher produced — it is where the rider actually

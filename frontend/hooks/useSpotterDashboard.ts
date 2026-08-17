@@ -19,7 +19,10 @@ import { registerForPushNotificationsAsync } from '../services/notifications';
 
 export type SpotterDashboardData = {
   active_spots: number;
+  /** Settled earnings only — money actually collected or credited. */
   earnings: number;
+  /** Completed bookings whose payment has not been collected yet. */
+  pending_earnings: number;
   revenue_trend: number[];
   surge_factor: number;
   inventory: any[];
@@ -34,6 +37,7 @@ export type SpotterDashboardData = {
 export const EMPTY_DASHBOARD: SpotterDashboardData = {
   active_spots: 0,
   earnings: 0,
+  pending_earnings: 0,
   revenue_trend: [0, 0, 0, 0, 0, 0, 0],
   surge_factor: 1,
   inventory: [],

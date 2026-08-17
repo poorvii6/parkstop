@@ -76,6 +76,10 @@ export default function EarningsBreakdown() {
   const [totals, setTotals] = useState<Totals | null>(null);
   const [bySpot, setBySpot] = useState<BySpot[]>([]);
   const [items, setItems] = useState<Item[]>([]);
+  // The API returns the most recent 200 bookings but totals for the WHOLE
+  // period. Without saying so, "Every booking" would be a false claim on a
+  // busy month — the totals would not add up to the rows on screen.
+  const [itemsTruncated, setItemsTruncated] = useState(false);
 
   const load = useCallback(async (period: number, isRefresh = false) => {
     if (!isRefresh) setLoading(true);
@@ -87,6 +91,7 @@ export default function EarningsBreakdown() {
         setTotals(d.totals);
         setBySpot(d.by_spot || []);
         setItems(d.items || []);
+        setItemsTruncated(!!d.items_truncated);
       } else {
         setError(res.data?.message || 'Could not load your earnings.');
       }
@@ -246,7 +251,15 @@ export default function EarningsBreakdown() {
           )}
 
           {/* ── Itemised ledger ─────────────────────────────────── */}
-          <Text style={st.sectionHead}>Every booking</Text>
+          <Text style={st.sectionHead}>
+            {itemsTruncated ? 'Recent bookings' : 'Every booking'}
+          </Text>
+          {itemsTruncated ? (
+            <Text style={{ color: SC.textMuted, fontSize: 12, marginBottom: SP.sm }}>
+              Showing the latest {items.length} of {totals?.bookings ?? items.length}. The
+              totals above cover all of them.
+            </Text>
+          ) : null}
           <View style={SS.card}>
             {items.length === 0 ? (
               <View style={{ alignItems: 'center', paddingVertical: SP.xl }}>

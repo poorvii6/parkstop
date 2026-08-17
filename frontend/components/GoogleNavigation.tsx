@@ -22,7 +22,7 @@
  * know that navigation changed at all.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Platform } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   NavigationView,
@@ -31,6 +31,8 @@ import {
   RouteStatus,
   TravelMode,
   AudioGuidance,
+  CameraPerspective,
+  type NavigationViewController,
   type ArrivalEvent,
   type Location as NavLocation,
 } from '@googlemaps/react-native-navigation-sdk';
@@ -45,6 +47,14 @@ type Props = {
   onLocation?: (loc: { lat: number; lng: number }) => void;
   /** Rider tapped the back/exit control. */
   onExit?: () => void;
+  /**
+   * Google's own remaining distance to the destination, in metres.
+   *
+   * Surfaced because it is a better arrival signal than anything the app can
+   * compute: it comes from the routing engine following the actual route,
+   * not from comparing two GPS points.
+   */
+  onRemaining?: (meters: number) => void;
   /** Mirrors the app's existing mute toggle onto Google's voice guidance. */
   muted?: boolean;
   style?: any;
@@ -95,6 +105,7 @@ export default function GoogleNavigation({
   onArrive,
   onLocation,
   onExit,
+  onRemaining,
   muted,
   style,
 }: Props) {
@@ -103,6 +114,7 @@ export default function GoogleNavigation({
     setOnArrival,
     setOnLocationChanged,
     setOnNavigationReady,
+    setOnRemainingTimeOrDistanceChanged,
     removeAllListeners,
   } = useNavigation();
 
@@ -162,6 +174,45 @@ export default function GoogleNavigation({
    */
   const [box, setBox] = useState<{ w: number; h: number } | null>(null);
 
+  /**
+   * Height of our trip sheet, and the strip Google's view must NOT be given.
+   *
+   * This is why the speedometer ended up underneath the sheet: Google places
+   * the speedometer and speed-limit icon at the bottom-left of whatever height
+   * its view has, normally just above its own footer. With that footer switched
+   * off they moved down into the space our sheet occupies.
+   *
+   * Shrinking the navigation view by exactly the sheet's height puts them back
+   * where they belong — above the sheet — instead of behind it. It is a
+   * constant, so Google still receives one fixed size at creation and never
+   * has to re-lay-out.
+   */
+  const SHEET_HEIGHT = 76;
+
+  /**
+   * Remaining time and distance, for OUR bottom sheet.
+   *
+   * Google's own footer is switched off below. It shows the same numbers, but
+   * it is their view: nothing can be added to it, and the X that Google Maps
+   * puts at the left of that sheet therefore had nowhere to go except floating
+   * above it, where it collided with the speedometer. The SDK does publish the
+   * underlying trip data, so the sheet is rebuilt here instead — same
+   * information, same layout as Google Maps, and room for the exit control
+   * inside it.
+   */
+  const [trip, setTrip] = useState<{ seconds: number; meters: number; severity: number } | null>(null);
+
+  /**
+   * The NAVIGATION VIEW controller — distinct from navigationController, which
+   * drives the trip. This one drives the camera, and it is how the recenter
+   * control below works.
+   *
+   * Needed because switching Google's footer off also took their "Re-center"
+   * button with it: it belongs to that same chrome group. The camera API is
+   * public, so the button is rebuilt here rather than the footer brought back.
+   */
+  const navView = useRef<NavigationViewController | null>(null);
+
   // Guards against re-running the whole start sequence. `destination` is an
   // object literal from the finder's render, so it is a new reference on every
   // render — keying effects on it directly would restart guidance continuously.
@@ -207,15 +258,28 @@ export default function GoogleNavigation({
       }
     });
 
+    setOnRemainingTimeOrDistanceChanged?.((td: any) => {
+      if (!mounted.current || !td) return;
+      const meters = Number(td.meters) || 0;
+      setTrip({
+        seconds: Number(td.seconds) || 0,
+        meters,
+        severity: Number(td.delaySeverity) || 0,
+      });
+      onRemaining?.(meters);
+    });
+
     return () => removeAllListeners();
   }, [
     navigationController,
     setOnArrival,
     setOnLocationChanged,
     setOnNavigationReady,
+    setOnRemainingTimeOrDistanceChanged,
     removeAllListeners,
     onArrive,
     onLocation,
+    onRemaining,
   ]);
 
   // ── Start guidance ───────────────────────────────────────────
@@ -407,7 +471,13 @@ export default function GoogleNavigation({
          * feedback loop between mounting and measuring. Google still gets the
          * explicit pixel size it needs, and it is now the size this component
          * was actually given rather than a number derived from the window. */
-        style={{ position: 'absolute', left: 0, top: 0, width: box.w, height: box.h }}
+        style={{
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          width: box.w,
+          height: Math.max(1, box.h - SHEET_HEIGHT),
+        }}
         androidStylingOptions={{
           // ParkStop's indigo, so Google's header reads as part of the app
           // rather than a different product bolted on.
@@ -424,12 +494,19 @@ export default function GoogleNavigation({
         // limit, recenter, trip progress. This is the entire point of the
         // migration, so none of it is disabled.
         headerEnabled
-        footerEnabled
+        // OFF — replaced by ParkStop's own sheet below, so the exit control can
+        // live INSIDE it the way Google Maps does. The header stays Google's:
+        // it carries turn-by-turn guidance we have no business reimplementing.
+        footerEnabled={false}
         // The vertical bar down the left edge — destination pin at the top,
         // your position at the bottom, traffic marks along it. On a 27km ride
         // it reads as a stray straight line drawn across the map rather than a
         // progress indicator, and it collides with ParkStop's back control.
         tripProgressBarEnabled={false}
+        // The km/h dial Google Maps shows in the bottom-left. It was simply
+        // never switched on — the SDK defaults it off — which is part of why
+        // this screen looked sparser than Google Maps beside it.
+        speedometerEnabled
         speedLimitIconEnabled
         recenterButtonEnabled
         trafficPromptsEnabled
@@ -437,16 +514,61 @@ export default function GoogleNavigation({
         // Reporting incidents belongs to a driving app, not a parking one, and
         // it puts a Google-branded reporting flow in front of ParkStop's users.
         reportIncidentButtonEnabled={false}
+        onNavigationViewControllerCreated={(c: NavigationViewController) => {
+          navView.current = c;
+        }}
         onMapReady={() => setReady(true)}
       />
       ) : null}
 
-      {/* Exit control. Google's own UI has no concept of "leave this app's
-          navigation", so ParkStop supplies it. */}
-      {onExit ? (
-        <TouchableOpacity style={styles.exit} onPress={onExit} activeOpacity={0.85}>
-          <Text style={styles.exitText}>Exit</Text>
+      {/* Re-center. Google's own lived in the footer we replaced.
+        *
+        * Right-hand side deliberately: bottom-LEFT is where the SDK draws the
+        * speedometer and speed-limit icon, and putting a control there is what
+        * made the exit button collide with the dial. The report button is off,
+        * so this corner is genuinely free.
+        *
+        * TILTED is the perspective Google uses while guiding — facing the way
+        * the rider is travelling, rather than north-up. */}
+      {box ? (
+        <TouchableOpacity
+          onPress={() => {
+            try {
+              navView.current?.setFollowingPerspective(CameraPerspective.TILTED);
+            } catch {}
+          }}
+          activeOpacity={0.8}
+          style={styles.recenter}
+        >
+          <Text style={styles.recenterText}>Re-center</Text>
         </TouchableOpacity>
+      ) : null}
+
+      {/* ── Trip sheet: exit, remaining time, distance and arrival ──
+        * A rebuild of Google Maps' bottom sheet, because Google's own footer
+        * cannot host the exit control. */}
+      {box ? (
+        <View style={styles.sheet}>
+          {onExit ? (
+            <TouchableOpacity
+              onPress={onExit}
+              activeOpacity={0.7}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              style={styles.sheetClose}
+            >
+              <Text style={styles.sheetCloseGlyph}>✕</Text>
+            </TouchableOpacity>
+          ) : null}
+
+          <View style={styles.sheetText}>
+            <Text style={[styles.sheetEta, { color: etaColor(trip?.severity) }]} numberOfLines={1}>
+              {trip ? fmtDuration(trip.seconds) : '—'}
+            </Text>
+            <Text style={styles.sheetSub} numberOfLines={1}>
+              {trip ? `${fmtDistance(trip.meters)} · ${fmtArrival(trip.seconds)}` : 'Calculating route…'}
+            </Text>
+          </View>
+        </View>
       ) : null}
 
       {/* Google's chrome is blank until it has computed the route, which is a
@@ -469,20 +591,94 @@ export default function GoogleNavigation({
   );
 }
 
+/** "43 min", "1 hr 8 min" — the phrasing Google Maps uses. */
+function fmtDuration(seconds: number): string {
+  const mins = Math.max(0, Math.round(seconds / 60));
+  if (mins < 60) return `${mins} min`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m ? `${h} hr ${m} min` : `${h} hr`;
+}
+
+/** Metres below a kilometre, then km — one decimal only while it still says something. */
+function fmtDistance(meters: number): string {
+  if (meters < 1000) return `${Math.round(meters)} m`;
+  const km = meters / 1000;
+  return `${km < 10 ? km.toFixed(1) : Math.round(km)} km`;
+}
+
+/** Clock time of arrival, e.g. "10:11 am". */
+function fmtArrival(seconds: number): string {
+  const d = new Date(Date.now() + seconds * 1000);
+  const mm = d.getMinutes().toString().padStart(2, '0');
+  const ampm = d.getHours() >= 12 ? 'pm' : 'am';
+  const h = d.getHours() % 12 || 12;
+  return `${h}:${mm} ${ampm}`;
+}
+
+/**
+ * Google's traffic colours: green when clear, amber for medium, red for heavy.
+ * DelaySeverity is 1 HEAVY, 2 MEDIUM, 3 LIGHT, 0 NO_DATA.
+ */
+function etaColor(severity?: number): string {
+  if (severity === 1) return '#d93025';
+  if (severity === 2) return '#e37400';
+  return '#188038';
+}
+
 const styles = StyleSheet.create({
   fill: { flex: 1 },
   insetBackdrop: { backgroundColor: '#0f172a' },
-  exit: {
+  sheet: {
     position: 'absolute',
-    left: 16,
-    // Clear of Google's header card, which occupies the top of the screen.
-    bottom: Platform.OS === 'android' ? 120 : 140,
-    backgroundColor: 'rgba(15,23,42,0.92)',
-    paddingHorizontal: 18,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    // Must match SHEET_HEIGHT above — the navigation view is shortened by
+    // exactly this much so Google's controls sit above it, not behind it.
+    height: 76,
+    backgroundColor: '#ffffff',
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: -2 },
+    elevation: 16,
+  },
+  recenter: {
+    position: 'absolute',
+    right: 16,
+    // Just above the sheet (76) with a margin.
+    bottom: 88,
+    backgroundColor: '#ffffff',
+    paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 22,
+    shadowColor: '#000',
+    shadowOpacity: 0.22,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 10,
   },
-  exitText: { color: '#fff', fontWeight: '800', fontSize: 13 },
+  recenterText: { color: '#1a73e8', fontWeight: '700', fontSize: 13 },
+  sheetClose: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: '#dadce0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sheetCloseGlyph: { fontSize: 20, color: '#3c4043', lineHeight: 22 },
+  sheetText: { flex: 1, marginLeft: 14 },
+  sheetEta: { fontSize: 22, fontWeight: '700' },
+  sheetSub: { fontSize: 14, color: '#5f6368', marginTop: 2 },
   errorBar: {
     position: 'absolute',
     left: 12,

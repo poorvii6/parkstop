@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, RefreshControl, DeviceEventEmitter } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, RefreshControl, DeviceEventEmitter, Modal, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons, FontAwesome5, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -76,6 +76,11 @@ export default function SpotterDashboard() {
   const [razorpayOrder, setRazorpayOrder] = useState<any>(null);
   const [isClearingDues, setIsClearingDues] = useState(false);
   const [isWithdrawing, setIsWithdrawing] = useState(false);
+  // Partial withdrawals. It used to be all-or-nothing: the button withdrew the
+  // entire balance with no way to take part of it, which is not how anyone
+  // treats their own money — most people leave a float and draw what they need.
+  const [withdrawOpen, setWithdrawOpen] = useState(false);
+  const [withdrawAmount, setWithdrawAmount] = useState('');
 
   const handleClearDues = async () => {
     try {
@@ -101,7 +106,9 @@ export default function SpotterDashboard() {
 
   // #4 WITHDRAW: cash out the available (positive) wallet balance to the
   // spotter's linked payout method. Routes to payout-setup if none is linked.
-  const handleWithdraw = async () => {
+  // Opens the amount sheet, pre-filled with the full balance so "take it all"
+  // stays one tap.
+  const handleWithdraw = () => {
     const bal = Number(dashboardData.balance || 0);
     if (bal <= 0) { Alert.alert('Nothing to withdraw', 'You have no available balance yet.'); return; }
     if (payoutSetup === false) {
@@ -111,31 +118,49 @@ export default function SpotterDashboard() {
       ]);
       return;
     }
-    Alert.alert('Withdraw earnings', `Withdraw ₹${bal.toFixed(2)} to your linked account?`, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Withdraw', onPress: async () => {
-        setIsWithdrawing(true);
-        try {
-          const m = await apiClient.get('/payments/methods');
-          const methods = m.data?.data || [];
-          const method = methods.find((x: any) => x.is_default) || methods[0];
-          if (!method) {
-            Alert.alert('Set up payout first', 'Add your UPI or bank account to receive withdrawals.', [
-              { text: 'Cancel', style: 'cancel' },
-              { text: 'Set up', onPress: () => router.push('/spotter/payout-setup') },
-            ]);
-            return;
-          }
-          await apiClient.post('/payments/withdraw', { methodId: method.id, amount: bal });
-          setToast({ msg: `Withdrawal of ₹${bal.toFixed(2)} requested`, kind: 'success' });
-          fetchDashboardData();
-        } catch (e: any) {
-          Alert.alert('Withdrawal failed', e.response?.data?.message || 'Could not process the withdrawal right now.');
-        } finally {
-          setIsWithdrawing(false);
-        }
-      }},
-    ]);
+    setWithdrawAmount(bal.toFixed(2));
+    setWithdrawOpen(true);
+  };
+
+  const submitWithdrawal = async () => {
+    const bal = Number(dashboardData.balance || 0);
+    const amt = Math.round(Number(withdrawAmount) * 100) / 100;
+
+    // Checked here as well as on the server. The server is what protects the
+    // money; this exists so the rider gets a plain answer instead of a 400.
+    if (!Number.isFinite(amt) || amt <= 0) {
+      Alert.alert('Enter an amount', 'Type how much you want to withdraw.');
+      return;
+    }
+    if (amt > bal) {
+      Alert.alert('More than you have', `You can withdraw up to ₹${bal.toFixed(2)}.`);
+      return;
+    }
+
+    setIsWithdrawing(true);
+    try {
+      const m = await apiClient.get('/payments/methods');
+      const methods = m.data?.data || [];
+      const method = methods.find((x: any) => x.is_default) || methods[0];
+      if (!method) {
+        setWithdrawOpen(false);
+        Alert.alert('Set up payout first', 'Add your UPI or bank account to receive withdrawals.', [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Set up', onPress: () => router.push('/spotter/payout-setup') },
+        ]);
+        return;
+      }
+      const res = await apiClient.post('/payments/withdraw', { methodId: method.id, amount: amt });
+      setWithdrawOpen(false);
+      // The server distinguishes "sent" from "queued for manual settlement";
+      // pass its wording through rather than always claiming it is on its way.
+      setToast({ msg: res.data?.message || `Withdrawal of ₹${amt.toFixed(2)} requested`, kind: 'success' });
+      fetchDashboardData();
+    } catch (e: any) {
+      Alert.alert('Withdrawal failed', e.response?.data?.message || 'Could not process the withdrawal right now.');
+    } finally {
+      setIsWithdrawing(false);
+    }
   };
 
   const handleRazorpaySuccess = async (data: any) => {
@@ -458,6 +483,14 @@ export default function SpotterDashboard() {
             <Ionicons name="cash-outline" size={20} color={SC.accent} style={{ marginBottom: 8 }} />
             <Text style={{ color: SC.textMuted, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 }}>TOTAL EARNED</Text>
             <Text style={{ color: '#FFF', fontSize: 20, fontWeight: '900', marginTop: 4 }}>₹{dashboardData.earnings.toFixed(0)}</Text>
+            {/* Money from completed bookings that has not been collected yet.
+                It used to be folded into the figure above, which made the tile
+                claim income the host may never receive. */}
+            {Number(dashboardData.pending_earnings || 0) > 0 && (
+              <Text style={{ color: SC.warning, fontSize: 11, fontWeight: '700', marginTop: 2 }}>
+                ₹{Number(dashboardData.pending_earnings).toFixed(0)} awaiting payment
+              </Text>
+            )}
             <Text style={{ color: SC.textMuted, fontSize: 10, marginTop: 2 }}>All-time income</Text>
           </View>
 
@@ -692,6 +725,67 @@ export default function SpotterDashboard() {
           onFailure={handleRazorpayFailure}
         />
       )}
+
+      {/* 💸 WITHDRAW AMOUNT SHEET */}
+      <Modal
+        visible={withdrawOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setWithdrawOpen(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: SC.overlay, justifyContent: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: SC.bgElevated, borderRadius: RAD.lg, padding: 20 }}>
+            <Text style={{ color: SC.textPrimary, fontSize: 18, fontWeight: '900', marginBottom: 4 }}>
+              Withdraw earnings
+            </Text>
+            <Text style={{ color: SC.textMuted, fontSize: 13, marginBottom: 16 }}>
+              Available ₹{Number(dashboardData.balance || 0).toFixed(2)}
+            </Text>
+
+            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: RAD.md, paddingHorizontal: 14 }}>
+              <Text style={{ color: SC.textPrimary, fontSize: 20, fontWeight: '900', marginRight: 6 }}>₹</Text>
+              <TextInput
+                value={withdrawAmount}
+                onChangeText={setWithdrawAmount}
+                keyboardType="decimal-pad"
+                placeholder="0.00"
+                placeholderTextColor={SC.textMuted}
+                style={{ flex: 1, color: SC.textPrimary, fontSize: 20, fontWeight: '800', paddingVertical: 12 }}
+                autoFocus
+                selectTextOnFocus
+              />
+              <TouchableOpacity
+                onPress={() => setWithdrawAmount(Number(dashboardData.balance || 0).toFixed(2))}
+                style={{ paddingHorizontal: 10, paddingVertical: 6 }}
+                accessibilityRole="button"
+                accessibilityLabel="Withdraw the full balance"
+              >
+                <Text style={{ color: '#10b981', fontWeight: '800', fontSize: 13 }}>ALL</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={{ flexDirection: 'row', gap: 10, marginTop: 20 }}>
+              <TouchableOpacity
+                onPress={() => setWithdrawOpen(false)}
+                disabled={isWithdrawing}
+                style={{ flex: 1, paddingVertical: 13, borderRadius: RAD.md, alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.08)' }}
+              >
+                <Text style={{ color: SC.textPrimary, fontWeight: '800' }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={submitWithdrawal}
+                disabled={isWithdrawing}
+                style={{ flex: 1, paddingVertical: 13, borderRadius: RAD.md, alignItems: 'center', backgroundColor: '#10b981', opacity: isWithdrawing ? 0.6 : 1 }}
+                accessibilityRole="button"
+              >
+                {isWithdrawing
+                  ? <ActivityIndicator color="#fff" />
+                  : <Text style={{ color: '#fff', fontWeight: '900' }}>Withdraw</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }

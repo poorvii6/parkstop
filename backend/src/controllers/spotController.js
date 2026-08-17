@@ -52,6 +52,21 @@ class SpotController {
       const days = Math.min(parseInt(req.query.days) || 30, 365);
       const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
+      // NOT capped at 200 any more.
+      //
+      // The totals and the per-spot rollup below are computed from these rows,
+      // so capping the query capped the money. A spotter with more than 200
+      // completed bookings was shown totals for their most recent 200 while the
+      // screen said "in the last 30 days" — their earnings under-reported, with
+      // nothing on screen to suggest anything was missing.
+      //
+      // The ceiling that remains is a safety valve against an unbounded scan,
+      // not a page size: a full year of bookings for one spotter's own spots is
+      // well inside it.
+      const MAX_ROWS = 5000;
+      // Only this many rows are SENT to the app. Totals still cover them all.
+      const ITEM_LIMIT = 200;
+
       const bookings = await prisma.bookings.findMany({
         where: {
           status: 'completed',
@@ -60,7 +75,7 @@ class SpotController {
         },
         include: { parking_spots: { select: { id: true, title: true } } },
         orderBy: { created_at: 'desc' },
-        take: 200,
+        take: MAX_ROWS,
       });
 
       const items = bookings.map((b) => ({
@@ -126,7 +141,12 @@ class SpotController {
             bookings: items.length,
           },
           by_spot: bySpot,
-          items,
+          // A page of the ledger, newest first — the totals above are for the
+          // whole period. Flagged so the screen can say "showing the latest
+          // 200" instead of implying this is everything.
+          items: items.slice(0, ITEM_LIMIT),
+          items_truncated: items.length > ITEM_LIMIT,
+          items_shown: Math.min(items.length, ITEM_LIMIT),
         },
       });
     } catch (error) {
@@ -449,4 +469,4 @@ class SpotController {
 }
 
 module.exports = SpotController;
-
+
