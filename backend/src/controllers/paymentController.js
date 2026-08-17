@@ -225,7 +225,73 @@ class PaymentController {
         return withdrawal;
       });
 
-      res.json({ success: true, message: 'Withdrawal initiated', data: result });
+      // ACTUALLY MOVE THE MONEY.
+      //
+      // Until now this endpoint only wrote a row with status 'pending' and
+      // decremented the wallet. Nothing anywhere processed that row — there is
+      // no admin endpoint and no job — so the spotter watched their balance
+      // fall with no transfer and no record: the dashboard's payout history
+      // reads the `payouts` table, while this wrote to `withdrawals`.
+      //
+      // The button that calls this is only shown when a real payout rail is
+      // linked, so a fund account exists by the time we get here. PayoutService
+      // sends it, records it in `payouts` (so it appears in history), and on
+      // failure credits the balance back — which is exactly the right
+      // compensation, since it was already debited above.
+      try {
+        const PayoutService = require('../services/payments/PayoutService');
+        const spotter = await prisma.users.findUnique({
+          where: { id: req.user.id },
+          select: { razorpay_fund_account_id: true, payout_mode: true },
+        });
+
+        if (spotter?.razorpay_fund_account_id) {
+          const payout = await PayoutService.createPayout({
+            fundAccountId: spotter.razorpay_fund_account_id,
+            amount,
+            mode: spotter.payout_mode === 'bank' ? 'IMPS' : 'UPI',
+            narration: 'ParkStop withdrawal',
+            userId: req.user.id,
+            bookingId: null,
+          });
+
+          const sent = payout && payout.status !== 'failed_queued';
+          await prisma.withdrawals.update({
+            where: { id: result.id },
+            data: { status: sent ? 'processing' : 'failed' },
+          });
+
+          return res.json({
+            success: true,
+            message: sent
+              ? 'Withdrawal sent to your account'
+              : 'Withdrawal could not be sent — the amount has been returned to your wallet',
+            data: { ...result, status: sent ? 'processing' : 'failed' },
+          });
+        }
+
+        // No rail linked. Leave it pending for manual settlement rather than
+        // claiming it is on its way.
+        logger.warn(`Withdrawal ${result.id} left pending: user ${req.user.id} has no fund account`);
+        return res.json({
+          success: true,
+          message: 'Withdrawal requested — it will be reviewed and paid manually',
+          data: result,
+        });
+      } catch (payoutErr) {
+        logger.error(`Withdrawal ${result.id} payout failed:`, payoutErr);
+        // Give the money back rather than leaving it in limbo.
+        await prisma.users
+          .update({ where: { id: req.user.id }, data: { balance: { increment: amount } } })
+          .catch((e) => logger.error('CRITICAL: could not refund failed withdrawal:', e));
+        await prisma.withdrawals
+          .update({ where: { id: result.id }, data: { status: 'failed' } })
+          .catch(() => {});
+        return res.status(502).json({
+          success: false,
+          message: 'Could not complete the withdrawal. The amount is back in your wallet.',
+        });
+      }
     } catch (error) {
       if (error.message === 'Insufficient balance') {
         return res.status(400).json({ success: false, message: 'Insufficient balance' });

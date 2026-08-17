@@ -237,45 +237,91 @@ class ParkingSpot {
       }
     });
 
-    const earnings = await prisma.bookings.aggregate({
-      where: {
-        parking_spots: {
-          spotter_id: parseInt(userId)
-        },
-        status: 'completed'
-      },
-      _sum: {
-        spotter_earning: true
-      }
-    });
+    // ── Earned vs still owed ────────────────────────────────────────
+    //
+    // This used to sum EVERY completed booking regardless of whether the money
+    // was ever collected, and the tile calls it "Total earned / All-time
+    // income". A booking the driver never paid for counted the same as one paid
+    // in full — so the headline figure could exceed what the host will actually
+    // receive. Income you might never see is not income.
+    //
+    // SETTLED means the host is genuinely owed nothing further:
+    //   paid           — collected, online or cash.
+    //   unpaid_arrears — the driver left without paying, but the host was still
+    //                    credited in full and the debt moved onto the DRIVER
+    //                    (see BookingController.checkoutUnpaid). Earned.
+    // Anything else (pending, failed) is money in flight, reported separately
+    // rather than folded into the total.
+    const SETTLED_STATUSES = ['paid', 'unpaid_arrears'];
+    const completedForSpotter = {
+      parking_spots: { spotter_id: parseInt(userId) },
+      status: 'completed',
+    };
 
-    // Fetch bookings completed in the last 7 days
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    
+    const [earnings, pendingEarnings] = await Promise.all([
+      prisma.bookings.aggregate({
+        where: { ...completedForSpotter, payment_status: { in: SETTLED_STATUSES } },
+        _sum: { spotter_earning: true },
+      }),
+      prisma.bookings.aggregate({
+        where: { ...completedForSpotter, NOT: { payment_status: { in: SETTLED_STATUSES } } },
+        _sum: { spotter_earning: true },
+      }),
+    ]);
+
+    // ── 7-day earnings trend ────────────────────────────────────────
+    //
+    // Two things this gets right that the previous version did not.
+    //
+    // 1. It buckets by WHEN THE MONEY WAS EARNED (actual_end_time), not when
+    //    the booking was created. A booking made on Monday and completed on
+    //    Friday belongs to Friday's earnings; bucketing it on Monday put income
+    //    on a day the host earned nothing, and the chart is labelled as a
+    //    weekly trend of earnings.
+    //
+    // 2. It buckets in IST. Day boundaries were computed from server time,
+    //    which is UTC on Railway, while the chart's day labels are generated on
+    //    the phone in IST. Anything completed between midnight and 05:30 IST
+    //    fell into the previous day's bar, so the labels and the data disagreed
+    //    for exactly the late-night bookings a parking host cares about.
+    const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
+    /** Midnight IST for a given instant, expressed as a UTC-epoch day marker. */
+    const istDayStart = (d) => {
+      const shifted = new Date(new Date(d).getTime() + IST_OFFSET_MS);
+      return Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate());
+    };
+
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const todayIstDay = istDayStart(new Date());
+    // The real UTC instant that the 7-day IST window opens at.
+    const windowStart = new Date(todayIstDay - 6 * DAY_MS - IST_OFFSET_MS);
+
     const recentCompletedBookings = await prisma.bookings.findMany({
       where: {
         parking_spots: {
           spotter_id: parseInt(userId)
         },
         status: 'completed',
-        created_at: {
-          gte: sevenDaysAgo
-        }
+        // Completion time where we have it; fall back to created_at for older
+        // rows written before actual_end_time was recorded, so their earnings
+        // do not silently vanish from the chart.
+        OR: [
+          { actual_end_time: { gte: windowStart } },
+          { AND: [{ actual_end_time: null }, { created_at: { gte: windowStart } }] },
+        ],
       },
       select: {
         created_at: true,
+        actual_end_time: true,
         spotter_earning: true
       }
     });
 
-    // Map to last 7 days trend
     const trend = Array(7).fill(0);
-    const today = new Date();
-    today.setHours(23, 59, 59, 999); // set to end of today
-    
     recentCompletedBookings.forEach(item => {
-      const dayDiff = Math.floor((today - new Date(item.created_at)) / (1000 * 60 * 60 * 24));
+      const earnedAt = item.actual_end_time || item.created_at;
+      if (!earnedAt) return;
+      const dayDiff = Math.round((todayIstDay - istDayStart(earnedAt)) / DAY_MS);
       if (dayDiff >= 0 && dayDiff < 7) {
         trend[6 - dayDiff] += Number(item.spotter_earning || 0);
       }
@@ -294,12 +340,32 @@ class ParkingSpot {
       }
     });
 
-    let totalSurge = 0;
+    // Surge for every spot from ONE query, not one query per spot.
+    //
+    // This was a loop calling calculateDemandMultiplier per spot — each of
+    // which runs its own COUNT, and awaited sequentially. A host with ten
+    // spots paid ten round trips, and this dashboard refetches on every
+    // booking event, every push, every reconnect and every screen focus.
+    //
+    // groupBy returns only spots that HAVE active bookings, so a missing entry
+    // means zero — which is why the lookup below defaults to 0 rather than
+    // assuming every spot appears.
     const PricingService = require('../services/PricingService');
-    for (const spot of activeSpots) {
-      const surge = await PricingService.calculateDemandMultiplier(spot.id, spot.total_slots);
-      totalSurge += surge;
-    }
+    const activeSpotIds = activeSpots.map((s) => s.id);
+    const activeCounts = activeSpotIds.length
+      ? await prisma.bookings.groupBy({
+          by: ['spot_id'],
+          where: { spot_id: { in: activeSpotIds }, status: 'active' },
+          _count: { _all: true },
+        })
+      : [];
+    const activeBySpot = new Map(activeCounts.map((r) => [r.spot_id, r._count?._all || 0]));
+
+    const totalSurge = activeSpots.reduce(
+      (acc, spot) =>
+        acc + PricingService.demandMultiplierFor(activeBySpot.get(spot.id) || 0, spot.total_slots),
+      0
+    );
     const avgSurge = activeSpots.length > 0 ? (totalSurge / activeSpots.length) : 1.0;
 
     const recentTraffic = await prisma.bookings.findMany({
@@ -369,6 +435,9 @@ class ParkingSpot {
     return {
       active_spots: activeSpotsCount,
       earnings: Number(earnings._sum.spotter_earning || 0),
+      // Completed, but the money has not been collected yet. Surfaced so the
+      // dashboard can say so plainly instead of quietly counting it as income.
+      pending_earnings: Number(pendingEarnings._sum.spotter_earning || 0),
       revenue_trend: trend,
       surge_factor: Number(avgSurge.toFixed(1)),
       inventory: activeSpots,

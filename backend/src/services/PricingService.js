@@ -136,6 +136,38 @@ class PricingService {
    * 🔥 AREA-WIDE SURGE MULTIPLIER
    * Uber-style demand calculation based on occupancy in the area.
    */
+  /**
+   * The surge TIERS as a pure function — no database, no async.
+   *
+   * Split out so callers that already know the occupancy can apply the same
+   * rule without another query. The spotter dashboard needs the multiplier for
+   * every one of a host's spots at once; before this it called
+   * calculateDemandMultiplier in a loop, issuing one COUNT per spot,
+   * sequentially, on every dashboard load — and that dashboard reloads on every
+   * booking, push, reconnect and screen focus.
+   *
+   * Keeping the thresholds here means there is still exactly ONE definition of
+   * surge: calculateDemandMultiplier below fetches the count and defers to this.
+   *
+   * SURGE TIERS (Uber-style)
+   *   100% full => 2.0x
+   *   >=90%     => 1.5x
+   *   >=70%     => 1.2x
+   *   >=50%     => 1.1x
+   */
+  static demandMultiplierFor(activeBookings, totalSlots) {
+    const slots = Number(totalSlots) || 0;
+    const active = Number(activeBookings) || 0;
+    const occupancyRatio = slots > 0 ? active / slots : 0;
+
+    if (occupancyRatio >= 1.0) return 2.0;
+    if (occupancyRatio >= 0.9) return 1.5;
+    if (occupancyRatio >= 0.7) return 1.2;
+    if (occupancyRatio >= 0.5) return 1.1;
+
+    return 1.0;
+  }
+
   static async calculateDemandMultiplier(spotId, totalSlots) {
     try {
       // 1. Get active bookings for this spot
@@ -146,20 +178,7 @@ class PricingService {
         }
       });
 
-      const occupancyRatio = totalSlots > 0 ? activeBookingsCount / totalSlots : 0;
-
-      /**
-       * SURGE TIERS (Realistic Uber-style multipliers)
-       * 100% Full => 2.0x
-       * >90% Full => 1.5x
-       * >70% Full => 1.2x
-       */
-      if (occupancyRatio >= 1.0) return 2.0;
-      if (occupancyRatio >= 0.9) return 1.5;
-      if (occupancyRatio >= 0.7) return 1.2;
-      if (occupancyRatio >= 0.5) return 1.1;
-
-      return 1.0;
+      return this.demandMultiplierFor(activeBookingsCount, totalSlots);
     } catch (error) {
       logger.error('Error calculating demand multiplier:', error);
       return 1.0;
