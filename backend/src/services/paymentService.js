@@ -46,11 +46,24 @@ class PaymentService {
    * path and the webhook, so their side-effects can never diverge or double.
    */
   static async _finalizeClaimedBooking(bookingId, paymentId) {
+    const before = await prisma.bookings.findUnique({
+      where: { id: parseInt(bookingId) },
+      select: { total_price: true, advance_fee: true, status: true }
+    });
+
+    // What this booking itself cost, excluding any arrears cleared in the same
+    // order — those settle an older debt and must not count as money paid
+    // towards this booking, or a refund would hand back more than was taken.
+    const paidForThisBooking =
+      Number(before?.total_price || 0) + Number(before?.advance_fee || 0);
+
     const claimed = await prisma.bookings.updateMany({
       where: { id: parseInt(bookingId), payment_status: { not: 'paid' } },
       data: {
         payment_id: paymentId,
         payment_status: 'paid',
+        // The floor used at checkout and the basis for every refund figure.
+        amount_paid: paidForThisBooking,
         updated_at: new Date()
       }
     });
@@ -71,19 +84,34 @@ class PaymentService {
       logger.info(`Cleared ₹${arrearsToClear} arrears for user ${updatedBooking.user_id} during checkout of booking ${bookingId}`);
     }
 
-    // Trigger online payout to Spotter
-    try {
-      if (updatedBooking && updatedBooking.parking_spots) {
-        const PayoutService = require('./payments/PayoutService');
-        const spotterEarning = updatedBooking.spotter_earning || 0;
-        const spotterId = updatedBooking.parking_spots.spotter_id;
-        if (spotterId && spotterEarning > 0) {
-          await PayoutService.processBookingPayout(bookingId, spotterEarning, spotterId);
-          logger.info(`Payout processed: ₹${spotterEarning} to spotter ${spotterId} for booking ${bookingId}`);
+    // Trigger online payout to Spotter.
+    //
+    // NOT while the booking is still 'reserved'. Payment used to happen only at
+    // checkout, so paying out the moment money landed was safe. With prepaid
+    // bookings the money arrives before the car does — paying the owner then
+    // would send real money out of the business for a booking the finder can
+    // still cancel, and the refund would have nothing to claw back from.
+    // The owner is paid when the session actually completes.
+    const isPrepaidReservation = updatedBooking?.status === 'reserved';
+
+    if (isPrepaidReservation) {
+      logger.info(
+        `Booking ${bookingId} prepaid while still reserved — payout deferred until the session completes`
+      );
+    } else {
+      try {
+        if (updatedBooking && updatedBooking.parking_spots) {
+          const PayoutService = require('./payments/PayoutService');
+          const spotterEarning = updatedBooking.spotter_earning || 0;
+          const spotterId = updatedBooking.parking_spots.spotter_id;
+          if (spotterId && spotterEarning > 0) {
+            await PayoutService.processBookingPayout(bookingId, spotterEarning, spotterId);
+            logger.info(`Payout processed: ₹${spotterEarning} to spotter ${spotterId} for booking ${bookingId}`);
+          }
         }
+      } catch (payoutErr) {
+        logger.error(`Failed to process payout for booking ${bookingId} after settlement:`, payoutErr);
       }
-    } catch (payoutErr) {
-      logger.error(`Failed to process payout for booking ${bookingId} after settlement:`, payoutErr);
     }
 
     return updatedBooking;
@@ -246,7 +274,12 @@ class PaymentService {
       let paymentDetails;
       const user = booking.users;
       const arrears = (user && user.balance < 0) ? Math.abs(Number(user.balance)) : 0;
-      const expectedAmountPaise = Math.round((Number(booking.total_price) + arrears) * 100);
+      // The advance fee is part of what the finder owes, so it has to be part of
+      // what the gateway is expected to have captured — otherwise every advance
+      // booking fails the amount check below by exactly ₹50.
+      const expectedAmountPaise = Math.round(
+        (Number(booking.total_price) + Number(booking.advance_fee || 0) + arrears) * 100
+      );
 
       if (isMockSignature && mockAllowed) {
         paymentDetails = {

@@ -46,11 +46,20 @@ const spotterReq = (overrides = {}) => ({
 });
 
 // Transaction-scoped mock reused by prisma.$transaction(cb => cb(tx)).
-const tx = { bookings: { update: jest.fn() }, users: { update: jest.fn() } };
+// parking_spots is here because both checkout paths must hand the slot back —
+// without it the spot silently loses capacity on every cash or arrears close.
+const tx = {
+  bookings: { update: jest.fn(), updateMany: jest.fn(), findUnique: jest.fn() },
+  users: { update: jest.fn() },
+  parking_spots: { update: jest.fn() },
+};
 
 beforeEach(() => {
   jest.clearAllMocks();
   prisma.$transaction.mockImplementation((cb) => cb(tx));
+  // Default: the status-guarded claim succeeds (one row moved).
+  tx.bookings.updateMany.mockResolvedValue({ count: 1 });
+  tx.bookings.findUnique.mockResolvedValue({ id: 100, status: 'completed', payment_mode: 'cash' });
 });
 
 // ---- checkoutCash --------------------------------------------------------
@@ -79,15 +88,16 @@ describe('BookingController.checkoutCash', () => {
   });
 
   test('marks paid and deducts the platform fee from the spotter wallet', async () => {
-    Booking.findById.mockResolvedValue({ id: 100, total_price: 1000, spot_id: 5 });
+    Booking.findById.mockResolvedValue({ id: 100, total_price: 1000, spot_id: 5, vehicle_type: 'car' });
     ParkingSpot.findById.mockResolvedValue({ spotter_id: 7, location_type: 'urban' });
-    tx.bookings.update.mockResolvedValue({ id: 100, status: 'completed', payment_mode: 'cash' });
     const res = mockRes();
 
     await BookingController.checkoutCash(spotterReq(), res);
 
-    // Booking updated to completed/paid/cash with the commission split (urban 20% of 1000)
-    expect(tx.bookings.update).toHaveBeenCalledWith(
+    // Booking updated to completed/paid/cash with the commission split (urban 20% of 1000).
+    // updateMany rather than update: the write is guarded on status so a repeat
+    // call cannot debit the spotter's fee a second time.
+    expect(tx.bookings.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
           status: 'completed',
@@ -105,21 +115,43 @@ describe('BookingController.checkoutCash', () => {
         data: { balance: { decrement: 200 } },
       })
     );
+    // ...and the bay is free again
+    expect(tx.parking_spots.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 5 },
+        data: expect.objectContaining({ available_slots: { increment: 1 } }),
+      })
+    );
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({ success: true })
     );
   });
 
   test('does not touch the wallet when the fee is zero (free booking)', async () => {
-    Booking.findById.mockResolvedValue({ id: 100, total_price: 0, spot_id: 5 });
+    Booking.findById.mockResolvedValue({ id: 100, total_price: 0, spot_id: 5, vehicle_type: 'car' });
     ParkingSpot.findById.mockResolvedValue({ spotter_id: 7, location_type: 'urban' });
-    tx.bookings.update.mockResolvedValue({ id: 100 });
     const res = mockRes();
 
     await BookingController.checkoutCash(spotterReq(), res);
 
     expect(tx.users.update).not.toHaveBeenCalled();
+    // A free booking still occupied the bay, so the slot still comes back.
+    expect(tx.parking_spots.update).toHaveBeenCalled();
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+  });
+
+  test('a repeat call is refused instead of debiting the fee twice', async () => {
+    Booking.findById.mockResolvedValue({
+      id: 100, total_price: 1000, spot_id: 5, status: 'completed', payment_status: 'paid',
+    });
+    ParkingSpot.findById.mockResolvedValue({ spotter_id: 7, location_type: 'urban' });
+    const res = mockRes();
+
+    await BookingController.checkoutCash(spotterReq(), res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(tx.users.update).not.toHaveBeenCalled();
+    expect(tx.parking_spots.update).not.toHaveBeenCalled();
   });
 });
 
@@ -150,7 +182,8 @@ describe('BookingController.checkoutUnpaid', () => {
 
   test('credits the spotter their share and deducts the full amount from the finder', async () => {
     Booking.findById.mockResolvedValue({
-      id: 100, status: 'active', payment_status: 'pending', total_price: 1000, spot_id: 5, user_id: 9,
+      id: 100, status: 'active', payment_status: 'pending', total_price: 1000, spot_id: 5,
+      user_id: 9, vehicle_type: 'car',
     });
     ParkingSpot.findById.mockResolvedValue({ spotter_id: 7, location_type: 'urban' });
     tx.bookings.update.mockResolvedValue({ id: 100, total_price: 1000, payment_status: 'unpaid_arrears' });
@@ -170,6 +203,14 @@ describe('BookingController.checkoutUnpaid', () => {
     );
     expect(tx.users.update).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 9 }, data: { balance: { decrement: 1000 } } })
+    );
+    // The finder left without paying, but the bay is empty — the spotter must
+    // not lose a slot of capacity on top of the money.
+    expect(tx.parking_spots.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 5 },
+        data: expect.objectContaining({ available_slots: { increment: 1 } }),
+      })
     );
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
   });

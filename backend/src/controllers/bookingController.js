@@ -7,6 +7,7 @@ const PaymentService = require('../services/paymentService');
 const CommissionService = require('../services/CommissionService');
 const PayoutService = require('../services/payments/PayoutService');
 const BookingSettlementService = require('../services/payments/BookingSettlementService');
+const BookingRefundService = require('../services/BookingRefundService');
 
 class BookingController {
 
@@ -177,6 +178,26 @@ class BookingController {
         return res.status(400).json({
           success: false,
           message: 'Booking ID and OTP are required'
+        });
+      }
+
+      // Confirm this spotter actually owns the spot, exactly as verifyOTP does.
+      // Without it any authenticated spotter could burn another booking's three
+      // OTP attempts and lock its checkout permanently — the finder would then
+      // be unable to end their session at all.
+      const target = await Booking.findById(bookingId);
+      if (!target) {
+        return res.status(404).json({
+          success: false,
+          message: 'Booking not found'
+        });
+      }
+
+      const targetSpot = await ParkingSpot.findById(target.spot_id);
+      if (!targetSpot || targetSpot.spotter_id !== req.user.id) {
+        return res.status(403).json({
+          success: false,
+          message: 'Unauthorized to verify this booking'
         });
       }
 
@@ -488,6 +509,21 @@ class BookingController {
           data: { balance: { decrement: updatedBooking.total_price } }
         });
 
+        // 3. Give the slot back. The finder drove off without paying, but the
+        //    bay is empty — the spotter must not lose capacity as well as money.
+        const slotData = {
+          available_slots: { increment: 1 },
+          is_available: true,
+          updated_at: new Date()
+        };
+        if (booking.vehicle_type === 'car') slotData.car_slots = { increment: 1 };
+        else if (booking.vehicle_type === 'bike') slotData.bike_slots = { increment: 1 };
+
+        await tx.parking_spots.update({
+          where: { id: booking.spot_id },
+          data: slotData
+        });
+
         return updatedBooking;
       });
 
@@ -528,8 +564,16 @@ class BookingController {
       }
 
       const spot = await ParkingSpot.findById(booking.spot_id);
-      if (spot.spotter_id !== req.user.id) {
+      if (!spot || spot.spotter_id !== req.user.id) {
         return res.status(403).json({ success: false, message: 'Unauthorized to manage this booking' });
+      }
+
+      // Without this, a double-tap on the Confirm Cash button runs the whole
+      // block twice: the platform fee comes out of the spotter's wallet again,
+      // and the slot is released twice. Every other checkout path already
+      // refuses a second call; this one did not.
+      if (booking.status === 'completed' || booking.payment_status === 'paid') {
+        return res.status(400).json({ success: false, message: 'This booking is already closed' });
       }
 
       const { spotterEarning, platformFee } = CommissionService.calculateCommission(
@@ -540,9 +584,10 @@ class BookingController {
 
       // Update booking and deduct platform fee from spotter in a transaction
       const updatedBooking = await prisma.$transaction(async (tx) => {
-        // 1. Update Booking to paid with cash
-        const bookingRecord = await tx.bookings.update({
-          where: { id: parseInt(bookingId) },
+        // 1. Update Booking to paid with cash — guarded on status so two
+        //    concurrent calls cannot both proceed.
+        const claimed = await tx.bookings.updateMany({
+          where: { id: parseInt(bookingId), status: { notIn: ['completed', 'cancelled', 'expired'] } },
           data: {
             payment_status: 'paid',
             payment_mode: 'cash',
@@ -553,6 +598,10 @@ class BookingController {
           }
         });
 
+        if (claimed.count === 0) {
+          throw new Error('This booking is already closed');
+        }
+
         // 2. Deduct platform fee from spotter's wallet
         if (platformFee > 0) {
           await tx.users.update({
@@ -561,7 +610,23 @@ class BookingController {
           });
         }
 
-        return bookingRecord;
+        // 3. Give the slot back. The car has left; without this the spot's
+        //    available_slots never recovers and the spotter quietly loses a
+        //    slot of real capacity on every cash checkout.
+        const slotData = {
+          available_slots: { increment: 1 },
+          is_available: true,
+          updated_at: new Date()
+        };
+        if (booking.vehicle_type === 'car') slotData.car_slots = { increment: 1 };
+        else if (booking.vehicle_type === 'bike') slotData.bike_slots = { increment: 1 };
+
+        await tx.parking_spots.update({
+          where: { id: booking.spot_id },
+          data: slotData
+        });
+
+        return tx.bookings.findUnique({ where: { id: parseInt(bookingId) } });
       });
 
       if (platformFee > 0) {
@@ -690,16 +755,19 @@ class BookingController {
 
       const bookingId = req.params.id;
       const booking = await Booking.findById(bookingId);
-      
+
       await Booking.cancel(bookingId, req.user.id);
+
+      let refund = null;
 
       // Notify Spotter
       if (booking) {
+        const spot = await ParkingSpot.findById(booking.spot_id);
+
         try {
-          const spot = await ParkingSpot.findById(booking.spot_id);
           if (spot) {
             emitToUser(spot.spotter_id, 'booking:cancelled', { bookingId });
-            
+
             // Push Notification
             await NotificationService.sendPushNotification(spot.spotter_id, {
               title: 'Booking Cancelled ❌',
@@ -711,20 +779,37 @@ class BookingController {
           logger.error('Notification error in cancelBooking:', err);
         }
 
-        // Trigger automatic refund if booking was paid
-        if (booking.payment_status === 'paid' && booking.payment_id) {
+        // Refund according to the ladder, not in full. Cancelling still costs
+        // the owner a bay they held and could not sell, so they keep a share —
+        // 30% if there was more than half an hour's notice, 50% if not. The
+        // advance fee is never returned.
+        if (Number(booking.amount_paid) > 0) {
           try {
-            logger.info(`Triggering automatic refund for cancelled booking: ${bookingId}`);
-            await PaymentService.processRefund(bookingId, booking.total_price);
+            refund = await BookingRefundService.refundBooking(booking, spot, {
+              reason: 'finder_cancelled'
+            });
           } catch (refundErr) {
-            logger.error(`Automatic refund failed for booking ${bookingId}:`, refundErr);
+            // The booking IS cancelled and the bay IS released — that already
+            // committed. Failing the response here would tell the finder the
+            // cancellation didn't work and invite them to try again.
+            logger.error(`Refund failed for cancelled booking ${bookingId}:`, refundErr);
           }
         }
       }
 
       res.json({
         success: true,
-        message: 'Booking cancelled successfully'
+        message: refund && refund.refundAmount > 0
+          ? `Booking cancelled. ₹${refund.refundAmount} will be returned to your original payment method.`
+          : 'Booking cancelled successfully',
+        data: refund
+          ? {
+              refund_amount: refund.refundAmount,
+              refund_status: refund.status,
+              withheld_amount: refund.withheldAmount,
+              tier: refund.tier
+            }
+          : undefined
       });
 
     } catch (error) {
@@ -841,6 +926,80 @@ class BookingController {
     } catch (error) {
       logger.error('Error calculating upfront price:', error);
       res.status(500).json({ success: false, message: 'Error calculating price' });
+    }
+  }
+
+  /**
+   * CLAIM NO-SHOW REFUND (Finder Only)
+   *
+   * A finder who never arrived is owed half their spot fee, but deliberately
+   * has to ask — the sweep only marks it claimable. This is where it is
+   * actually paid, and it is the only caller that passes force, because every
+   * other path must respect the "requires a claim" flag.
+   */
+  static async claimRefund(req, res) {
+    try {
+      if (!req.user.role || req.user.role.toLowerCase() !== 'finder') {
+        return res.status(403).json({
+          success: false,
+          message: 'Only finders can claim a refund'
+        });
+      }
+
+      const bookingId = req.params.id;
+      const booking = await Booking.findById(bookingId);
+
+      if (!booking) {
+        return res.status(404).json({ success: false, message: 'Booking not found' });
+      }
+
+      if (booking.user_id !== req.user.id) {
+        return res.status(403).json({ success: false, message: 'Not your booking' });
+      }
+
+      if (booking.refund_status === 'processed') {
+        // Not an error — someone tapping twice should see the outcome, not a
+        // failure that makes them think it did not work.
+        return res.json({
+          success: true,
+          message: 'This refund has already been paid.',
+          data: { refund_amount: Number(booking.refund_amount) || 0, refund_status: 'processed' }
+        });
+      }
+
+      if (booking.refund_status !== 'claimable') {
+        return res.status(400).json({
+          success: false,
+          message: 'There is no refund to claim on this booking'
+        });
+      }
+
+      const spot = await ParkingSpot.findById(booking.spot_id);
+      const refund = await BookingRefundService.refundBooking(booking, spot, {
+        reason: 'no_show',
+        force: true
+      });
+
+      if (refund.status === 'failed') {
+        return res.status(502).json({
+          success: false,
+          message: 'We could not reach the payment provider. Please try again shortly.'
+        });
+      }
+
+      return res.json({
+        success: true,
+        message: `₹${refund.refundAmount} is on its way back to your original payment method.`,
+        data: {
+          refund_amount: refund.refundAmount,
+          refund_status: refund.status,
+          withheld_amount: refund.withheldAmount
+        }
+      });
+
+    } catch (error) {
+      logger.error('Claim refund error:', error);
+      return res.status(500).json({ success: false, message: 'Failed to claim refund' });
     }
   }
 

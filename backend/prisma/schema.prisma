@@ -35,6 +35,29 @@ model bookings {
   payment_mode      String?        @default("online") @db.VarChar(20)
   checkout_otp      String?        @db.VarChar(10)
   slot_name         String?        @db.VarChar(50)
+
+  // --- Prepaid bookings -------------------------------------------------
+  // Flat fee charged when a booking is made 2h+ ahead. Stored rather than
+  // re-derived, because by refund time the lead is history and the rate may
+  // since have changed.
+  advance_fee         Decimal?  @default(0) @db.Decimal(10, 2)
+  // What was actually collected up front. Acts as a floor at checkout: leaving
+  // early earns no refund, overstaying bills on top.
+  amount_paid         Decimal?  @default(0) @db.Decimal(10, 2)
+  // Refund lifecycle. refund_status is one of:
+  //   null         nothing owed
+  //   'claimable'  a no-show the finder may still claim
+  //   'processing' handed to the gateway
+  //   'processed'  money returned
+  //   'failed'     gateway refused; needs a human
+  refund_amount       Decimal?  @db.Decimal(10, 2)
+  refund_status       String?   @db.VarChar(20)
+  refund_id           String?   @db.VarChar(100)
+  refunded_at         DateTime? @db.Timestamp(6)
+  // Separates a finder who cancelled from one who never arrived — different
+  // rates, and only one of them has to ask.
+  cancellation_reason String?   @db.VarChar(30)
+
   parking_spots     parking_spots? @relation(fields: [spot_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   users             users?         @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   review            reviews?

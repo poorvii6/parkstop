@@ -4,6 +4,7 @@ const PricingService = require('../services/PricingService');
 const CommissionService = require('../services/CommissionService');
 const ParkingSpot = require('./ParkingSpot');
 const PaymentService = require('../services/paymentService');
+const BookingRefundPolicy = require('../services/BookingRefundPolicy');
 
 class Booking {
 
@@ -44,6 +45,14 @@ class Booking {
       const end = new Date(end_time);
       if (end <= start) throw new Error('Invalid booking duration');
 
+      // How far ahead a booking may be made depends on how it is paid for.
+      // Online is prepaid, so the finder has real money committed and can book
+      // days out. Cash is settled in person against nothing but a promise, so
+      // it is capped at an hour — otherwise a cash booking for next week would
+      // hold a bay all week for free.
+      const lead = BookingRefundPolicy.validateLeadTime(start, new Date(), payment_mode);
+      if (!lead.ok) throw new Error(lead.reason);
+
       const diffMs = end - start;
       const hours = Math.max(1, Math.ceil(diffMs / (1000 * 60)) / 60);
 
@@ -63,9 +72,27 @@ class Booking {
       const total_price = Number((hours * pricing.finalPrice).toFixed(2));
       const commission = CommissionService.calculateCommission(total_price, spot.location_type || 'urban');
 
+      // Booking well ahead takes a bay out of circulation while it sits empty.
+      // The flat fee compensates the owner for that, which is what makes them
+      // willing to accept advance bookings at all. Cash never reaches the
+      // threshold because it cannot be booked more than an hour out.
+      const advance_fee = BookingRefundPolicy.advanceFeeFor(start, new Date(), payment_mode);
+
+      // Online bookings are paid in full at booking time; cash is collected at
+      // the spot, so nothing is banked yet. amount_paid is the floor used at
+      // checkout — see finalChargeFor.
+      const amount_paid = 0;
+
       const otp_code = Math.floor(100000 + Math.random() * 900000).toString();
       const checkout_otp = Math.floor(100000 + Math.random() * 900000).toString();
-      const otp_expires_at = new Date(Date.now() + 30 * 60 * 1000);
+      // The hold runs from when the rider is due to arrive, not from when they
+      // tapped Book. Today those are the same thing (the app always sends
+      // start_time = now), so this changes nothing in practice — but it means a
+      // scheduled booking would get a sane window instead of being expired
+      // before its own start time.
+      const HOLD_MS = 30 * 60 * 1000;
+      const holdFrom = Math.max(Date.now(), start.getTime());
+      const otp_expires_at = new Date(holdFrom + HOLD_MS);
 
       logger.info(`Creating booking record: user=${user_id}, spot=${spot_id}, price=${total_price}`);
 
@@ -87,7 +114,9 @@ class Booking {
           platform_fee: commission.platformFee,
           spotter_earning: commission.spotterEarning,
           payment_mode,
-          payment_status: payment_mode === 'cash' ? 'pending_cash' : 'pending'
+          payment_status: payment_mode === 'cash' ? 'pending_cash' : 'pending',
+          advance_fee,
+          amount_paid
         }
       });
 
@@ -225,7 +254,18 @@ class Booking {
         spotId: booking.spot_id
       });
 
-      const finalPrice = Number((hours * pricing.finalPrice).toFixed(2));
+      const actualCharge = Number((hours * pricing.finalPrice).toFixed(2));
+
+      // A prepaid booking is a floor, never a ceiling. This line used to write
+      // the elapsed-time price straight over total_price, which for a finder
+      // who paid for 2pm–6pm and left at 4 would have quietly reduced the
+      // charge below what they had already been billed — the owner losing the
+      // window they sold. Overstaying still bills the difference.
+      const { total: finalPrice, outstanding } = BookingRefundPolicy.finalChargeFor({
+        amountPaid: Number(booking.amount_paid) || 0,
+        actualCharge
+      });
+
       const commission = CommissionService.calculateCommission(
         finalPrice,
         booking.parking_spots.location_type || 'urban'
@@ -240,6 +280,12 @@ class Booking {
           hours: hours,
           platform_fee: commission.platformFee,
           spotter_earning: commission.spotterEarning,
+          // Fully prepaid and within the booked window: nothing left to collect,
+          // so the settlement path can pay the owner out immediately instead of
+          // waiting on a checkout payment that will never come.
+          payment_status: outstanding === 0 && Number(booking.amount_paid) > 0
+            ? 'paid'
+            : booking.payment_status,
           updated_at: new Date()
         }
       });

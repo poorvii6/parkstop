@@ -204,6 +204,20 @@ router.put(
 );
 
 /**
+ * ✅ CLAIM NO-SHOW REFUND (Finder only)
+ */
+router.post(
+  '/:id/claim-refund',
+  authenticate,
+  authorize('FINDER'),
+  [
+    param('id').isInt().withMessage('Booking ID must be an integer'),
+    validate
+  ],
+  BookingController.claimRefund
+);
+
+/**
  * ✅ EXTEND BOOKING (Finder only)
  */
 router.put(
