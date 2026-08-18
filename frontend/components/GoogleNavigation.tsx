@@ -31,6 +31,7 @@ import {
   RouteStatus,
   TravelMode,
   AudioGuidance,
+  CameraPerspective,
   type NavigationViewController,
   type ArrivalEvent,
   type Location as NavLocation,
@@ -523,12 +524,11 @@ export default function GoogleNavigation({
         // Kept: this is the road's legal limit from Google's map data, not a
         // measurement, so none of the above applies to it.
         speedLimitIconEnabled
-        // Google's own re-centre control. It appears only once the camera has
-        // been panned away and hides itself again on follow — exactly the
-        // Google Maps behaviour — and the SDK positions it clear of its own
-        // chrome. ParkStop used to draw a second, always-visible pill next to
-        // it; that was the duplicate.
-        recenterButtonEnabled
+        // OFF. Their control auto-hides correctly, but AndroidStylingOptions
+        // reaches only the header — there is no way to restyle it, and its
+        // icon renders as a stray glyph. ParkStop draws its own below, in
+        // Google Maps' own visual language.
+        recenterButtonEnabled={false}
         trafficPromptsEnabled
         trafficIncidentCardsEnabled
         // Reporting incidents belongs to a driving app, not a parking one, and
@@ -541,17 +541,35 @@ export default function GoogleNavigation({
       />
       ) : null}
 
-      {/* The custom Re-center pill that used to sit here has been removed.
+      {/* Re-centre, in Google Maps' own visual language: a white pill with a
+        * blue navigation glyph, bottom-left, just above the sheet.
         *
-        * It was added when switching Google's footer off appeared to take
-        * their re-centre control with it. That turned out to be wrong —
-        * recenterButtonEnabled draws it independently of the footer — so the
-        * app was rendering two, one from Google at the bottom-left and one of
-        * ours at the bottom-right.
+        * Drawn here rather than using the SDK's because AndroidStylingOptions
+        * covers only the header — their button cannot be restyled, and its
+        * icon renders as a stray glyph.
         *
-        * Google's is the better of the two to keep: it appears only after the
-        * camera has been panned away and hides again on follow, which is what
-        * Google Maps does, whereas ours sat there permanently. */}
+        * The cost is that this one is always visible where Google's appears
+        * only after the camera is panned away. The SDK publishes no camera or
+        * gesture event, so there is nothing to detect "the user has moved the
+        * map" with. Rather than guess at it and get it wrong intermittently,
+        * it simply stays put — one small control, always in the same place.
+        *
+        * TILTED is the perspective Google uses while guiding: facing the way
+        * the rider is travelling rather than north-up. */}
+      {box ? (
+        <TouchableOpacity
+          onPress={() => {
+            try {
+              navView.current?.setFollowingPerspective(CameraPerspective.TILTED);
+            } catch {}
+          }}
+          activeOpacity={0.85}
+          style={styles.recenter}
+        >
+          <Text style={styles.recenterIcon}>➤</Text>
+          <Text style={styles.recenterText}>Re-centre</Text>
+        </TouchableOpacity>
+      ) : null}
 
       {/* ── Trip sheet: exit, remaining time, distance and arrival ──
         * A rebuild of Google Maps' bottom sheet, because Google's own footer
@@ -674,21 +692,56 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: -2 },
     elevation: 16,
   },
+  /* Re-centre control, matching Google Maps: white pill, Google blue label,
+   * soft elevation, bottom-LEFT. Left rather than right because that is where
+   * Google Maps puts it, and because the right side is where a rider's thumb
+   * rests over the map. */
+  recenter: {
+    position: 'absolute',
+    left: 16,
+    // Clear of the 76px sheet with a comfortable margin.
+    bottom: 92,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    paddingLeft: 12,
+    paddingRight: 16,
+    height: 40,
+    borderRadius: 20,
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 6,
+  },
+  recenterIcon: {
+    color: '#1a73e8',
+    fontSize: 15,
+    fontWeight: '700',
+    marginRight: 8,
+    // The glyph points east by default; rotate so it reads as "forward".
+    transform: [{ rotate: '-45deg' }],
+  },
+  recenterText: { color: '#1a73e8', fontWeight: '600', fontSize: 14 },
+
   /* Speed readout, right-hand end of the trip sheet. In flow rather than
-   * absolutely positioned, so it can never land on top of Google's chrome. */
+   * absolutely positioned, so it can never land on top of Google's chrome.
+   *
+   * Sized to match the close button exactly — same 44px box, same border —
+   * so the sheet reads as one row with a control at each end rather than
+   * three things of different heights sitting near each other. */
   speedPill: {
-    minWidth: 56,
+    width: 52,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
     borderRadius: 14,
     borderWidth: 1,
     borderColor: '#dadce0',
     backgroundColor: '#f8f9fa',
   },
-  speedValue: { fontSize: 18, fontWeight: '700', color: '#202124', lineHeight: 20 },
-  speedUnit: { fontSize: 10, fontWeight: '600', color: '#5f6368' },
+  speedValue: { fontSize: 17, fontWeight: '700', color: '#202124', lineHeight: 19 },
+  speedUnit: { fontSize: 9, fontWeight: '600', color: '#5f6368', lineHeight: 11 },
   sheetClose: {
     width: 44,
     height: 44,
@@ -699,9 +752,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   sheetCloseGlyph: { fontSize: 20, color: '#3c4043', lineHeight: 22 },
-  sheetText: { flex: 1, marginLeft: 14 },
-  sheetEta: { fontSize: 22, fontWeight: '700' },
-  sheetSub: { fontSize: 14, color: '#5f6368', marginTop: 2 },
+  /* flexShrink, not just flex: on a long ETA the text must give way rather
+   * than push the speed readout off the right edge. */
+  sheetText: { flex: 1, flexShrink: 1, marginLeft: 14, marginRight: 12, justifyContent: 'center' },
+  sheetEta: { fontSize: 22, fontWeight: '700', lineHeight: 26 },
+  sheetSub: { fontSize: 14, color: '#5f6368', lineHeight: 18, marginTop: 1 },
   errorBar: {
     position: 'absolute',
     left: 12,
