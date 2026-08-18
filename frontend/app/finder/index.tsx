@@ -19,7 +19,7 @@ import { io, Socket } from 'socket.io-client';
 import * as Location from 'expo-location';
 import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import WheelTimePicker from '../../components/WheelTimePicker';
 import { Ionicons } from '@expo/vector-icons';
 import { isNetworkError, ONLINE_EVENT } from '../../utils/networkStatus';
 import { useOnlineRefresh } from '../../hooks/useOnlineRefresh';
@@ -3865,22 +3865,21 @@ export default function FinderDashboard() {
                     </View>
                   )}
 
-                  {timePickerFor && (
-                    <DateTimePicker
-                      value={timePickerFor === 'start' ? bookingStart : bookingEnd}
-                      mode="time"
-                      is24Hour={false}
-                      onChange={(event: any, picked?: Date) => {
-                        // Android fires this for dismiss too; only 'set' is a
-                        // real choice, and leaving the picker mounted after a
-                        // dismiss makes it impossible to reopen.
-                        setTimePickerFor(null);
-                        if (event?.type === 'dismissed' || !picked) return;
-                        if (timePickerFor === 'start') applyStartTime(picked);
-                        else applyEndTime(picked);
-                      }}
-                    />
-                  )}
+                  {/* Scrolling wheel rather than the platform picker. Android's
+                    * draws a clock face in the system theme — a light grey
+                    * dialog on a dark app, with a dial you have to aim at. */}
+                  <WheelTimePicker
+                    visible={timePickerFor !== null}
+                    title={timePickerFor === 'end' ? 'Leaving' : 'Arriving'}
+                    value={timePickerFor === 'end' ? bookingEnd : bookingStart}
+                    onCancel={() => setTimePickerFor(null)}
+                    onConfirm={(picked) => {
+                      const which = timePickerFor;
+                      setTimePickerFor(null);
+                      if (which === 'start') applyStartTime(picked);
+                      else if (which === 'end') applyEndTime(picked);
+                    }}
+                  />
                 </View>
               )}
 
