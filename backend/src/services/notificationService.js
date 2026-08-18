@@ -303,6 +303,61 @@ class NotificationService {
       data: { bookingId: booking.id, type: 'finder_nearby' },
     });
   }
+
+  /**
+   * Warn the finder that their reservation is about to lapse.
+   *
+   * Until now a hold simply vanished: the sweep flipped it to 'expired' and
+   * released the slot, and the first the rider knew of it was arriving and
+   * finding their OTP rejected. One nudge before the deadline turns a silent
+   * failure into a decision they can still act on.
+   */
+  static async notifyBookingExpiringSoon(finderId, booking, minutesLeft) {
+    await this.sendNotification(finderId, {
+      title: 'Reservation expiring soon',
+      message: `Check in within ${minutesLeft} minutes or your spot will be released.`,
+      type: 'booking_expiring_soon',
+      data: { bookingId: booking.id, minutesLeft },
+    });
+
+    await this.sendPushNotification(finderId, {
+      title: 'Your spot is about to be released ⏳',
+      body: `Check in within ${minutesLeft} minutes to keep this parking spot.`,
+      data: { bookingId: booking.id, minutesLeft, type: 'booking_expiring_soon' },
+    });
+  }
+
+  /**
+   * Tell the finder their reservation has lapsed and the spot is back in the
+   * pool, so they stop driving towards a spot that is no longer theirs.
+   */
+  static async notifyBookingExpired(finderId, booking, claimableRefund = 0) {
+    // If they prepaid, the refund is the more important half of this message —
+    // it is money they are owed and have to ask for, so burying it would mean
+    // most people never claim.
+    const hasRefund = Number(claimableRefund) > 0;
+
+    await this.sendNotification(finderId, {
+      title: 'Reservation expired',
+      message: hasRefund
+        ? `Your hold ran out and the spot was released. You can claim a ₹${claimableRefund} refund.`
+        : 'Your hold ran out and the spot has been released.',
+      type: 'booking_expired',
+      data: { bookingId: booking.id, claimableRefund: Number(claimableRefund) || 0 },
+    });
+
+    await this.sendPushNotification(finderId, {
+      title: 'Reservation expired',
+      body: hasRefund
+        ? `The spot was released. Tap to claim your ₹${claimableRefund} refund.`
+        : 'Your hold ran out and the spot has been released. Tap to find another.',
+      data: {
+        bookingId: booking.id,
+        claimableRefund: Number(claimableRefund) || 0,
+        type: 'booking_expired',
+      },
+    });
+  }
 }
 
 module.exports = NotificationService;

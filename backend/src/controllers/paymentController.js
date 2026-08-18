@@ -338,7 +338,11 @@ class PaymentController {
          return res.status(403).json({ success: false, message: 'Unauthorized access to this booking' });
       }
 
-      const order = await PaymentService.createRazorpayOrder(booking.total_price, req.user.id, bookingId);
+      // Charge the spot fee plus the advance fee. The verification step checks
+      // the captured amount against exactly this sum, so the two must agree.
+      const payable = Number(booking.total_price) + Number(booking.advance_fee || 0);
+
+      const order = await PaymentService.createRazorpayOrder(payable, req.user.id, bookingId);
 
       res.json({
         success: true,
@@ -498,6 +502,9 @@ class PaymentController {
         data: {
           payment_id: paymentIntentId,
           payment_status: 'paid',
+          // Same basis as the Razorpay path: what this booking cost, so the
+          // refund ladder and the checkout floor have a number to work from.
+          amount_paid: Number(existing.total_price || 0) + Number(existing.advance_fee || 0),
           updated_at: new Date()
         },
         include: {
