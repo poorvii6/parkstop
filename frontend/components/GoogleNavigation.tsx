@@ -31,7 +31,6 @@ import {
   RouteStatus,
   TravelMode,
   AudioGuidance,
-  CameraPerspective,
   type NavigationViewController,
   type ArrivalEvent,
   type Location as NavLocation,
@@ -57,6 +56,16 @@ type Props = {
   onRemaining?: (meters: number) => void;
   /** Mirrors the app's existing mute toggle onto Google's voice guidance. */
   muted?: boolean;
+  /**
+   * Current speed in km/h, already filtered for stillness by the caller.
+   *
+   * Google's own speedometer is switched off in favour of this, because the
+   * SDK renders raw GPS speed with no way to intervene: a parked vehicle
+   * shows 10–20 km/h as successive fixes wander. The caller's watcher already
+   * decides when the rider is genuinely moving, so that decision is reused
+   * rather than repeated here.
+   */
+  speedKmh?: number;
   style?: any;
 };
 
@@ -107,6 +116,7 @@ export default function GoogleNavigation({
   onExit,
   onRemaining,
   muted,
+  speedKmh,
   style,
 }: Props) {
   const {
@@ -503,11 +513,21 @@ export default function GoogleNavigation({
         // it reads as a stray straight line drawn across the map rather than a
         // progress indicator, and it collides with ParkStop's back control.
         tripProgressBarEnabled={false}
-        // The km/h dial Google Maps shows in the bottom-left. It was simply
-        // never switched on — the SDK defaults it off — which is part of why
-        // this screen looked sparser than Google Maps beside it.
-        speedometerEnabled
+        // OFF, deliberately. Google's dial reads raw GPS speed, which sits at
+        // 10–20 km/h while the vehicle is parked because a stationary phone's
+        // successive fixes wander by a few metres. The SDK exposes no way to
+        // filter it, so the speed readout moved into ParkStop's own trip sheet
+        // below, where it can be held at zero until the rider is actually
+        // moving.
+        speedometerEnabled={false}
+        // Kept: this is the road's legal limit from Google's map data, not a
+        // measurement, so none of the above applies to it.
         speedLimitIconEnabled
+        // Google's own re-centre control. It appears only once the camera has
+        // been panned away and hides itself again on follow — exactly the
+        // Google Maps behaviour — and the SDK positions it clear of its own
+        // chrome. ParkStop used to draw a second, always-visible pill next to
+        // it; that was the duplicate.
         recenterButtonEnabled
         trafficPromptsEnabled
         trafficIncidentCardsEnabled
@@ -521,28 +541,17 @@ export default function GoogleNavigation({
       />
       ) : null}
 
-      {/* Re-center. Google's own lived in the footer we replaced.
+      {/* The custom Re-center pill that used to sit here has been removed.
         *
-        * Right-hand side deliberately: bottom-LEFT is where the SDK draws the
-        * speedometer and speed-limit icon, and putting a control there is what
-        * made the exit button collide with the dial. The report button is off,
-        * so this corner is genuinely free.
+        * It was added when switching Google's footer off appeared to take
+        * their re-centre control with it. That turned out to be wrong —
+        * recenterButtonEnabled draws it independently of the footer — so the
+        * app was rendering two, one from Google at the bottom-left and one of
+        * ours at the bottom-right.
         *
-        * TILTED is the perspective Google uses while guiding — facing the way
-        * the rider is travelling, rather than north-up. */}
-      {box ? (
-        <TouchableOpacity
-          onPress={() => {
-            try {
-              navView.current?.setFollowingPerspective(CameraPerspective.TILTED);
-            } catch {}
-          }}
-          activeOpacity={0.8}
-          style={styles.recenter}
-        >
-          <Text style={styles.recenterText}>Re-center</Text>
-        </TouchableOpacity>
-      ) : null}
+        * Google's is the better of the two to keep: it appears only after the
+        * camera has been panned away and hides again on follow, which is what
+        * Google Maps does, whereas ours sat there permanently. */}
 
       {/* ── Trip sheet: exit, remaining time, distance and arrival ──
         * A rebuild of Google Maps' bottom sheet, because Google's own footer
@@ -568,6 +577,21 @@ export default function GoogleNavigation({
               {trip ? `${fmtDistance(trip.meters)} · ${fmtArrival(trip.seconds)}` : 'Calculating route…'}
             </Text>
           </View>
+
+          {/* Speed, replacing Google's dial. Lives in the sheet rather than
+            * floating over the map because the sheet's layout is ours: a pill
+            * placed over the map would be guessing at where the SDK has drawn
+            * the speed-limit icon this frame, and that guess is what put the
+            * back arrow on top of the "Then" card before.
+            *
+            * The number is already filtered upstream — held at zero below
+            * walking pace — so a parked vehicle reads 0, not GPS drift. */}
+          {typeof speedKmh === 'number' ? (
+            <View style={styles.speedPill}>
+              <Text style={styles.speedValue}>{Math.max(0, Math.round(speedKmh))}</Text>
+              <Text style={styles.speedUnit}>km/h</Text>
+            </View>
+          ) : null}
         </View>
       ) : null}
 
@@ -650,22 +674,21 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: -2 },
     elevation: 16,
   },
-  recenter: {
-    position: 'absolute',
-    right: 16,
-    // Just above the sheet (76) with a margin.
-    bottom: 88,
-    backgroundColor: '#ffffff',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 22,
-    shadowColor: '#000',
-    shadowOpacity: 0.22,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 10,
+  /* Speed readout, right-hand end of the trip sheet. In flow rather than
+   * absolutely positioned, so it can never land on top of Google's chrome. */
+  speedPill: {
+    minWidth: 56,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#dadce0',
+    backgroundColor: '#f8f9fa',
   },
-  recenterText: { color: '#1a73e8', fontWeight: '700', fontSize: 13 },
+  speedValue: { fontSize: 18, fontWeight: '700', color: '#202124', lineHeight: 20 },
+  speedUnit: { fontSize: 10, fontWeight: '600', color: '#5f6368' },
   sheetClose: {
     width: 44,
     height: 44,

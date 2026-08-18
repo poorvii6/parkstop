@@ -19,6 +19,7 @@ import { io, Socket } from 'socket.io-client';
 import * as Location from 'expo-location';
 import * as Haptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
 import { isNetworkError, ONLINE_EVENT } from '../../utils/networkStatus';
 import { useOnlineRefresh } from '../../hooks/useOnlineRefresh';
@@ -111,9 +112,102 @@ export default function FinderDashboard() {
   const [selectedSlot, setSelectedSlot] = useState<string>('');
   const [parkingHours, setParkingHours] = useState<number>(1);
   const [parkingMinutes, setParkingMinutes] = useState<number>(0);
-  const [isManualDuration, setIsManualDuration] = useState(false);
   const [isLongParking, setIsLongParking] = useState(false);
-  const [parkingEndDate, setParkingEndDate] = useState<string>('');
+
+  /* ── Booking window ──────────────────────────────────────────────────────
+   * The rider picks when they arrive and when they leave. parkingHours and
+   * parkingMinutes are DERIVED from that pair rather than chosen directly —
+   * everything downstream (pricing, the active-session card, the booking
+   * request) already reads them, so keeping them in sync means none of that
+   * had to change. */
+  const [bookingStart, setBookingStart] = useState<Date>(() => new Date());
+  const [bookingEnd, setBookingEnd] = useState<Date>(() => new Date(Date.now() + 3600000));
+  const [timePickerFor, setTimePickerFor] = useState<'start' | 'end' | null>(null);
+  const [longStayDays, setLongStayDays] = useState<number>(0);
+
+  /** Minutes between the chosen arrival and departure, floored at zero. */
+  const windowMinutes = Math.max(
+    0,
+    Math.round((bookingEnd.getTime() - bookingStart.getTime()) / 60000)
+  );
+
+  /**
+   * Why the chosen window is unusable, or '' when it is fine.
+   *
+   * Shown in place of the duration rather than as an alert, so the rider sees
+   * the problem while they are still looking at the two times that caused it.
+   */
+  const bookingWindowError =
+    windowMinutes <= 0
+      ? 'Leaving must be after arriving'
+      : windowMinutes < 15
+      ? 'Minimum stay is 15 minutes'
+      : '';
+
+  /**
+   * The advance-booking fee, mirroring the server's BookingRefundPolicy.
+   *
+   * Duplicated here ONLY to show the rider what they will be charged before
+   * they commit; the server recomputes it and its answer is the one that
+   * counts. Change the threshold or the amount in one place and you must
+   * change the other.
+   */
+  const advanceFee =
+    !isLongParking && bookingStart.getTime() - Date.now() >= 2 * 3600000 ? 50 : 0;
+
+  /** "2:30 pm" — matches how the rest of the app writes times. */
+  const fmtClock = (d: Date) => {
+    const mm = d.getMinutes().toString().padStart(2, '0');
+    const ampm = d.getHours() >= 12 ? 'pm' : 'am';
+    return `${d.getHours() % 12 || 12}:${mm} ${ampm}`;
+  };
+
+  /** "Today" / "Tomorrow" / "24 Aug", so an overnight window is unambiguous. */
+  const fmtDayLabel = (d: Date) => {
+    const midnight = new Date();
+    midnight.setHours(0, 0, 0, 0);
+    const days = Math.floor((d.getTime() - midnight.getTime()) / 86400000);
+    if (days === 0) return 'Today';
+    if (days === 1) return 'Tomorrow';
+    return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+  };
+
+  /**
+   * Apply a picked arrival time.
+   *
+   * The picker returns hours and minutes with today's date attached. If that
+   * lands in the past the rider meant tomorrow — nobody picks 9am at 10am
+   * intending yesterday. The departure is carried along by the same shift so
+   * the length of stay they had already chosen survives.
+   */
+  const applyStartTime = (picked: Date) => {
+    const next = new Date(bookingStart);
+    next.setHours(picked.getHours(), picked.getMinutes(), 0, 0);
+    if (next.getTime() < Date.now() - 60000) next.setDate(next.getDate() + 1);
+
+    const heldMinutes = Math.max(15, windowMinutes);
+    setBookingStart(next);
+    setBookingEnd(new Date(next.getTime() + heldMinutes * 60000));
+  };
+
+  /**
+   * Apply a picked departure time. Rolls to the next day when it would land
+   * before the arrival, which is how an overnight stay gets expressed with a
+   * time-only picker.
+   */
+  const applyEndTime = (picked: Date) => {
+    const next = new Date(bookingStart);
+    next.setHours(picked.getHours(), picked.getMinutes(), 0, 0);
+    if (next.getTime() <= bookingStart.getTime()) next.setDate(next.getDate() + 1);
+    setBookingEnd(next);
+  };
+
+  /** Long stay: keep the arrival, push departure out by whole days. */
+  const applyLongStayDays = (days: number) => {
+    setLongStayDays(days);
+    if (days > 0) setBookingEnd(new Date(bookingStart.getTime() + days * 86400000));
+  };
+
   const [calculatedPrice, setCalculatedPrice] = useState<number | null>(null);
   const [isCalculatingPrice, setIsCalculatingPrice] = useState(false);
   const [slotData, setSlotData] = useState<Array<{ name: string; status: string }>>([]);
@@ -359,22 +453,28 @@ export default function FinderDashboard() {
     return () => clearInterval(interval);
   }, [step, bookingDetails]);
 
+  /**
+   * Keep the legacy duration pair in step with the chosen window.
+   *
+   * parkingHours / parkingMinutes are read in a dozen places — pricing, the
+   * active-session card, the booking request. Rather than chase all of them,
+   * the window remains the single thing the rider edits and these follow it.
+   */
+  useEffect(() => {
+    setParkingHours(Math.floor(windowMinutes / 60));
+    setParkingMinutes(windowMinutes % 60);
+  }, [windowMinutes]);
+
   useEffect(() => {
     if (step !== 'spot_booking' || !selectedSpotId) return;
-    
-    let hours = parkingHours + (parkingMinutes / 60);
-    let end = new Date(Date.now() + hours * 3600000);
+    if (bookingWindowError) return; // don't price a window that cannot be booked
 
-    if (isLongParking && parkingEndDate) {
-      const parts = parkingEndDate.split(/[-/]/);
-      if (parts.length === 3) {
-        const [dd, mm, yyyy] = parts;
-        end = new Date(`${yyyy}-${mm}-${dd}T23:59:59`);
-        if (!isNaN(end.getTime())) {
-          hours = Math.ceil((end.getTime() - Date.now()) / 3600000);
-        }
-      }
-    }
+    const hours = windowMinutes / 60;
+    // Price the window the rider actually chose, rather than assuming the stay
+    // begins now. A booking made at 10am for 2pm–6pm is four hours of parking,
+    // not eight.
+    const start = bookingStart;
+    const end = bookingEnd;
 
     const delayDebounceFn = setTimeout(async () => {
       setIsCalculatingPrice(true);
@@ -382,7 +482,7 @@ export default function FinderDashboard() {
       try {
         const res = await apiClient.post('/bookings/calculate-price', {
           spot_id: parseInt(selectedSpotId, 10),
-          start_time: new Date().toISOString(),
+          start_time: start.toISOString(),
           end_time: end.toISOString(),
         });
         if (res.data.success) {
@@ -400,7 +500,7 @@ export default function FinderDashboard() {
     }, 500);
 
     return () => clearTimeout(delayDebounceFn);
-  }, [step, selectedSpotId, parkingHours, parkingMinutes, isLongParking, parkingEndDate]);
+  }, [step, selectedSpotId, bookingStart, bookingEnd, windowMinutes, bookingWindowError]);
 
   // Auto-start navigation countdown
   useEffect(() => {
@@ -1301,7 +1401,19 @@ export default function FinderDashboard() {
           // Strategy C: Timeout so the app never hangs waiting on a fix.
           const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000));
 
-          const result = await Promise.race([lastKnown, fresh, timeout]);
+          // A *failure* must not win the race.
+          //
+          // Promise.race settles on the first promise to SETTLE, and resolving
+          // to null counts. On a phone with no cached fix, getLastKnownPosition
+          // returns null within milliseconds — so it won the race every time,
+          // the fast Balanced attempt was abandoned mid-flight, and every cold
+          // open fell through to the slow high-accuracy call below. Letting a
+          // null-resolving strategy hang instead means only a real fix, or the
+          // timeout, can decide this.
+          const onlyIfFound = (p: Promise<{ lat: number; lng: number } | null>) =>
+            p.then((v) => (v ? v : new Promise<{ lat: number; lng: number } | null>(() => {})));
+
+          const result = await Promise.race([onlyIfFound(lastKnown), onlyIfFound(fresh), timeout]);
           if (result) return result;
 
           // Nothing won the race — wait for the slower high-accuracy attempt,
@@ -1329,11 +1441,26 @@ export default function FinderDashboard() {
         // settles on the user's true position within a few seconds of opening.
         Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.BestForNavigation })
           .then((l) => {
+            const acc = l.coords.accuracy || 15;
+            const q = lastFixQuality.current;
+
+            // Apply the SAME accuracy gate the watcher below uses.
+            //
+            // BestForNavigation can take ten or twenty seconds to return. By
+            // then the watcher has usually settled the dot on a good fix — and
+            // this call was overwriting it unconditionally, including when what
+            // it came back with was worse. The dot would look right, then jump
+            // somewhere else a few seconds after opening and stay there. That
+            // late jump is what reads as the GPS being inaccurate, and it was
+            // the app's own doing rather than the sensor's.
+            if (acc > 35 && q && q.acc < acc / 2 && Date.now() - q.t < 10000) return;
+
             const precise = { lat: l.coords.latitude, lng: l.coords.longitude };
             setUserLocation(precise);
+            setLocationAccuracy(acc);
             lastUpdateCoords.current = precise;
             saveLastLocation(precise);
-            lastFixQuality.current = { acc: l.coords.accuracy || 15, t: Date.now() };
+            lastFixQuality.current = { acc, t: Date.now() };
           })
           .catch(() => {});
 
@@ -2461,29 +2588,37 @@ export default function FinderDashboard() {
     setSearchedPlace(null);
     setShowPaymentMethodModal(false);
     try {
-      let hours = parkingHours + (parkingMinutes / 60);
-      let end = new Date(Date.now() + hours * 3600000);
-      if (isLongParking && parkingEndDate) {
-        const parts = parkingEndDate.split(/[-/]/);
-        if (parts.length === 3) {
-          const [dd, mm, yyyy] = parts;
-          end = new Date(`${yyyy}-${mm}-${dd}T23:59:59`);
-          if (isNaN(end.getTime())) {
-            Alert.alert("Invalid Date", "Please check your date format (DD-MM-YYYY).");
-            setIsLoading(false);
-            return;
-          }
-        } else {
-          Alert.alert("Invalid Format", "Please use DD-MM-YYYY format.");
-          setIsLoading(false);
-          return;
-        }
-        hours = Math.ceil((end.getTime() - Date.now()) / 3600000);
+      // The rider picked a window, so send that window. This used to send
+      // `now` as the start regardless of what they chose, which is why the
+      // start time was never really theirs to set.
+      if (bookingWindowError) {
+        Alert.alert('Check the times', bookingWindowError);
+        setIsLoading(false);
+        return;
       }
+      if (isLongParking && longStayDays <= 0) {
+        Alert.alert('How long?', 'Choose how many days you need the spot for.');
+        setIsLoading(false);
+        return;
+      }
+
+      // Pay-at-spot is settled in person, so the server refuses it beyond an
+      // hour's lead. Say so here rather than letting the request fail.
+      if (method === 'cash' && bookingStart.getTime() - Date.now() > 3600000) {
+        Alert.alert(
+          'Pay at spot is for soon-ish bookings',
+          'Booking this far ahead needs online payment. Change the arrival time, or pay online.'
+        );
+        setIsLoading(false);
+        return;
+      }
+
+      const start = bookingStart;
+      const end = bookingEnd;
 
       const res = await apiClient.post('/bookings', {
         spot_id: parseInt(selectedSpotId, 10),
-        start_time: new Date().toISOString(),
+        start_time: start.toISOString(),
         end_time: end.toISOString(),
         slot_name: selectedSlot,
         vehicle_type: vehicleType,
@@ -2985,6 +3120,13 @@ export default function FinderDashboard() {
                 })()
               }
               muted={isMuted}
+              /* Speed for the trip sheet, replacing Google's own dial.
+               *
+               * navigationData.speed is already gated on a usable GPS fix and
+               * a clearly-moving speed, so it reads exactly 0 while parked.
+               * Google's speedometer had no such filter and sat at 10–20 km/h
+               * on a stationary vehicle. */
+              speedKmh={navigationData.speed * 3.6}
               /* The X on the trip sheet. Google's own footer cannot host a
                * control, so GoogleNavigation draws that sheet itself and this
                * is what its close button calls. */
@@ -3641,119 +3783,145 @@ export default function FinderDashboard() {
             <View style={{ marginBottom: 16 }}>
               <View style={{ flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 12, padding: 3, marginBottom: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' }}>
                 <TouchableOpacity 
-                  style={{ flex: 1, paddingVertical: 10, borderRadius: 9, backgroundColor: !isLongParking && !isManualDuration ? '#6366f1' : 'transparent', alignItems: 'center' }} 
-                  onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setIsLongParking(false); setIsManualDuration(false); }}
+                  style={{ flex: 1, paddingVertical: 10, borderRadius: 9, backgroundColor: !isLongParking ? '#6366f1' : 'transparent', alignItems: 'center' }}
+                  onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setIsLongParking(false); }}
                 >
-                  <Text style={{ color: !isLongParking && !isManualDuration ? '#fff' : '#94a3b8', fontWeight: '900', fontSize: 12 }}>Custom</Text>
+                  <Text style={{ color: !isLongParking ? '#fff' : '#94a3b8', fontWeight: '900', fontSize: 12 }}>Pick Times</Text>
                 </TouchableOpacity>
-                <TouchableOpacity 
-                  style={{ flex: 1, paddingVertical: 10, borderRadius: 9, backgroundColor: isManualDuration ? '#6366f1' : 'transparent', alignItems: 'center' }} 
-                  onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setIsLongParking(false); setIsManualDuration(true); }}
-                >
-                  <Text style={{ color: isManualDuration ? '#fff' : '#94a3b8', fontWeight: '900', fontSize: 12 }}>Type Duration</Text>
-                </TouchableOpacity>
-                <TouchableOpacity 
-                  style={{ flex: 1, paddingVertical: 10, borderRadius: 9, backgroundColor: isLongParking ? '#6366f1' : 'transparent', alignItems: 'center' }} 
-                  onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setIsLongParking(true); setIsManualDuration(false); }}
+                <TouchableOpacity
+                  style={{ flex: 1, paddingVertical: 10, borderRadius: 9, backgroundColor: isLongParking ? '#6366f1' : 'transparent', alignItems: 'center' }}
+                  onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setIsLongParking(true); }}
                 >
                   <Text style={{ color: isLongParking ? '#fff' : '#94a3b8', fontWeight: '900', fontSize: 12 }}>Long Stay</Text>
                 </TouchableOpacity>
               </View>
 
-              {(!isLongParking && !isManualDuration) && (
+              {/* ── Pick Times ───────────────────────────────────────────────
+                * Replaces the old hour/minute preset chips. A rider books a
+                * window, not an abstract length: "2pm to 6pm" is the thing they
+                * actually know, and the duration follows from it. The presets
+                * also could not express a start time at all, which is why every
+                * booking used to begin the moment you tapped Book.
+                *
+                * parkingHours / parkingMinutes are still derived and kept in
+                * sync, because pricing, the active-session card and the booking
+                * request all read them. */}
+              {!isLongParking && (
                 <View style={{ marginBottom: 16 }}>
-                  <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 8, textTransform: 'uppercase' }}>Hours</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
-                    {[0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 24].map(h => (
+                  <View style={{ flexDirection: 'row', gap: 10 }}>
+                    {([
+                      { key: 'start', label: 'Arriving', value: bookingStart },
+                      { key: 'end', label: 'Leaving', value: bookingEnd },
+                    ] as const).map(f => (
                       <TouchableOpacity
-                        key={h}
-                        onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setParkingHours(h); }}
-                        style={{ 
-                          width: 44, height: 44, 
-                          backgroundColor: parkingHours === h ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)', 
-                          borderWidth: 2, borderColor: parkingHours === h ? '#6366f1' : 'rgba(255,255,255,0.08)', 
-                          borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 6 
+                        key={f.key}
+                        activeOpacity={0.75}
+                        onPress={() => {
+                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                          setTimePickerFor(f.key);
+                        }}
+                        style={{
+                          flex: 1,
+                          backgroundColor: 'rgba(255,255,255,0.03)',
+                          borderWidth: 1.5,
+                          borderColor: timePickerFor === f.key ? '#6366f1' : 'rgba(255,255,255,0.08)',
+                          borderRadius: 14,
+                          paddingVertical: 12,
+                          paddingHorizontal: 14,
                         }}
                       >
-                        <Text style={{ color: '#fff', fontWeight: '900', fontSize: 13 }}>{h}h</Text>
+                        <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', textTransform: 'uppercase', marginBottom: 4 }}>
+                          {f.label}
+                        </Text>
+                        <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900' }}>
+                          {fmtClock(f.value)}
+                        </Text>
+                        <Text style={{ color: '#64748b', fontSize: 11, fontWeight: '700', marginTop: 2 }}>
+                          {fmtDayLabel(f.value)}
+                        </Text>
                       </TouchableOpacity>
                     ))}
-                  </ScrollView>
-                  <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 8, textTransform: 'uppercase' }}>Minutes</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                    {[0, 15, 30, 45].map(m => (
-                      <TouchableOpacity
-                        key={m}
-                        onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setParkingMinutes(m); }}
-                        style={{ 
-                          width: 48, height: 48, 
-                          backgroundColor: parkingMinutes === m ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)', 
-                          borderWidth: 2, borderColor: parkingMinutes === m ? '#6366f1' : 'rgba(255,255,255,0.08)', 
-                          borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 8 
-                        }}
-                      >
-                        <Text style={{ color: '#fff', fontWeight: '900', fontSize: 14 }}>{m}m</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                </View>
-              )}
-
-              {isManualDuration && (
-                <View style={{ marginBottom: 16 }}>
-                  <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 6, textTransform: 'uppercase' }}>Hours</Text>
-                      <TextInput
-                        style={{ 
-                          backgroundColor: 'rgba(255,255,255,0.03)', color: '#fff', 
-                          paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, 
-                          borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.08)',
-                          fontSize: 14, fontWeight: '800', textAlign: 'center' 
-                        }}
-                        keyboardType="numeric"
-                        value={parkingHours.toString()}
-                        onChangeText={(val) => {
-                          const hrs = parseInt(val, 10);
-                          setParkingHours(isNaN(hrs) ? 0 : hrs);
-                        }}
-                        placeholder="0"
-                        placeholderTextColor="rgba(255,255,255,0.15)"
-                      />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 6, textTransform: 'uppercase' }}>Minutes</Text>
-                      <TextInput
-                        style={{ 
-                          backgroundColor: 'rgba(255,255,255,0.03)', color: '#fff', 
-                          paddingHorizontal: 12, paddingVertical: 10, borderRadius: 12, 
-                          borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.08)',
-                          fontSize: 14, fontWeight: '800', textAlign: 'center' 
-                        }}
-                        keyboardType="numeric"
-                        value={parkingMinutes.toString()}
-                        onChangeText={(val) => {
-                          const mins = parseInt(val, 10);
-                          setParkingMinutes(isNaN(mins) ? 0 : mins);
-                        }}
-                        placeholder="0"
-                        placeholderTextColor="rgba(255,255,255,0.15)"
-                      />
-                    </View>
                   </View>
+
+                  {/* The derived length, so the rider can sanity-check the
+                    * window they just picked without doing the arithmetic. */}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 12 }}>
+                    <Text style={{ color: '#64748b', fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>Duration</Text>
+                    <Text style={{ color: bookingWindowError ? '#f87171' : '#22d3ee', fontSize: 14, fontWeight: '900' }}>
+                      {bookingWindowError || `${parkingHours}h ${parkingMinutes.toString().padStart(2, '0')}m`}
+                    </Text>
+                  </View>
+
+                  {/* Advance-booking fee, shown BEFORE payment rather than
+                    * appearing as a surprise on the receipt. The threshold and
+                    * amount mirror the server's BookingRefundPolicy — if you
+                    * change one, change the other. */}
+                  {advanceFee > 0 && (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 }}>
+                      <Text style={{ color: '#64748b', fontSize: 11, fontWeight: '800', textTransform: 'uppercase' }}>
+                        Advance booking fee
+                      </Text>
+                      <Text style={{ color: '#fbbf24', fontSize: 13, fontWeight: '900' }}>+₹{advanceFee}</Text>
+                    </View>
+                  )}
+
+                  {timePickerFor && (
+                    <DateTimePicker
+                      value={timePickerFor === 'start' ? bookingStart : bookingEnd}
+                      mode="time"
+                      is24Hour={false}
+                      onChange={(event: any, picked?: Date) => {
+                        // Android fires this for dismiss too; only 'set' is a
+                        // real choice, and leaving the picker mounted after a
+                        // dismiss makes it impossible to reopen.
+                        setTimePickerFor(null);
+                        if (event?.type === 'dismissed' || !picked) return;
+                        if (timePickerFor === 'start') applyStartTime(picked);
+                        else applyEndTime(picked);
+                      }}
+                    />
+                  )}
                 </View>
               )}
 
+              {/* ── Long Stay ────────────────────────────────────────────────
+                * A number of days rather than a typed DD-MM-YYYY end date. The
+                * old field accepted anything and silently produced NaN on a
+                * mistyped date, which then priced the booking at zero. */}
               {isLongParking && (
                 <View style={{ marginBottom: 16 }}>
-                  <Text style={{ color: '#64748b', marginBottom: 8, fontSize: 10, fontWeight: '800', textTransform: 'uppercase' }}>End Date</Text>
+                  <Text style={{ color: '#64748b', marginBottom: 8, fontSize: 10, fontWeight: '800', textTransform: 'uppercase' }}>How many days?</Text>
+                  <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
+                    {[1, 2, 3, 7, 15, 30].map(d => (
+                      <TouchableOpacity
+                        key={d}
+                        onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); applyLongStayDays(d); }}
+                        style={{
+                          flex: 1, paddingVertical: 12, borderRadius: 12, alignItems: 'center',
+                          backgroundColor: longStayDays === d ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)',
+                          borderWidth: 2, borderColor: longStayDays === d ? '#6366f1' : 'rgba(255,255,255,0.08)',
+                        }}
+                      >
+                        <Text style={{ color: '#fff', fontWeight: '900', fontSize: 13 }}>{d}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
                   <TextInput
                     style={{ backgroundColor: 'rgba(255,255,255,0.03)', color: '#fff', padding: 14, borderRadius: 16, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', fontSize: 15, fontWeight: '600' }}
-                    placeholder="DD-MM-YYYY"
+                    placeholder="Or type the number of days"
                     placeholderTextColor="#475569"
-                    value={parkingEndDate}
-                    onChangeText={setParkingEndDate}
+                    keyboardType="numeric"
+                    value={longStayDays ? String(longStayDays) : ''}
+                    onChangeText={(v) => {
+                      const n = parseInt(v.replace(/[^0-9]/g, ''), 10);
+                      applyLongStayDays(Number.isFinite(n) && n > 0 ? Math.min(n, 90) : 0);
+                    }}
                   />
+                  {longStayDays > 0 && (
+                    <Text style={{ color: '#64748b', fontSize: 12, fontWeight: '700', marginTop: 10 }}>
+                      {fmtClock(bookingStart)} {fmtDayLabel(bookingStart)} → {fmtClock(bookingEnd)} {fmtDayLabel(bookingEnd)}
+                    </Text>
+                  )}
                 </View>
               )}
 
@@ -4478,7 +4646,12 @@ export default function FinderDashboard() {
                         setSelectedSpotId(null);
                         setBookingDetails(null);
                         setSelectedSlot('');
-                        setParkingHours(1);
+                        // Reset the window rather than the derived duration —
+                        // the effect above recomputes hours/minutes from it.
+                        setBookingStart(new Date());
+                        setBookingEnd(new Date(Date.now() + 3600000));
+                        setIsLongParking(false);
+                        setLongStayDays(0);
                         setShowUPIInline(false);
                         setArrivalDetected(false);
                       }}
