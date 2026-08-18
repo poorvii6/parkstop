@@ -207,7 +207,7 @@ export default function FinderDashboard() {
    * intending yesterday. The departure is carried along by the same shift so
    * the length of stay they had already chosen survives.
    */
-  const applyStartTime = (picked: Date) => {
+  const resolveStartInstant = (picked: Date) => {
     // Resolve against IST *now*, NOT against whatever was chosen last time.
     //
     // Building on the previous value meant the date was sticky: pick a morning
@@ -219,9 +219,32 @@ export default function FinderDashboard() {
     const nowWall = toIstWall(new Date());
     const wall = new Date(nowWall);
     wall.setHours(picked.getHours(), picked.getMinutes(), 0, 0);
-    if (wall.getTime() < nowWall.getTime() - 60000) wall.setDate(wall.getDate() + 1);
 
-    const startInstant = fromIstWall(wall);
+    // Only roll to tomorrow when the time is meaningfully in the past.
+    //
+    // A rider who lands on 12:15 while the clock reads 12:18 means "about
+    // now", not "this time tomorrow" — rolling a full day there is technically
+    // defensible and completely wrong in practice. Half an hour of slack keeps
+    // near-now picks on today; anything earlier genuinely is tomorrow.
+    const PAST_TOLERANCE_MS = 30 * 60000;
+    if (wall.getTime() < nowWall.getTime() - PAST_TOLERANCE_MS) {
+      wall.setDate(wall.getDate() + 1);
+    }
+
+    return fromIstWall(wall);
+  };
+
+  /** Where a picked departure time lands, given the current arrival. */
+  const resolveEndInstant = (picked: Date) => {
+    const startWall = toIstWall(bookingStart);
+    const wall = new Date(startWall);
+    wall.setHours(picked.getHours(), picked.getMinutes(), 0, 0);
+    if (wall.getTime() <= startWall.getTime()) wall.setDate(wall.getDate() + 1);
+    return fromIstWall(wall);
+  };
+
+  const applyStartTime = (picked: Date) => {
+    const startInstant = resolveStartInstant(picked);
     const heldMinutes = Math.max(15, windowMinutes);
     setBookingStart(startInstant);
     setBookingEnd(new Date(startInstant.getTime() + heldMinutes * 60000));
@@ -233,11 +256,7 @@ export default function FinderDashboard() {
    * time-only picker.
    */
   const applyEndTime = (picked: Date) => {
-    const startWall = toIstWall(bookingStart);
-    const wall = new Date(startWall);
-    wall.setHours(picked.getHours(), picked.getMinutes(), 0, 0);
-    if (wall.getTime() <= startWall.getTime()) wall.setDate(wall.getDate() + 1);
-    setBookingEnd(fromIstWall(wall));
+    setBookingEnd(resolveEndInstant(picked));
   };
 
   /** Long stay: keep the arrival, push departure out by whole days. */
@@ -3912,6 +3931,12 @@ export default function FinderDashboard() {
                     /* IST wall-clock, so the wheel shows the same hour the
                      * spot owner will be standing there for. */
                     value={toIstWall(timePickerFor === 'end' ? bookingEnd : bookingStart)}
+                    /* Which day the chosen time actually lands on, shown live
+                     * under the wheel. "Tomorrow" appearing only after you
+                     * confirm is what made the behaviour feel arbitrary. */
+                    dayLabel={(d) =>
+                      fmtDayLabel(timePickerFor === 'end' ? resolveEndInstant(d) : resolveStartInstant(d))
+                    }
                     onCancel={() => setTimePickerFor(null)}
                     onConfirm={(picked) => {
                       const which = timePickerFor;

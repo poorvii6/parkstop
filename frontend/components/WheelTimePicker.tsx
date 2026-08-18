@@ -153,19 +153,44 @@ type Props = {
   /** Heading — "Arriving" or "Leaving", so the wheel says what it is setting. */
   title: string;
   value: Date;
+  /**
+   * Which day the currently-drafted time will land on — "Today", "Tomorrow".
+   *
+   * The wheel only chooses an hour and a minute; the caller decides the date.
+   * Showing that decision live is the difference between a rider understanding
+   * why their booking is tomorrow and being surprised by it afterwards.
+   */
+  dayLabel?: (d: Date) => string;
   onCancel: () => void;
   onConfirm: (d: Date) => void;
 };
 
-export default function WheelTimePicker({ visible, title, value, onCancel, onConfirm }: Props) {
+export default function WheelTimePicker({ visible, title, value, dayLabel, onCancel, onConfirm }: Props) {
   // Local draft: the wheel edits a copy and nothing is applied until Set. A
   // picker that wrote straight through would reprice the booking on every row
   // the rider scrolled past.
   const [draft, setDraft] = React.useState<Date>(value);
+  const wasVisible = useRef(false);
 
+  // Seed the draft when the sheet OPENS, and only then.
+  //
+  // Two things had to be got right here, and the first version got both wrong.
+  //
+  // The dependency is value.getTime(), not value. The caller passes a freshly
+  // constructed Date each render (it converts to IST inline), so depending on
+  // the object meant a new reference every render — the effect ran constantly
+  // and wrote the draft back to the original. Scrolling applied a new time,
+  // the re-render undid it, and the wheel sprang back. The selection could
+  // not stick at all.
+  //
+  // And it fires on the closed→open transition rather than whenever the value
+  // changes, so confirming a time cannot immediately re-seed the draft from
+  // the value it just set.
+  const valueMs = value.getTime();
   useEffect(() => {
-    if (visible) setDraft(value);
-  }, [visible, value]);
+    if (visible && !wasVisible.current) setDraft(new Date(valueMs));
+    wasVisible.current = visible;
+  }, [visible, valueMs]);
 
   const h24 = draft.getHours();
   const hourIndex = (h24 % 12 || 12) - 1;
@@ -237,6 +262,10 @@ export default function WheelTimePicker({ visible, title, value, onCancel, onCon
               })}
             </View>
           </View>
+
+          {dayLabel ? (
+            <Text style={styles.dayLabel}>{dayLabel(draft)}</Text>
+          ) : null}
 
           <View style={styles.actions}>
             <TouchableOpacity onPress={onCancel} style={[styles.btn, styles.btnGhost]} activeOpacity={0.8}>
@@ -322,7 +351,14 @@ const styles = StyleSheet.create({
   },
   meridiemText: { color: 'rgba(255,255,255,0.4)', fontWeight: '900', fontSize: 15 },
   meridiemTextOn: { color: '#ffffff' },
-  actions: { flexDirection: 'row', gap: 10, marginTop: 18 },
+  dayLabel: {
+    color: '#22d3ee',
+    fontSize: 13,
+    fontWeight: '900',
+    textAlign: 'center',
+    marginTop: 14,
+  },
+  actions: { flexDirection: 'row', gap: 10, marginTop: 14 },
   btn: { flex: 1, paddingVertical: 14, borderRadius: 16, alignItems: 'center' },
   btnGhost: { backgroundColor: 'rgba(255,255,255,0.05)' },
   btnGhostText: { color: '#94a3b8', fontWeight: '900', fontSize: 14 },
