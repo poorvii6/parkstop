@@ -17,7 +17,7 @@ import { setCashfreeCallbacks, removeCashfreeCallbacks, payBookingWithCashfree, 
 
 import { io, Socket } from 'socket.io-client';
 import * as Location from 'expo-location';
-import * as Haptics from 'expo-haptics';
+import * as ExpoHaptics from 'expo-haptics';
 import * as Speech from 'expo-speech';
 import WheelTimePicker from '../../components/WheelTimePicker';
 import { Ionicons } from '@expo/vector-icons';
@@ -85,6 +85,28 @@ const parseManeuver = (s: any) => {
     icon = '⬆️';
   }
   return { action, icon };
+};
+
+/**
+ * Haptics that cannot reject.
+ *
+ * expo-haptics returns a promise, and on hardware without a haptic motor — or
+ * with vibration switched off at the OS level — it rejects. Every one of the
+ * forty-odd `Haptics.impactAsync(...)` calls in this screen is fire-and-forget,
+ * so each rejection was unhandled, and React Native shows an unhandled
+ * rejection as the red "Uncaught (in promise)" banner across the bottom of the
+ * screen. Tapping anything produced one.
+ *
+ * Shadowing the module here fixes every call site at once rather than
+ * appending .catch to forty of them and missing the forty-first. A haptic that
+ * does not fire is not an error worth reporting: the tap still worked.
+ */
+const Haptics = {
+  ImpactFeedbackStyle: ExpoHaptics.ImpactFeedbackStyle,
+  NotificationFeedbackType: ExpoHaptics.NotificationFeedbackType,
+  impactAsync: (style?: any) => { ExpoHaptics.impactAsync(style).catch(() => {}); },
+  notificationAsync: (type?: any) => { ExpoHaptics.notificationAsync(type).catch(() => {}); },
+  selectionAsync: () => { ExpoHaptics.selectionAsync().catch(() => {}); },
 };
 
 export default function FinderDashboard() {
@@ -2369,7 +2391,8 @@ export default function FinderDashboard() {
     setIsFollowing(false);
     // No speech here: Google announces arrival itself, and speaking over it
     // produced two overlapping voices saying the same thing.
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+    // The wrapper above already swallows the rejection.
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   }, [arrivalDetected]);
 
   const recenterCamera = () => {

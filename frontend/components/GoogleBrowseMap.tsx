@@ -88,6 +88,30 @@ const ROUTE_CASING_ID = 'parkstop-route-casing';
 const SPOT_PREFIX = 'spot-';
 const SEARCH_PIN_ID = 'searched-place';
 
+/**
+ * Run a map-controller call and absorb its failure.
+ *
+ * Every NavigationViewController method returns a promise, and several of them
+ * reject in the ordinary course of business — removing a marker the native side
+ * has already dropped, drawing to a view that is being torn down. Called
+ * bare, those rejections are unhandled, and React Native surfaces an unhandled
+ * rejection as the red "Uncaught (in promise)" banner across the bottom of the
+ * screen. That banner is what the rider was seeing, and none of the underlying
+ * failures actually mattered: the marker was gone either way.
+ *
+ * Wrapping them here rather than adding .catch at each site is deliberate —
+ * six of these had a catch and six did not, and the next one added would have
+ * been a coin toss. Failures are still reported to the console in development,
+ * so this hides the banner without hiding the problem.
+ */
+const mapCall = (p: any): void => {
+  if (p && typeof p.catch === 'function') {
+    p.catch((e: any) => {
+      if (__DEV__) console.warn('[map] controller call failed:', e?.message || e);
+    });
+  }
+};
+
 const GoogleBrowseMap = forwardRef((props: Props, ref: any) => {
   const controller = useRef<MapViewController | null>(null);
   const [mapReady, setMapReady] = useState(false);
@@ -515,12 +539,12 @@ const GoogleBrowseMap = forwardRef((props: Props, ref: any) => {
         // the spot rather than the middle of the label floating over it.
         ...(img ? { anchor: { u: 0.5, v: 1.0 } } : {}),
         visible: true,
-      }).catch(() => {});
+      }).catch((e: any) => { if (__DEV__) console.warn('[map] controller call failed:', e?.message || e); });
     }
 
     const drawnIds: string[] = Array.from(drawnSpots.current.keys());
     for (const id of drawnIds) {
-      if (!next.has(id)) c.removeMarker(id);
+      if (!next.has(id)) mapCall(c.removeMarker(id));
     }
     drawnSpots.current = next;
     // props.destination is a dependency: choosing or clearing a spot must
@@ -558,10 +582,10 @@ const GoogleBrowseMap = forwardRef((props: Props, ref: any) => {
         position: { lat: props.searchedPlace.lat, lng: props.searchedPlace.lng },
         title: props.searchedPlace.title,
         visible: true,
-      }).catch(() => {});
+      }).catch((e: any) => { if (__DEV__) console.warn('[map] controller call failed:', e?.message || e); });
       drawnSearch.current = true;
     } else if (drawnSearch.current) {
-      c.removeMarker(SEARCH_PIN_ID);
+      mapCall(c.removeMarker(SEARCH_PIN_ID));
       drawnSearch.current = false;
     }
     // routeCoords.length is a dependency because the pin must disappear the
@@ -587,16 +611,16 @@ const GoogleBrowseMap = forwardRef((props: Props, ref: any) => {
 
     if (rc.length < 2) {
       if (drawnRoute.current) {
-        c.removePolyline(ROUTE_ID);
-        c.removePolyline(ROUTE_CASING_ID);
+        mapCall(c.removePolyline(ROUTE_ID));
+        mapCall(c.removePolyline(ROUTE_CASING_ID));
         drawnRoute.current = false;
       }
       return;
     }
 
     const points: NavLatLng[] = rc.map((p) => ({ lat: p.latitude, lng: p.longitude }));
-    c.addPolyline({ id: ROUTE_CASING_ID, points, color: '#0d47a1', width: 12 }).catch(() => {});
-    c.addPolyline({ id: ROUTE_ID, points, color: '#4285F4', width: 7 }).catch(() => {});
+    c.addPolyline({ id: ROUTE_CASING_ID, points, color: '#0d47a1', width: 12 }).catch((e: any) => { if (__DEV__) console.warn('[map] controller call failed:', e?.message || e); });
+    c.addPolyline({ id: ROUTE_ID, points, color: '#4285F4', width: 7 }).catch((e: any) => { if (__DEV__) console.warn('[map] controller call failed:', e?.message || e); });
     drawnRoute.current = true;
 
     // Frame the WHOLE route the first time it appears — Google's route preview.

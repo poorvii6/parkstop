@@ -178,7 +178,9 @@ export function useSpotPinImages(specs: PinSpec[]) {
               ) : spec.freeSlots != null ? (
                 <>
                   <View style={styles.pillDivider} />
-                  <Text style={styles.pillFree}>{spec.freeSlots} free</Text>
+                  {/* "available", not "free" — free reads as a price on a pill
+                    * whose other half is a price, and this is a count of bays. */}
+                  <Text style={styles.pillFree}>{spec.freeSlots} available</Text>
                 </>
               ) : null}
             </View>
