@@ -113,13 +113,29 @@ function Column({ base, valueIndex, onValueIndex, format, width }: ColumnProps) 
   const commit = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const raw = e.nativeEvent.contentOffset.y / ITEM_H;
     const abs = Math.max(0, Math.min(data.length - 1, Math.round(raw)));
-    const next = abs % base.length;
-    if (next !== settled.current) {
-      settled.current = next;
+
+    // ALWAYS snap to the exact row, whether or not the value changed.
+    //
+    // snapToInterval is not a guarantee. A drag that ends without momentum
+    // leaves the list wherever the finger lifted, and onScrollEndDrag fires
+    // there — so the column reported the nearest row while still sitting a
+    // fraction of a row away from it. Two columns doing that independently is
+    // how the hours ended up half a row below the minutes.
+    //
+    // The previous attempt at this deferred the correction to the effect
+    // below, which then skipped it precisely when the change came from this
+    // column — the one case that needed it most.
+    const target = abs * ITEM_H;
+    if (Math.abs(e.nativeEvent.contentOffset.y - target) > 0.5) {
+      ref.current?.scrollToOffset({ offset: target, animated: true });
+    }
+
+    if (abs % base.length !== settled.current) {
+      settled.current = abs % base.length;
       selfChanged.current = true;
       // A tick per row is what makes a wheel feel mechanical rather than laggy.
       Haptics.selectionAsync().catch(() => {});
-      onValueIndex(next);
+      onValueIndex(abs % base.length);
     }
   };
 

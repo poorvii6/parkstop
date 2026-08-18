@@ -464,6 +464,13 @@ export default function FinderDashboard() {
   const [resumableBooking, setResumableBooking] = useState<any>(null);
   // Quality of the most recent GPS fix — used to reject wandering low-accuracy readings.
   const lastFixQuality = useRef<{ acc: number; t: number } | null>(null);
+  /**
+   * Where the nearby-spots search was last run from, and how good that fix was.
+   *
+   * Kept so a search made from a coarse opening estimate can be redone once a
+   * real fix lands — otherwise "No spots found" is permanent for the session.
+   */
+  const spotsFetchedFrom = useRef<{ lat: number; lng: number; acc: number } | null>(null);
   // Consecutive in-geofence GPS fixes required before declaring arrival.
   const arrivalHits = useRef(0);
 
@@ -509,6 +516,27 @@ export default function FinderDashboard() {
 
     return () => clearInterval(interval);
   }, [step, bookingDetails]);
+
+  /**
+   * A booking window belongs to the spot it was chosen for.
+   *
+   * The window lives in screen state, so backing out of one spot and opening
+   * another carried the previous times across — the new spot opened showing a
+   * window picked for a different place, at a price computed for it. Worse,
+   * the times could by then be in the past.
+   *
+   * Reset whenever the chosen spot changes, so every spot starts from now.
+   */
+  useEffect(() => {
+    if (!selectedSpotId) return;
+    setBookingStart(new Date());
+    setBookingEnd(new Date(Date.now() + 3600000));
+    setIsLongParking(false);
+    setLongStayDays(0);
+    setTimePickerFor(null);
+    // The old spot's price must not linger while the new one is being fetched.
+    setCalculatedPrice(null);
+  }, [selectedSpotId]);
 
   /**
    * Keep the legacy duration pair in step with the chosen window.
@@ -1522,6 +1550,9 @@ export default function FinderDashboard() {
           lastUpdateCoords.current = coords;
           saveLastLocation(coords);
           fetchNearbySpots(coords.lat, coords.lng);
+          // Remember how good the fix behind this search was, so the watcher
+          // can redo it if this turns out to have been a coarse estimate.
+          spotsFetchedFrom.current = { lat: coords.lat, lng: coords.lng, acc: coords.acc };
         }
         // If coords is null we deliberately CONTINUE rather than bail: the
         // watcher below will deliver a position the moment GPS becomes
@@ -1581,6 +1612,31 @@ export default function FinderDashboard() {
             if (!lastUpdateCoords.current) {
               lastUpdateCoords.current = newCoords;
               fetchNearbySpots(newCoords.lat, newCoords.lng);
+              spotsFetchedFrom.current = { ...newCoords, acc };
+              return;
+            }
+
+            // Re-fetch when the position we searched from turns out to have
+            // been wrong.
+            //
+            // Spots were loaded exactly once, from whatever the opening fix
+            // happened to be. If that fix was a coarse network estimate — and
+            // it often is, because it is the fastest to arrive — the search
+            // ran from the wrong place and "No spots found" stuck there
+            // permanently, however good the GPS got afterwards.
+            //
+            // Two triggers: the search origin moved far enough that a 10km
+            // radius would now cover different ground, or the first search was
+            // made from a fix too coarse to trust and we finally have a good
+            // one.
+            const from = spotsFetchedFrom.current;
+            if (from) {
+              const movedKm = getDistanceKm(from.lat, from.lng, newCoords.lat, newCoords.lng);
+              const originWasCoarse = from.acc > 150 && acc <= 50;
+              if (movedKm > 2 || originWasCoarse) {
+                spotsFetchedFrom.current = { ...newCoords, acc };
+                fetchNearbySpots(newCoords.lat, newCoords.lng);
+              }
             }
           });
         } catch (watchErr) {
