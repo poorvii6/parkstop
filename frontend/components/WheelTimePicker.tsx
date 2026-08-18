@@ -2,19 +2,18 @@
  * Scrolling time wheel — hour, minute, AM/PM.
  *
  * Replaces the platform DateTimePicker, which on Android draws a clock face in
- * the system theme: a light grey dialog dropped on top of a dark app, with a
- * dial you have to aim at. This is the alarm-style spinner people actually
- * expect for setting a time, rendered in ParkStop's own colours so it reads as
- * part of the sheet rather than an OS interruption.
+ * the system theme: a light grey dialog dropped on a dark app, with a dial you
+ * have to aim at. This is the alarm-style spinner people expect for setting a
+ * time, in ParkStop's own colours, inside its own modal.
  *
  * Built rather than pulled from a library because the behaviour is a snapping
- * ScrollView and little else — the dependency would be larger than the code.
+ * list and little else — the dependency would be larger than the code.
  */
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
-  ScrollView,
+  FlatList,
   TouchableOpacity,
   Modal,
   StyleSheet,
@@ -23,78 +22,107 @@ import {
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 
-/** Row height. Everything else — padding, snap distance, centring — derives from it. */
+/** Row height. Padding, snap distance and centring all derive from it. */
 const ITEM_H = 46;
 /** Rows visible at once. Odd, so exactly one sits in the middle. */
 const VISIBLE = 5;
 const LIST_H = ITEM_H * VISIBLE;
 
-/** Five-minute steps: fine enough for parking, and a third of the scrolling. */
-const MINUTE_STEP = 5;
+/**
+ * How many times a wrapping column repeats its values.
+ *
+ * The wheel wraps by rendering the same sequence many times over and starting
+ * in the middle, so scrolling past 59 continues into 0 rather than hitting a
+ * wall. Nothing needs to recentre during a session: reaching either end from
+ * the middle would take fifty hours of continuous scrolling.
+ *
+ * This is only affordable because the columns are FlatLists — the rows are
+ * virtualised, so a 6,000-entry minute column renders the same handful of
+ * views a 60-entry one does.
+ */
+const LOOPS = 101;
+const MIDDLE = Math.floor(LOOPS / 2);
 
 const HOURS = Array.from({ length: 12 }, (_, i) => i + 1);
-const MINUTES = Array.from({ length: 60 / MINUTE_STEP }, (_, i) => i * MINUTE_STEP);
+/** Every minute. Five-minute steps could not express "leaving at 6:42". */
+const MINUTES = Array.from({ length: 60 }, (_, i) => i);
 const MERIDIEMS = ['AM', 'PM'];
 
 type ColumnProps = {
-  data: (string | number)[];
-  index: number;
-  onIndex: (i: number) => void;
+  /** The values themselves, listed once. Repeating is this component's job. */
+  base: (string | number)[];
+  /** Index into `base` of the current value. */
+  valueIndex: number;
+  onValueIndex: (i: number) => void;
+  /** Whether scrolling past the last value continues into the first. */
+  wrap?: boolean;
   format?: (v: string | number) => string;
   width: number;
 };
 
-/**
- * One scrolling column.
- *
- * The list is padded by two rows top and bottom so the first and last entries
- * can reach the centre line — without that, 1 o'clock and 55 minutes would be
- * unreachable.
- */
-function Column({ data, index, onIndex, format, width }: ColumnProps) {
-  const ref = useRef<ScrollView>(null);
-  const settled = useRef(index);
+function Column({ base, valueIndex, onValueIndex, wrap = true, format, width }: ColumnProps) {
+  const ref = useRef<FlatList>(null);
+  const settled = useRef(valueIndex);
 
-  // Jump to the current value on mount and whenever it changes from outside
-  // (e.g. picking a start time shifts the end time along with it).
+  // The repeated sequence. Memoised because rebuilding a 6,000-entry array on
+  // every keystroke of the wheel would be the one genuinely slow thing here.
+  const data = useMemo(
+    () => (wrap ? Array.from({ length: base.length * LOOPS }, (_, i) => base[i % base.length]) : base),
+    [base, wrap]
+  );
+
+  const absoluteIndex = wrap ? MIDDLE * base.length + valueIndex : valueIndex;
+
+  // Land on the current value when the wheel opens, and follow it if it is
+  // changed from outside — picking an arrival time shifts the departure along
+  // with it, and the departure wheel must open on the new value, not the old.
   useEffect(() => {
-    settled.current = index;
+    settled.current = valueIndex;
     const t = setTimeout(
-      () => ref.current?.scrollTo({ y: index * ITEM_H, animated: false }),
+      () => ref.current?.scrollToOffset({ offset: absoluteIndex * ITEM_H, animated: false }),
       0
     );
     return () => clearTimeout(t);
-  }, [index]);
+  }, [absoluteIndex, valueIndex]);
 
   const commit = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const raw = e.nativeEvent.contentOffset.y / ITEM_H;
-    const next = Math.max(0, Math.min(data.length - 1, Math.round(raw)));
+    const abs = Math.max(0, Math.min(data.length - 1, Math.round(raw)));
+    const next = wrap ? abs % base.length : abs;
     if (next !== settled.current) {
       settled.current = next;
       // A tick per row is what makes a wheel feel mechanical rather than laggy.
       Haptics.selectionAsync().catch(() => {});
-      onIndex(next);
+      onValueIndex(next);
     }
   };
 
   return (
-    <ScrollView
+    <FlatList
       ref={ref}
       style={{ width, height: LIST_H }}
+      data={data}
+      keyExtractor={(_, i) => String(i)}
       contentContainerStyle={{ paddingVertical: ITEM_H * ((VISIBLE - 1) / 2) }}
       showsVerticalScrollIndicator={false}
       snapToInterval={ITEM_H}
       decelerationRate="fast"
+      initialScrollIndex={absoluteIndex}
+      // Required for initialScrollIndex to land accurately, and it also spares
+      // the list from measuring six thousand rows.
+      getItemLayout={(_, i) => ({ length: ITEM_H, offset: ITEM_H * i, index: i })}
       // Momentum covers a flick; the drag handler catches a slow drag that
       // stops without momentum, which otherwise leaves the value unchanged
       // while the wheel visibly sits on a different number.
       onMomentumScrollEnd={commit}
       onScrollEndDrag={commit}
-    >
-      {data.map((v, i) => {
-        const active = i === index;
+      renderItem={({ item, index }) => {
+        // Only one repeat of a given value can be on screen at a time — the
+        // sequence repeats every base.length rows and only five are visible —
+        // so matching modulo cannot highlight two rows at once.
+        const active = wrap ? index % base.length === valueIndex : index === valueIndex;
         return (
-          <View key={String(v)} style={{ height: ITEM_H, justifyContent: 'center', alignItems: 'center' }}>
+          <View style={{ height: ITEM_H, justifyContent: 'center', alignItems: 'center' }}>
             <Text
               style={{
                 color: active ? '#ffffff' : 'rgba(255,255,255,0.32)',
@@ -102,12 +130,12 @@ function Column({ data, index, onIndex, format, width }: ColumnProps) {
                 fontWeight: active ? '900' : '700',
               }}
             >
-              {format ? format(v) : String(v)}
+              {format ? format(item) : String(item)}
             </Text>
           </View>
         );
-      })}
-    </ScrollView>
+      }}
+    />
   );
 }
 
@@ -121,9 +149,9 @@ type Props = {
 };
 
 export default function WheelTimePicker({ visible, title, value, onCancel, onConfirm }: Props) {
-  // Local draft: the wheel edits a copy, and nothing is applied until Set. A
-  // picker that wrote straight through would repeatedly reprice the booking
-  // while the rider was still spinning.
+  // Local draft: the wheel edits a copy and nothing is applied until Set. A
+  // picker that wrote straight through would reprice the booking on every row
+  // the rider scrolled past.
   const [draft, setDraft] = React.useState<Date>(value);
 
   useEffect(() => {
@@ -132,9 +160,7 @@ export default function WheelTimePicker({ visible, title, value, onCancel, onCon
 
   const h24 = draft.getHours();
   const hourIndex = (h24 % 12 || 12) - 1;
-  // Round to the nearest step so a time set elsewhere (now + 1h) still lands on
-  // a row rather than between two.
-  const minuteIndex = Math.round(draft.getMinutes() / MINUTE_STEP) % MINUTES.length;
+  const minuteIndex = draft.getMinutes();
   const meridiemIndex = h24 >= 12 ? 1 : 0;
 
   const apply = (hIdx: number, mIdx: number, merIdx: number) => {
@@ -145,36 +171,43 @@ export default function WheelTimePicker({ visible, title, value, onCancel, onCon
     setDraft(next);
   };
 
+  // Remounting the columns per open guarantees initialScrollIndex is honoured;
+  // a FlatList that stays mounted keeps its old offset.
+  if (!visible) return null;
+
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+    <Modal visible transparent animationType="fade" onRequestClose={onCancel}>
       <View style={styles.backdrop}>
         <View style={styles.card}>
           <Text style={styles.title}>{title}</Text>
 
           <View style={styles.wheels}>
-            {/* The selection band sits behind the columns so the centre row
-              * reads as chosen without needing a border on every item. */}
+            {/* The selection band sits behind the columns, so the centre row
+              * reads as chosen without a border on every item. */}
             <View pointerEvents="none" style={styles.band} />
 
             <Column
-              data={HOURS}
-              index={hourIndex}
+              base={HOURS}
+              valueIndex={hourIndex}
               width={72}
-              onIndex={(i) => apply(i, minuteIndex, meridiemIndex)}
+              onValueIndex={(i) => apply(i, minuteIndex, meridiemIndex)}
             />
             <Text style={styles.colon}>:</Text>
             <Column
-              data={MINUTES}
-              index={minuteIndex}
+              base={MINUTES}
+              valueIndex={minuteIndex}
               width={72}
               format={(v) => String(v).padStart(2, '0')}
-              onIndex={(i) => apply(hourIndex, i, meridiemIndex)}
+              onValueIndex={(i) => apply(hourIndex, i, meridiemIndex)}
             />
+            {/* AM/PM does not wrap: with two values, wrapping makes a flick
+              * land unpredictably on either one. */}
             <Column
-              data={MERIDIEMS}
-              index={meridiemIndex}
+              base={MERIDIEMS}
+              valueIndex={meridiemIndex}
               width={72}
-              onIndex={(i) => apply(hourIndex, minuteIndex, i)}
+              wrap={false}
+              onValueIndex={(i) => apply(hourIndex, minuteIndex, i)}
             />
           </View>
 
