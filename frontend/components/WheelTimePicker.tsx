@@ -54,29 +54,37 @@ type ColumnProps = {
   /** Index into `base` of the current value. */
   valueIndex: number;
   onValueIndex: (i: number) => void;
-  /** Whether scrolling past the last value continues into the first. */
-  wrap?: boolean;
   format?: (v: string | number) => string;
   width: number;
 };
 
-function Column({ base, valueIndex, onValueIndex, wrap = true, format, width }: ColumnProps) {
+function Column({ base, valueIndex, onValueIndex, format, width }: ColumnProps) {
   const ref = useRef<FlatList>(null);
   const settled = useRef(valueIndex);
+  const selfChanged = useRef(false);
 
   // The repeated sequence. Memoised because rebuilding a 6,000-entry array on
   // every keystroke of the wheel would be the one genuinely slow thing here.
   const data = useMemo(
-    () => (wrap ? Array.from({ length: base.length * LOOPS }, (_, i) => base[i % base.length]) : base),
-    [base, wrap]
+    () => Array.from({ length: base.length * LOOPS }, (_, i) => base[i % base.length]),
+    [base]
   );
 
-  const absoluteIndex = wrap ? MIDDLE * base.length + valueIndex : valueIndex;
+  const absoluteIndex = MIDDLE * base.length + valueIndex;
 
   // Land on the current value when the wheel opens, and follow it if it is
   // changed from outside — picking an arrival time shifts the departure along
   // with it, and the departure wheel must open on the new value, not the old.
+  //
+  // But NOT when this column itself caused the change. The value flows out to
+  // the parent and back on every scroll that lands, and a programmatic
+  // scrollToOffset arriving while the list is still settling its own snap
+  // fights that animation and shows as a twitch.
   useEffect(() => {
+    if (selfChanged.current) {
+      selfChanged.current = false;
+      return;
+    }
     settled.current = valueIndex;
     const t = setTimeout(
       () => ref.current?.scrollToOffset({ offset: absoluteIndex * ITEM_H, animated: false }),
@@ -88,9 +96,10 @@ function Column({ base, valueIndex, onValueIndex, wrap = true, format, width }: 
   const commit = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const raw = e.nativeEvent.contentOffset.y / ITEM_H;
     const abs = Math.max(0, Math.min(data.length - 1, Math.round(raw)));
-    const next = wrap ? abs % base.length : abs;
+    const next = abs % base.length;
     if (next !== settled.current) {
       settled.current = next;
+      selfChanged.current = true;
       // A tick per row is what makes a wheel feel mechanical rather than laggy.
       Haptics.selectionAsync().catch(() => {});
       onValueIndex(next);
@@ -120,7 +129,7 @@ function Column({ base, valueIndex, onValueIndex, wrap = true, format, width }: 
         // Only one repeat of a given value can be on screen at a time — the
         // sequence repeats every base.length rows and only five are visible —
         // so matching modulo cannot highlight two rows at once.
-        const active = wrap ? index % base.length === valueIndex : index === valueIndex;
+        const active = index % base.length === valueIndex;
         return (
           <View style={{ height: ITEM_H, justifyContent: 'center', alignItems: 'center' }}>
             <Text
@@ -182,33 +191,51 @@ export default function WheelTimePicker({ visible, title, value, onCancel, onCon
           <Text style={styles.title}>{title}</Text>
 
           <View style={styles.wheels}>
-            {/* The selection band sits behind the columns, so the centre row
+            {/* The band sits behind the two wheels only, so the centre row
               * reads as chosen without a border on every item. */}
             <View pointerEvents="none" style={styles.band} />
 
             <Column
               base={HOURS}
               valueIndex={hourIndex}
-              width={72}
+              width={76}
               onValueIndex={(i) => apply(i, minuteIndex, meridiemIndex)}
             />
             <Text style={styles.colon}>:</Text>
             <Column
               base={MINUTES}
               valueIndex={minuteIndex}
-              width={72}
+              width={76}
               format={(v) => String(v).padStart(2, '0')}
               onValueIndex={(i) => apply(hourIndex, i, meridiemIndex)}
             />
-            {/* AM/PM does not wrap: with two values, wrapping makes a flick
-              * land unpredictably on either one. */}
-            <Column
-              base={MERIDIEMS}
-              valueIndex={meridiemIndex}
-              width={72}
-              wrap={false}
-              onValueIndex={(i) => apply(hourIndex, minuteIndex, i)}
-            />
+
+            {/* AM/PM is a pair of buttons, not a wheel.
+              *
+              * As a wheel it was effectively unusable: two rows means the whole
+              * scrollable range is a single row height, so a flick snaps
+              * straight back and a slow drag barely registers as a scroll at
+              * all. There was no reliable way to get from PM to AM. A two-way
+              * choice wants a tap, and a tap always lands. */}
+            <View style={styles.meridiem}>
+              {MERIDIEMS.map((m, i) => {
+                const on = i === meridiemIndex;
+                return (
+                  <TouchableOpacity
+                    key={m}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      if (on) return;
+                      Haptics.selectionAsync().catch(() => {});
+                      apply(hourIndex, minuteIndex, i);
+                    }}
+                    style={[styles.meridiemBtn, on && styles.meridiemBtnOn]}
+                  >
+                    <Text style={[styles.meridiemText, on && styles.meridiemTextOn]}>{m}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
           </View>
 
           <View style={styles.actions}>
@@ -269,7 +296,9 @@ const styles = StyleSheet.create({
   band: {
     position: 'absolute',
     left: 0,
-    right: 0,
+    // Stops short of the AM/PM buttons — they carry their own selected state,
+    // and running the band under them implied they were part of the wheel.
+    right: 96,
     top: ITEM_H * ((VISIBLE - 1) / 2),
     height: ITEM_H,
     borderRadius: 14,
@@ -278,6 +307,21 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(99,102,241,0.45)',
   },
   colon: { color: '#fff', fontSize: 26, fontWeight: '900', marginHorizontal: -4 },
+  meridiem: { width: 88, marginLeft: 8, gap: 8 },
+  meridiemBtn: {
+    paddingVertical: 12,
+    borderRadius: 14,
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  meridiemBtnOn: {
+    backgroundColor: 'rgba(99,102,241,0.18)',
+    borderColor: '#6366f1',
+  },
+  meridiemText: { color: 'rgba(255,255,255,0.4)', fontWeight: '900', fontSize: 15 },
+  meridiemTextOn: { color: '#ffffff' },
   actions: { flexDirection: 'row', gap: 10, marginTop: 18 },
   btn: { flex: 1, paddingVertical: 14, borderRadius: 16, alignItems: 'center' },
   btnGhost: { backgroundColor: 'rgba(255,255,255,0.05)' },
