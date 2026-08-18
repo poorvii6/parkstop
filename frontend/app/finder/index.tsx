@@ -1442,17 +1442,35 @@ export default function FinderDashboard() {
         //    soon as ANY input rejects, so an immediate "location unavailable"
         //    error used to beat the 5s timeout and blow up the whole init —
         //    skipping the watcher, the heading, and the nearby-spot fetch.
-        const getLocationFast = async (): Promise<{ lat: number; lng: number } | null> => {
-          // Strategy A: Last known position — only if RECENT (≤30s). Stale
-          // positions were placing the dot minutes behind the user.
-          const lastKnown = Location.getLastKnownPositionAsync({ maxAge: 30000 })
-            .then((loc) => (loc ? { lat: loc.coords.latitude, lng: loc.coords.longitude } : null))
+        type Fix = { lat: number; lng: number; acc: number };
+        const getLocationFast = async (): Promise<Fix | null> => {
+          // Strategy A: Last known position — only if RECENT (≤30s) AND
+          // reasonably precise.
+          //
+          // requiredAccuracy matters as much as maxAge. Without it a
+          // thirty-second-old cell-tower fix, which can be a kilometre or more
+          // wide, wins this race and plants the dot in the wrong part of town.
+          // It looks like a working location rather than a placeholder, so
+          // nothing downstream distrusts it.
+          const lastKnown = Location.getLastKnownPositionAsync({
+            maxAge: 30000,
+            requiredAccuracy: 100,
+          })
+            .then((loc) =>
+              loc
+                ? { lat: loc.coords.latitude, lng: loc.coords.longitude, acc: loc.coords.accuracy || 100 }
+                : null
+            )
             .catch(() => null);
 
           // Strategy B: Fresh position at Balanced (~100m, fast). Never Lowest —
           // cell-tower granularity put the dot kilometers off on open.
           const fresh = Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
-            .then((loc) => ({ lat: loc.coords.latitude, lng: loc.coords.longitude }))
+            .then((loc) => ({
+              lat: loc.coords.latitude,
+              lng: loc.coords.longitude,
+              acc: loc.coords.accuracy || 100,
+            }))
             .catch(() => null);
 
           // Strategy C: Timeout so the app never hangs waiting on a fix.
@@ -1467,8 +1485,8 @@ export default function FinderDashboard() {
           // open fell through to the slow high-accuracy call below. Letting a
           // null-resolving strategy hang instead means only a real fix, or the
           // timeout, can decide this.
-          const onlyIfFound = (p: Promise<{ lat: number; lng: number } | null>) =>
-            p.then((v) => (v ? v : new Promise<{ lat: number; lng: number } | null>(() => {})));
+          const onlyIfFound = (p: Promise<Fix | null>) =>
+            p.then((v) => (v ? v : new Promise<Fix | null>(() => {})));
 
           const result = await Promise.race([onlyIfFound(lastKnown), onlyIfFound(fresh), timeout]);
           if (result) return result;
@@ -1476,7 +1494,11 @@ export default function FinderDashboard() {
           // Nothing won the race — wait for the slower high-accuracy attempt,
           // but never let it throw either.
           const fallback = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High })
-            .then((l) => ({ lat: l.coords.latitude, lng: l.coords.longitude }))
+            .then((l) => ({
+              lat: l.coords.latitude,
+              lng: l.coords.longitude,
+              acc: l.coords.accuracy || 20,
+            }))
             .catch(() => null);
           return fallback;
         };
@@ -1485,7 +1507,18 @@ export default function FinderDashboard() {
 
         if (coords) {
           setLocationServicesOff(false);
-          setUserLocation(coords);
+          // Strip the accuracy before storing: userLocation is {lat,lng} and
+          // gets spread into API payloads, so an extra field would ride along.
+          setUserLocation({ lat: coords.lat, lng: coords.lng });
+          // Record how good this first fix was.
+          //
+          // Previously nothing did, so the accuracy gate on the watcher and the
+          // background refine had no baseline to compare against and simply let
+          // the next reading through, however poor. The dot could be dragged
+          // off a good opening fix by the first noisy update — which is the
+          // "it finds me, then wanders" behaviour.
+          setLocationAccuracy(coords.acc);
+          lastFixQuality.current = { acc: coords.acc, t: Date.now() };
           lastUpdateCoords.current = coords;
           saveLastLocation(coords);
           fetchNearbySpots(coords.lat, coords.lng);

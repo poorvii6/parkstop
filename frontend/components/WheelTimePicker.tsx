@@ -155,13 +155,21 @@ function Column({ base, valueIndex, onValueIndex, format, width }: ColumnProps) 
       // while the wheel visibly sits on a different number.
       onMomentumScrollEnd={commit}
       onScrollEndDrag={commit}
-      // Virtualisation tuned for a five-row window. The defaults render about
-      // twenty screens' worth, which for three simultaneous columns is a lot
-      // of view churn on every scroll — the drag felt heavy because of it.
-      windowSize={3}
-      initialNumToRender={VISIBLE + 4}
-      maxToRenderPerBatch={VISIBLE + 4}
-      removeClippedSubviews
+      // Virtualisation trimmed from the defaults (about twenty screens' worth),
+      // which across two live columns was a lot of view churn per scroll.
+      //
+      // NOT removeClippedSubviews. It looks like the obvious further win and on
+      // Android it detaches views the list still believes are laid out: rows
+      // render at the wrong offset or not at all. It is what made the hour
+      // column sit half a row below the minute column with a clipped fragment
+      // at the top — the columns were never actually misaligned, one of them
+      // was just drawn wrong.
+      //
+      // windowSize 5 rather than 3 for the same reason: 3 is tight enough that
+      // a fast flick outruns the render batch and shows blanks.
+      windowSize={5}
+      initialNumToRender={VISIBLE + 6}
+      maxToRenderPerBatch={VISIBLE + 6}
       renderItem={renderRow}
     />
   );
