@@ -9,7 +9,7 @@
  * Built rather than pulled from a library because the behaviour is a snapping
  * list and little else — the dependency would be larger than the code.
  */
-import React, { useEffect, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -33,20 +33,37 @@ const LIST_H = ITEM_H * VISIBLE;
  *
  * The wheel wraps by rendering the same sequence many times over and starting
  * in the middle, so scrolling past 59 continues into 0 rather than hitting a
- * wall. Nothing needs to recentre during a session: reaching either end from
- * the middle would take fifty hours of continuous scrolling.
+ * wall.
  *
- * This is only affordable because the columns are FlatLists — the rows are
- * virtualised, so a 6,000-entry minute column renders the same handful of
- * views a 60-entry one does.
+ * 25, not 101. The first version built a 6,000-row minute column, and while
+ * FlatList virtualises the rendering it still allocates and diffs the array —
+ * which is what made the wheel feel heavy to drag. Twelve cycles of headroom
+ * in each direction is twelve straight hours of scrolling before an edge could
+ * be reached, so nothing is lost by cutting it.
  */
-const LOOPS = 101;
+const LOOPS = 25;
 const MIDDLE = Math.floor(LOOPS / 2);
 
 const HOURS = Array.from({ length: 12 }, (_, i) => i + 1);
 /** Every minute. Five-minute steps could not express "leaving at 6:42". */
 const MINUTES = Array.from({ length: 60 }, (_, i) => i);
 const MERIDIEMS = ['AM', 'PM'];
+
+/**
+ * One row, memoised.
+ *
+ * renderItem used to build its View and Text inline, so every row rebuilt on
+ * every parent render — and the parent re-renders on each row the wheel passes.
+ * Pulling the row out and memoising it means only the rows whose active state
+ * actually changed do any work.
+ */
+const Row = React.memo(function Row({ label, active }: { label: string; active: boolean }) {
+  return (
+    <View style={styles.row}>
+      <Text style={[styles.rowText, active && styles.rowTextActive]}>{label}</Text>
+    </View>
+  );
+});
 
 type ColumnProps = {
   /** The values themselves, listed once. Repeating is this component's job. */
@@ -106,6 +123,19 @@ function Column({ base, valueIndex, onValueIndex, format, width }: ColumnProps) 
     }
   };
 
+  // Only one repeat of a given value can be on screen at a time — the sequence
+  // repeats every base.length rows and only five are visible — so matching
+  // modulo cannot highlight two rows at once.
+  const renderRow = useCallback(
+    ({ item, index }: { item: string | number; index: number }) => (
+      <Row
+        label={format ? format(item) : String(item)}
+        active={index % base.length === valueIndex}
+      />
+    ),
+    [base.length, valueIndex, format]
+  );
+
   return (
     <FlatList
       ref={ref}
@@ -125,25 +155,14 @@ function Column({ base, valueIndex, onValueIndex, format, width }: ColumnProps) 
       // while the wheel visibly sits on a different number.
       onMomentumScrollEnd={commit}
       onScrollEndDrag={commit}
-      renderItem={({ item, index }) => {
-        // Only one repeat of a given value can be on screen at a time — the
-        // sequence repeats every base.length rows and only five are visible —
-        // so matching modulo cannot highlight two rows at once.
-        const active = index % base.length === valueIndex;
-        return (
-          <View style={{ height: ITEM_H, justifyContent: 'center', alignItems: 'center' }}>
-            <Text
-              style={{
-                color: active ? '#ffffff' : 'rgba(255,255,255,0.32)',
-                fontSize: active ? 26 : 20,
-                fontWeight: active ? '900' : '700',
-              }}
-            >
-              {format ? format(item) : String(item)}
-            </Text>
-          </View>
-        );
-      }}
+      // Virtualisation tuned for a five-row window. The defaults render about
+      // twenty screens' worth, which for three simultaneous columns is a lot
+      // of view churn on every scroll — the drag felt heavy because of it.
+      windowSize={3}
+      initialNumToRender={VISIBLE + 4}
+      maxToRenderPerBatch={VISIBLE + 4}
+      removeClippedSubviews
+      renderItem={renderRow}
     />
   );
 }
@@ -234,33 +253,36 @@ export default function WheelTimePicker({ visible, title, value, dayLabel, onCan
               format={(v) => String(v).padStart(2, '0')}
               onValueIndex={(i) => apply(hourIndex, i, meridiemIndex)}
             />
+          </View>
 
-            {/* AM/PM is a pair of buttons, not a wheel.
-              *
-              * As a wheel it was effectively unusable: two rows means the whole
-              * scrollable range is a single row height, so a flick snaps
-              * straight back and a slow drag barely registers as a scroll at
-              * all. There was no reliable way to get from PM to AM. A two-way
-              * choice wants a tap, and a tap always lands. */}
-            <View style={styles.meridiem}>
-              {MERIDIEMS.map((m, i) => {
-                const on = i === meridiemIndex;
-                return (
-                  <TouchableOpacity
-                    key={m}
-                    activeOpacity={0.8}
-                    onPress={() => {
-                      if (on) return;
-                      Haptics.selectionAsync().catch(() => {});
-                      apply(hourIndex, minuteIndex, i);
-                    }}
-                    style={[styles.meridiemBtn, on && styles.meridiemBtnOn]}
-                  >
-                    <Text style={[styles.meridiemText, on && styles.meridiemTextOn]}>{m}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+          {/* AM/PM below the wheels, as a segmented control.
+            *
+            * It is buttons rather than a third wheel because two rows gives a
+            * scrollable range of exactly one row: a flick snaps straight back
+            * and a slow drag barely registers, so PM to AM was unreachable.
+            *
+            * And it sits below rather than beside because a vertically centred
+            * pair puts the gap between the two buttons on the selection band's
+            * centre line — neither button ever lined up with the chosen row,
+            * which is what read as the wheel being out of alignment. */}
+          <View style={styles.meridiem}>
+            {MERIDIEMS.map((m, i) => {
+              const on = i === meridiemIndex;
+              return (
+                <TouchableOpacity
+                  key={m}
+                  activeOpacity={0.8}
+                  onPress={() => {
+                    if (on) return;
+                    Haptics.selectionAsync().catch(() => {});
+                    apply(hourIndex, minuteIndex, i);
+                  }}
+                  style={[styles.meridiemBtn, on && styles.meridiemBtnOn]}
+                >
+                  <Text style={[styles.meridiemText, on && styles.meridiemTextOn]}>{m}</Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
 
           {dayLabel ? (
@@ -322,12 +344,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     height: LIST_H,
   },
+  /* Spans only the two wheels, which are now the only things in that row. */
   band: {
     position: 'absolute',
     left: 0,
-    // Stops short of the AM/PM buttons — they carry their own selected state,
-    // and running the band under them implied they were part of the wheel.
-    right: 96,
+    right: 0,
     top: ITEM_H * ((VISIBLE - 1) / 2),
     height: ITEM_H,
     borderRadius: 14,
@@ -336,8 +357,12 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(99,102,241,0.45)',
   },
   colon: { color: '#fff', fontSize: 26, fontWeight: '900', marginHorizontal: -4 },
-  meridiem: { width: 88, marginLeft: 8, gap: 8 },
+  row: { height: ITEM_H, justifyContent: 'center', alignItems: 'center' },
+  rowText: { color: 'rgba(255,255,255,0.32)', fontSize: 20, fontWeight: '700' },
+  rowTextActive: { color: '#ffffff', fontSize: 26, fontWeight: '900' },
+  meridiem: { flexDirection: 'row', gap: 10, marginTop: 16 },
   meridiemBtn: {
+    flex: 1,
     paddingVertical: 12,
     borderRadius: 14,
     alignItems: 'center',

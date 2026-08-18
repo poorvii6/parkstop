@@ -542,7 +542,7 @@ export default function GoogleNavigation({
       ) : null}
 
       {/* Re-centre, in Google Maps' own visual language: a white pill with a
-        * blue navigation glyph, bottom-left, just above the sheet.
+        * blue navigation glyph, bottom-right, just above the sheet.
         *
         * Drawn here rather than using the SDK's because AndroidStylingOptions
         * covers only the header — their button cannot be restyled, and its
@@ -693,12 +693,11 @@ const styles = StyleSheet.create({
     elevation: 16,
   },
   /* Re-centre control, matching Google Maps: white pill, Google blue label,
-   * soft elevation, bottom-LEFT. Left rather than right because that is where
-   * Google Maps puts it, and because the right side is where a rider's thumb
-   * rests over the map. */
+   * soft elevation. Right-hand side, within thumb reach of a hand holding the
+   * phone, and clear of the speed-limit icon the SDK draws bottom-left. */
   recenter: {
     position: 'absolute',
-    left: 16,
+    right: 16,
     // Clear of the 76px sheet with a comfortable margin.
     bottom: 92,
     flexDirection: 'row',
