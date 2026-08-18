@@ -125,6 +125,27 @@ export default function FinderDashboard() {
   const [timePickerFor, setTimePickerFor] = useState<'start' | 'end' | null>(null);
   const [longStayDays, setLongStayDays] = useState<number>(0);
 
+  /* ── Times are IST, whatever the phone says ───────────────────────────────
+   *
+   * ParkStop operates in one country and one timezone. A device set to the
+   * wrong zone — or simply left on the timezone of somewhere the owner
+   * travelled — would otherwise book a bay for the right clock time in the
+   * wrong hour, and the rider would have no way of noticing: every screen
+   * would agree with itself and disagree with the spot owner standing there.
+   *
+   * India has no daylight saving, so the offset is the fixed +5:30 and no
+   * lookup table is needed.
+   *
+   * toIstWall returns a Date whose LOCAL getters read IST values, for display
+   * and for hour/minute arithmetic. fromIstWall converts such a Date back to
+   * the real instant to store or send. On a phone already set to IST both are
+   * no-ops, so this costs nothing in the normal case. */
+  const IST_OFFSET_MIN = 330;
+  const toIstWall = (d: Date) =>
+    new Date(d.getTime() + (IST_OFFSET_MIN + d.getTimezoneOffset()) * 60000);
+  const fromIstWall = (d: Date) =>
+    new Date(d.getTime() - (IST_OFFSET_MIN + d.getTimezoneOffset()) * 60000);
+
   /** Minutes between the chosen arrival and departure, floored at zero. */
   const windowMinutes = Math.max(
     0,
@@ -155,21 +176,27 @@ export default function FinderDashboard() {
   const advanceFee =
     !isLongParking && bookingStart.getTime() - Date.now() >= 2 * 3600000 ? 50 : 0;
 
-  /** "2:30 pm" — matches how the rest of the app writes times. */
+  /** "2:30 pm" in IST — matches how the rest of the app writes times. */
   const fmtClock = (d: Date) => {
-    const mm = d.getMinutes().toString().padStart(2, '0');
-    const ampm = d.getHours() >= 12 ? 'pm' : 'am';
-    return `${d.getHours() % 12 || 12}:${mm} ${ampm}`;
+    const w = toIstWall(d);
+    const mm = w.getMinutes().toString().padStart(2, '0');
+    const ampm = w.getHours() >= 12 ? 'pm' : 'am';
+    return `${w.getHours() % 12 || 12}:${mm} ${ampm}`;
   };
 
-  /** "Today" / "Tomorrow" / "24 Aug", so an overnight window is unambiguous. */
+  /**
+   * "Today" / "Tomorrow" / "24 Aug", judged in IST so a late-evening booking
+   * does not read as tomorrow just because the device thinks it is already
+   * past midnight somewhere else.
+   */
   const fmtDayLabel = (d: Date) => {
-    const midnight = new Date();
+    const w = toIstWall(d);
+    const midnight = toIstWall(new Date());
     midnight.setHours(0, 0, 0, 0);
-    const days = Math.floor((d.getTime() - midnight.getTime()) / 86400000);
+    const days = Math.floor((w.getTime() - midnight.getTime()) / 86400000);
     if (days === 0) return 'Today';
     if (days === 1) return 'Tomorrow';
-    return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+    return w.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
   };
 
   /**
@@ -181,13 +208,23 @@ export default function FinderDashboard() {
    * the length of stay they had already chosen survives.
    */
   const applyStartTime = (picked: Date) => {
-    const next = new Date(bookingStart);
-    next.setHours(picked.getHours(), picked.getMinutes(), 0, 0);
-    if (next.getTime() < Date.now() - 60000) next.setDate(next.getDate() + 1);
+    // Resolve against IST *now*, NOT against whatever was chosen last time.
+    //
+    // Building on the previous value meant the date was sticky: pick a morning
+    // time while it is afternoon and it correctly rolled to tomorrow — but then
+    // picking an evening time kept tomorrow's date, because the roll only ever
+    // went forwards and the base had already moved. There was no way back to
+    // today short of restarting the booking. A chosen clock time now always
+    // means the next time that clock reads it.
+    const nowWall = toIstWall(new Date());
+    const wall = new Date(nowWall);
+    wall.setHours(picked.getHours(), picked.getMinutes(), 0, 0);
+    if (wall.getTime() < nowWall.getTime() - 60000) wall.setDate(wall.getDate() + 1);
 
+    const startInstant = fromIstWall(wall);
     const heldMinutes = Math.max(15, windowMinutes);
-    setBookingStart(next);
-    setBookingEnd(new Date(next.getTime() + heldMinutes * 60000));
+    setBookingStart(startInstant);
+    setBookingEnd(new Date(startInstant.getTime() + heldMinutes * 60000));
   };
 
   /**
@@ -196,10 +233,11 @@ export default function FinderDashboard() {
    * time-only picker.
    */
   const applyEndTime = (picked: Date) => {
-    const next = new Date(bookingStart);
-    next.setHours(picked.getHours(), picked.getMinutes(), 0, 0);
-    if (next.getTime() <= bookingStart.getTime()) next.setDate(next.getDate() + 1);
-    setBookingEnd(next);
+    const startWall = toIstWall(bookingStart);
+    const wall = new Date(startWall);
+    wall.setHours(picked.getHours(), picked.getMinutes(), 0, 0);
+    if (wall.getTime() <= startWall.getTime()) wall.setDate(wall.getDate() + 1);
+    setBookingEnd(fromIstWall(wall));
   };
 
   /** Long stay: keep the arrival, push departure out by whole days. */
@@ -3870,8 +3908,10 @@ export default function FinderDashboard() {
                     * dialog on a dark app, with a dial you have to aim at. */}
                   <WheelTimePicker
                     visible={timePickerFor !== null}
-                    title={timePickerFor === 'end' ? 'Leaving' : 'Arriving'}
-                    value={timePickerFor === 'end' ? bookingEnd : bookingStart}
+                    title={timePickerFor === 'end' ? 'Leaving (IST)' : 'Arriving (IST)'}
+                    /* IST wall-clock, so the wheel shows the same hour the
+                     * spot owner will be standing there for. */
+                    value={toIstWall(timePickerFor === 'end' ? bookingEnd : bookingStart)}
                     onCancel={() => setTimePickerFor(null)}
                     onConfirm={(picked) => {
                       const which = timePickerFor;
