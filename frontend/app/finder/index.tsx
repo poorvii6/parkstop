@@ -1440,10 +1440,62 @@ export default function FinderDashboard() {
       .catch(() => {}); // silently fallback to Carto defaults
   }, []);
 
-  // Load the remembered viewport before anything else, so the map's very first
-  // paint is the user's area rather than the whole of India.
+  /**
+   * Show a position IMMEDIATELY, the way Google Maps does.
+   *
+   * Google Maps has no magic sensor. What it does is refuse to wait: it paints
+   * the last position it knew about the instant the map appears, draws a wide
+   * accuracy circle around it, and then quietly tightens that circle as real
+   * fixes arrive. The dot is there in milliseconds because it is *remembered*,
+   * not measured.
+   *
+   * ParkStop was doing the opposite — holding the dot back until a fix it
+   * trusted arrived, which is a second or two of nothing at best. So this
+   * reads the remembered position and uses it for both the camera and the dot.
+   *
+   * Two guards keep it honest rather than merely fast:
+   *
+   *  - Six hours, not the seven days the viewport hint allows. A stale camera
+   *    position is a harmless framing choice; a stale blue DOT is a claim about
+   *    where the rider is standing, and after a night's sleep that claim may be
+   *    a city out.
+   *  - The accuracy is deliberately recorded as poor, so the circle drawn round
+   *    it is wide. The rider sees "somewhere around here", which is the truth,
+   *    and the tightening circle is the app visibly getting more certain.
+   *
+   * Everything downstream already knows how to correct itself: the accuracy
+   * gate keeps a real fix from being outvoted by a noisy one, and the spot
+   * search re-runs once a good fix shows the seed was coarse.
+   */
   useEffect(() => {
-    loadLastLocation().then((c) => { if (c) setViewportHint(c); });
+    let cancelled = false;
+
+    // Wide enough to read as an estimate rather than a measurement.
+    const SEED_ACCURACY_M = 250;
+    const SEED_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
+    loadLastLocation(SEED_MAX_AGE_MS).then((c) => {
+      if (cancelled || !c) return;
+      setViewportHint(c);
+
+      // Only seed the dot if nothing real has arrived in the meantime — a fix
+      // that landed first must never be overwritten by a remembered one.
+      setUserLocation((prev) => prev ?? { lat: c.lat, lng: c.lng });
+      setLocationAccuracy((prev) => (prev > 0 ? prev : SEED_ACCURACY_M));
+
+      if (!lastUpdateCoords.current) {
+        lastUpdateCoords.current = { lat: c.lat, lng: c.lng };
+        // Populate the list straight away too. "No spots found" while the app
+        // is still locating reads as "there is nothing here", which is a
+        // different and much worse message than "still looking".
+        fetchNearbySpots(c.lat, c.lng);
+        // Marked coarse on purpose: this is what makes the watcher re-run the
+        // search the moment a real fix proves the seed was in the wrong place.
+        spotsFetchedFrom.current = { lat: c.lat, lng: c.lng, acc: SEED_ACCURACY_M };
+      }
+    });
+
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -1472,21 +1524,37 @@ export default function FinderDashboard() {
         //    skipping the watcher, the heading, and the nearby-spot fetch.
         type Fix = { lat: number; lng: number; acc: number };
         const getLocationFast = async (): Promise<Fix | null> => {
-          // Strategy A: Last known position — only if RECENT (≤30s) AND
-          // reasonably precise.
+          // Strategy A: the OS's last known position, taken on almost any terms.
           //
-          // requiredAccuracy matters as much as maxAge. Without it a
-          // thirty-second-old cell-tower fix, which can be a kilometre or more
-          // wide, wins this race and plants the dot in the wrong part of town.
-          // It looks like a working location rather than a placeholder, so
-          // nothing downstream distrusts it.
+          // I previously required 100m accuracy here, reasoning that a coarse
+          // cell-tower fix would plant the dot in the wrong part of town. That
+          // was the wrong trade and it is why opening the app felt slow: the
+          // constraint made this return null most of the time, so the instant
+          // path almost never fired and every launch waited on a live fix.
+          //
+          // A coarse fix is only dangerous when the app presents it as precise.
+          // It no longer does — the accuracy travels with it, the circle drawn
+          // round the dot is sized from it, the watcher's gate stops it
+          // outvoting a real fix, and the spot search re-runs when a good fix
+          // shows it was wrong. With those in place, showing it immediately is
+          // exactly what Google Maps does.
+          //
+          // Five minutes rather than thirty seconds for the same reason: a
+          // five-minute-old position is a far better opening guess than a blank
+          // screen, and it is replaced within seconds anyway.
           const lastKnown = Location.getLastKnownPositionAsync({
-            maxAge: 30000,
-            requiredAccuracy: 100,
+            maxAge: 5 * 60 * 1000,
           })
             .then((loc) =>
               loc
-                ? { lat: loc.coords.latitude, lng: loc.coords.longitude, acc: loc.coords.accuracy || 100 }
+                ? {
+                    lat: loc.coords.latitude,
+                    lng: loc.coords.longitude,
+                    // Assume the worst when the OS declines to say. An unknown
+                    // accuracy treated as good would defeat every downstream
+                    // correction that now depends on this number.
+                    acc: loc.coords.accuracy || 500,
+                  }
                 : null
             )
             .catch(() => null);

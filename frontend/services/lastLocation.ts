@@ -7,8 +7,12 @@
  * thing the map does — real map apps open roughly where you last were and
  * refine from there.
  *
- * This is a VIEWPORT HINT only. It is never sent to the backend, never used
- * for booking, distance, or arrival logic, and is discarded once stale.
+ * It now serves a second, stricter purpose: seeding the blue dot so a position
+ * is on screen the instant the map is, rather than after the first fix. That
+ * is a stronger claim than framing a camera, so callers with that use choose a
+ * much shorter maxAge — see the finder's seeding effect.
+ *
+ * This value is never sent to the backend and never decides a booking.
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -37,8 +41,14 @@ export async function saveLastLocation(coords: Coords): Promise<void> {
 
 /**
  * Read the remembered position, or null if absent, stale, or malformed.
+ *
+ * @param maxAgeMs How old the remembered position may be. Defaults to seven
+ *   days, which suits framing a camera. Pass something far shorter when the
+ *   value will be shown as the user's actual position — a stale viewport is a
+ *   harmless guess, a stale blue dot is a false statement about where someone
+ *   is standing.
  */
-export async function loadLastLocation(): Promise<Coords | null> {
+export async function loadLastLocation(maxAgeMs: number = MAX_AGE_MS): Promise<Coords | null> {
   try {
     const raw = await AsyncStorage.getItem(KEY);
     if (!raw) return null;
@@ -51,7 +61,7 @@ export async function loadLastLocation(): Promise<Coords | null> {
     }
     // Guard against a corrupted entry pointing somewhere impossible.
     if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
-    if (typeof t !== 'number' || Date.now() - t > MAX_AGE_MS) return null;
+    if (typeof t !== 'number' || Date.now() - t > maxAgeMs) return null;
 
     return { lat, lng };
   } catch {
