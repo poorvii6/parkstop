@@ -22,21 +22,48 @@ class Booking {
       });
 
       if (!spot || !spot.is_active) throw new Error('Parking spot not found');
-      
+
+      // Count what is actually holding a bay, rather than trusting the counter.
+      //
+      // available_slots is maintained by the booking lifecycle, so it is only
+      // as correct as the last code path that touched it — and cash and
+      // arrears checkouts used to close a booking without giving the slot
+      // back. A drifted counter is not cosmetic here: too low and a spot
+      // refuses bookings it could honour, too high and it takes bookings it
+      // cannot. This runs inside the FOR UPDATE above, so the count cannot
+      // change under a concurrent booking for the same spot.
+      const takenNow = await tx.bookings.count({
+        where: {
+          spot_id: parseInt(spot_id),
+          status: { in: ['reserved', 'active', 'checkout_pending'] },
+        },
+      });
+      const freeNow = Math.max(0, (spot.total_slots || 0) - takenNow);
+
+      // Self-heal: we hold the row lock and know the truth, so correct the
+      // stored counter in passing. Drift accumulated before the leaks were
+      // fixed is otherwise permanent, and every spot repaired here is one the
+      // owner stops losing capacity on.
+      if (spot.available_slots !== freeNow) {
+        logger.warn(
+          `Spot ${spot_id} slot counter drifted: stored ${spot.available_slots}, actual ${freeNow} — correcting`
+        );
+      }
+
       // Check specific vehicle slots
       if (vehicle_type === 'car') {
-        if (spot.car_slots !== null && spot.car_slots <= 0 && spot.available_slots <= 0) {
+        if (spot.car_slots !== null && spot.car_slots <= 0 && freeNow <= 0) {
           logger.error(`Booking failed: No car slots available for spot ${spot_id}`);
           throw new Error('No car slots available');
         }
       } else if (vehicle_type === 'bike') {
-        if (spot.bike_slots !== null && spot.bike_slots <= 0 && spot.available_slots <= 0) {
+        if (spot.bike_slots !== null && spot.bike_slots <= 0 && freeNow <= 0) {
           logger.error(`Booking failed: No bike slots available for spot ${spot_id}`);
           throw new Error('No bike slots available');
         }
       }
 
-      if (spot.available_slots <= 0) {
+      if (freeNow <= 0) {
         logger.error(`Booking failed: No total slots available for spot ${spot_id}`);
         throw new Error('No total slots available');
       }
@@ -120,10 +147,18 @@ class Booking {
         }
       });
 
-      // 2. Decrease slots
+      // 2. Decrease slots — by SETTING the counted truth minus this booking,
+      //    not by decrementing whatever was there.
+      //
+      //    Decrementing preserves any existing drift forever; writing the
+      //    counted value repairs it. This is the self-heal: every booking made
+      //    against a drifted spot leaves that spot correct afterwards, so the
+      //    damage from the old checkout leaks drains away as spots get used
+      //    rather than needing a migration.
+      const remaining = Math.max(0, freeNow - 1);
       const updateData = {
-        available_slots: { decrement: 1 },
-        is_available: (spot.available_slots - 1 > 0)
+        available_slots: remaining,
+        is_available: remaining > 0
       };
       
       if (vehicle_type === 'car' && spot.car_slots > 0) updateData.car_slots = { decrement: 1 };

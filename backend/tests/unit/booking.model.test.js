@@ -19,7 +19,12 @@
 // A single transaction-scoped mock reused by prisma.$transaction(cb => cb(tx)).
 const mockTx = {
   $executeRaw: jest.fn(),
-  bookings: { findUnique: jest.fn(), findFirst: jest.fn(), create: jest.fn(), update: jest.fn() },
+  // count() backs the live occupancy check: availability is now counted from
+  // real bookings rather than read from the drifting available_slots column.
+  bookings: {
+    findUnique: jest.fn(), findFirst: jest.fn(), create: jest.fn(), update: jest.fn(),
+    count: jest.fn(),
+  },
   parking_spots: { findUnique: jest.fn(), update: jest.fn() },
   users: { update: jest.fn() },
 };
@@ -52,6 +57,11 @@ const past = () => new Date(Date.now() - 60 * 1000);
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // Default: nothing is holding a bay. Individual tests override this to make
+  // a spot full, which is now expressed as "every bay has a live booking"
+  // rather than by setting the available_slots column — that column is no
+  // longer what decides.
+  mockTx.bookings.count.mockResolvedValue(0);
 });
 
 // ---- verifyOTP -----------------------------------------------------------
@@ -152,10 +162,13 @@ describe('Booking.create', () => {
     expect(created.otp_code).toMatch(/^\d{6}$/);
     expect(created.checkout_otp).toMatch(/^\d{6}$/);
 
-    // Slot was decremented
+    // A slot was consumed. Asserted as the resulting VALUE rather than a
+    // decrement: the counter is now written from the counted occupancy, so
+    // that two bays with nothing booked leaves exactly one free. A decrement
+    // would have carried any existing drift forward untouched.
     expect(mockTx.parking_spots.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ available_slots: { decrement: 1 } }),
+        data: expect.objectContaining({ available_slots: 1, is_available: true }),
       })
     );
     expect(booking.status).toBe('reserved');
@@ -172,11 +185,33 @@ describe('Booking.create', () => {
   });
 
   test('rejects when no slots are available', async () => {
-    mockTx.parking_spots.findUnique.mockResolvedValue(activeSpot({ available_slots: 0, car_slots: 1 }));
+    // Full means both bays have a live booking. The stored counter is left
+    // saying 2 on purpose: it must not be able to authorise a booking the
+    // actual occupancy cannot support.
+    mockTx.parking_spots.findUnique.mockResolvedValue(activeSpot({ available_slots: 2, car_slots: 1 }));
+    mockTx.bookings.count.mockResolvedValue(2);
     await expect(
       Booking.create({ user_id: 1, spot_id: 10, vehicle_type: 'car', ...validWindow() })
     ).rejects.toThrow('No total slots available');
     expect(mockTx.bookings.create).not.toHaveBeenCalled();
+  });
+
+  test('accepts when the counter says full but no booking actually holds a bay', async () => {
+    // The drift the cash-checkout leak left behind: the counter reads zero
+    // while both bays are genuinely empty. The spot used to refuse every
+    // booking for good; it must now take them.
+    mockTx.parking_spots.findUnique.mockResolvedValue(activeSpot({ available_slots: 0, car_slots: 1 }));
+    mockTx.bookings.count.mockResolvedValue(0);
+    mockTx.bookings.create.mockResolvedValue({ id: 99 });
+
+    await Booking.create({ user_id: 1, spot_id: 10, vehicle_type: 'car', ...validWindow() });
+
+    expect(mockTx.bookings.create).toHaveBeenCalled();
+    // ...and the drifted counter is repaired on the way through, rather than
+    // decremented from a wrong value and left wrong.
+    expect(mockTx.parking_spots.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ available_slots: 1 }) })
+    );
   });
 
   test('rejects an inactive / missing spot', async () => {

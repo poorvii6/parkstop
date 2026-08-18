@@ -1,6 +1,39 @@
 const prisma = require('../config/prisma');
 const logger = require('../utils/logger');
 
+/** Booking states that are physically holding a bay right now. */
+const OCCUPYING_STATUSES = ['reserved', 'active', 'checkout_pending'];
+
+/**
+ * Replace a spot's stored availability with the counted truth.
+ *
+ * `available_slots` is a running counter, incremented and decremented by the
+ * booking lifecycle — and a counter is only ever as correct as the last code
+ * path that touched it. Cash and arrears checkouts used to close a booking
+ * without giving the slot back, so live spots still carry drift from before
+ * that was fixed: the map advertised "5 free" while the slot picker, which
+ * counts real bookings, offered six.
+ *
+ * Counting bookings asks exactly the question the slot picker asks, so the two
+ * can no longer disagree.
+ *
+ * @param {object} row  a spot row carrying `taken_now` from a counted join
+ */
+function withLiveAvailability(row) {
+  const total = Number(row.total_slots) || 0;
+  const taken = Number(row.taken_now) || 0;
+  const free = Math.max(0, total - taken);
+
+  return {
+    ...row,
+    available_slots: free,
+    is_available: free > 0,
+    // Kept alongside so a drifted counter is diagnosable rather than silently
+    // papered over — if these disagree, something is still leaking.
+    available_slots_stored: row.available_slots,
+  };
+}
+
 class ParkingSpot {
 
   static async create(data) {
@@ -74,8 +107,9 @@ class ParkingSpot {
     const latDelta = radius / 111.0;
     const lngDelta = radius / (111.0 * Math.cos(lat * Math.PI / 180));
 
-    return prisma.$queryRaw`
+    const rows = await prisma.$queryRaw`
       SELECT parking_spots.*,
+      COALESCE(b.taken, 0)::int AS taken_now,
       (
         6371 * acos(
           cos(radians(${lat})) * cos(radians(latitude)) *
@@ -85,8 +119,13 @@ class ParkingSpot {
       ) AS distance
       FROM parking_spots
       JOIN users u ON parking_spots.spotter_id = u.id
+      LEFT JOIN (
+        SELECT spot_id, COUNT(*)::int AS taken
+        FROM bookings
+        WHERE status IN ('reserved', 'active', 'checkout_pending')
+        GROUP BY spot_id
+      ) b ON b.spot_id = parking_spots.id
       WHERE is_active = true
-        AND is_available = true
         AND u.balance >= -500
         AND latitude BETWEEN ${lat - latDelta} AND ${lat + latDelta}
         AND longitude BETWEEN ${lng - lngDelta} AND ${lng + lngDelta}
@@ -100,6 +139,14 @@ class ParkingSpot {
       ORDER BY distance
       LIMIT 50
     `;
+
+    // `is_available` is deliberately no longer in the WHERE clause: it is
+    // derived from the same drifting counter, so a spot whose count had leaked
+    // to zero switched itself off and stayed invisible however empty it
+    // actually was. Filter on the counted truth instead.
+    return rows
+      .map((r) => withLiveAvailability(r))
+      .filter((r) => r.available_slots > 0);
   }
 
   static async findAbsoluteNearest(lat, lng, limit = 5) {
@@ -127,11 +174,12 @@ class ParkingSpot {
   }
 
   static async findAvailable() {
-    return prisma.parking_spots.findMany({
+    // Same reasoning as findNearby: filtering on the stored counter hid spots
+    // that were genuinely free but had drifted to zero. Fetch the active ones
+    // and let the counted occupancy decide.
+    const spots = await prisma.parking_spots.findMany({
       where: {
         is_active: true,
-        is_available: true,
-        available_slots: { gt: 0 },
         users: {
           balance: { gte: -500 }
         }
@@ -147,6 +195,20 @@ class ParkingSpot {
         created_at: 'desc'
       }
     });
+
+    if (spots.length === 0) return spots;
+
+    // One grouped query for the whole page rather than a count per spot.
+    const counts = await prisma.bookings.groupBy({
+      by: ['spot_id'],
+      where: { spot_id: { in: spots.map((s) => s.id) }, status: { in: OCCUPYING_STATUSES } },
+      _count: { _all: true },
+    });
+    const takenBySpot = new Map(counts.map((c) => [c.spot_id, c._count._all]));
+
+    return spots
+      .map((s) => withLiveAvailability({ ...s, taken_now: takenBySpot.get(s.id) || 0 }))
+      .filter((s) => s.available_slots > 0);
   }
 
   static async update(spotId, userId, updates) {

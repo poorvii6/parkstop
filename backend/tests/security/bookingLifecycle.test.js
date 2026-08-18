@@ -165,7 +165,12 @@ describe('the reservation hold is anchored to arrival, not to tapping Book', () 
     prisma.$transaction.mockImplementation(async (fn) => fn({
       $executeRaw: jest.fn(),
       parking_spots: { findUnique: jest.fn().mockResolvedValue(spotRow), update: jest.fn() },
-      bookings: { create: jest.fn(async (a) => { captured = a.data; return { id: 10, ...a.data }; }) },
+      bookings: {
+        create: jest.fn(async (a) => { captured = a.data; return { id: 10, ...a.data }; }),
+        // Availability is counted from live bookings now, not read from the
+        // available_slots column. Nothing is holding a bay in these fixtures.
+        count: jest.fn().mockResolvedValue(0),
+      },
     }));
     return Booking.create({
       user_id: 5, spot_id: 9, vehicle_type: 'car', payment_mode,
