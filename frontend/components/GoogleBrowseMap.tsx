@@ -437,12 +437,25 @@ const GoogleBrowseMap = forwardRef((props: Props, ref: any) => {
   // re-added — which would make every marker flicker on each poll.
   // Price pills, captured to images and cached by appearance.
   const pinSpecs = useMemo(
-    () => (props.markers || []).map(m => ({ price: m.price, available: m.available })),
+    () =>
+      (props.markers || []).map(m => ({
+        price: m.price,
+        available: m.available,
+        // No `?? 1` fallback here any more. A missing count means the server
+        // did not send one — inventing a number put "1 free" on the map for
+        // spots whose real availability was unknown, rendered identically to a
+        // measured figure and impossible for a rider to tell apart.
+        freeSlots: typeof m.available_slots === 'number' ? m.available_slots : null,
+      })),
     [props.markers]
   );
   const { images: pinImages, hiddenPills } = useSpotPinImages(pinSpecs);
 
-  const drawnSpots = useRef<Set<string>>(new Set());
+  /**
+   * What is currently drawn: marker id -> a signature of everything visible
+   * about it. A marker is only touched when its signature changes.
+   */
+  const drawnSpots = useRef<Map<string, string>>(new Map());
   useEffect(() => {
     if (!mapReady || !controller.current) return;
     const c = controller.current;
@@ -461,15 +474,38 @@ const GoogleBrowseMap = forwardRef((props: Props, ref: any) => {
           m => Math.abs(m.lat - d.lat) < 1e-6 && Math.abs(m.lng - d.lng) < 1e-6
         )
       : all;
-    const wanted = new Set(list.map((m) => SPOT_PREFIX + m.id));
+    const next = new Map<string, string>();
 
     for (const m of list) {
-      const img = pinImages[pinKey({ price: m.price, available: m.available })];
+      const id = SPOT_PREFIX + m.id;
+      const freeSlots = typeof m.available_slots === 'number' ? m.available_slots : null;
+      const img = pinImages[pinKey({ price: m.price, available: m.available, freeSlots })];
+
+      // Everything that affects how this marker looks or where it sits. If the
+      // signature is unchanged there is nothing to do.
+      const signature = [m.lat, m.lng, m.price, m.available, freeSlots, m.title, img || '']
+        .join('|');
+      next.set(id, signature);
+
+      // THE BLINK.
+      //
+      // This used to call addMarker for every marker on every run, and the
+      // effect re-runs whenever props.markers changes — which is on every poll,
+      // with a fresh array each time even when nothing about the spots
+      // differed. Re-adding a marker over itself makes the native side drop and
+      // recreate it, which is the pill flickering several times a minute.
+      //
+      // Now a marker is written once and left alone until something about it
+      // actually changes.
+      if (drawnSpots.current.get(id) === signature) continue;
+
       c.addMarker({
-        id: SPOT_PREFIX + m.id,
+        id,
         position: { lat: m.lat, lng: m.lng },
+        // Title only. Price and availability now live on the pill itself —
+        // carrying them in the snippet too is what put a white info box on top
+        // of the blue pill, two labels for one spot.
         title: m.title || 'Parking',
-        snippet: `₹${m.price}/hr · ${m.available ? `${m.available_slots ?? 1} free` : 'Full'}`,
         // The price pill, rendered offscreen and captured to a PNG — the only
         // way to get a labelled marker now that custom marker views are gone.
         // Until the capture lands the marker still appears as a default pin,
@@ -482,10 +518,11 @@ const GoogleBrowseMap = forwardRef((props: Props, ref: any) => {
       }).catch(() => {});
     }
 
-    for (const id of Array.from(drawnSpots.current)) {
-      if (!wanted.has(id)) c.removeMarker(id);
+    const drawnIds: string[] = Array.from(drawnSpots.current.keys());
+    for (const id of drawnIds) {
+      if (!next.has(id)) c.removeMarker(id);
     }
-    drawnSpots.current = wanted;
+    drawnSpots.current = next;
     // props.destination is a dependency: choosing or clearing a spot must
     // immediately add or remove the other pins, not wait for the next poll.
   }, [mapReady, props.markers, pinImages, props.destination]);

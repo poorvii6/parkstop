@@ -23,10 +23,29 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 
-export type PinSpec = { price: number; available: boolean };
+export type PinSpec = {
+  price: number;
+  available: boolean;
+  /**
+   * Free bays, straight from the server's count.
+   *
+   * `null` means the server did not say — which is NOT the same as zero, and
+   * emphatically not the same as one. The pill shows no count in that case
+   * rather than printing a number nobody supplied.
+   */
+  freeSlots: number | null;
+};
 
-/** Appearance key: two spots that look identical share one captured image. */
-export const pinKey = (s: PinSpec) => `${s.price}|${s.available ? 'open' : 'full'}`;
+/**
+ * Appearance key: two spots that look identical share one captured image.
+ *
+ * freeSlots is part of the key. Without it, a ₹1/hr spot with six free bays
+ * and a ₹1/hr spot with two would collide on the same cached image and one of
+ * them would display the other's count — a wrong number presented with total
+ * confidence, which is worse than no number.
+ */
+export const pinKey = (s: PinSpec) =>
+  `${s.price}|${s.available ? 'open' : 'full'}|${s.freeSlots ?? 'x'}`;
 
 export function useSpotPinImages(specs: PinSpec[]) {
   // key -> captured file path
@@ -136,9 +155,32 @@ export function useSpotPinImages(specs: PinSpec[]) {
         const k = pinKey(spec);
         return (
           <View key={k} ref={(r: any) => { refs.current[k] = r; }} collapsable={false} style={styles.pillWrap}>
+            {/* ONE pill carrying both facts.
+              *
+              * Price and availability used to be split between this pill and
+              * the marker's info window, so a spot showed two overlapping
+              * labels — a blue pill and a white box above it. They belong
+              * together: what it costs and whether you can get in are the two
+              * things you decide on, and neither is useful alone. */}
             <View style={[styles.pill, { backgroundColor: spec.available ? '#1a73e8' : '#9aa0a6' }]}>
               <Text style={styles.pillText}>₹{spec.price}</Text>
               <Text style={styles.pillPerHr}>/hr</Text>
+
+              {/* The count is omitted entirely when the server did not send
+                * one. A guessed "1 free" is indistinguishable on screen from a
+                * real count and is the kind of thing riders drive across town
+                * for. */}
+              {!spec.available ? (
+                <>
+                  <View style={styles.pillDivider} />
+                  <Text style={styles.pillFree}>Full</Text>
+                </>
+              ) : spec.freeSlots != null ? (
+                <>
+                  <View style={styles.pillDivider} />
+                  <Text style={styles.pillFree}>{spec.freeSlots} free</Text>
+                </>
+              ) : null}
             </View>
             <View style={[styles.pillTail, { borderTopColor: spec.available ? '#1a73e8' : '#9aa0a6' }]} />
           </View>
@@ -169,6 +211,14 @@ const styles = StyleSheet.create({
   },
   pillText: { color: '#fff', fontWeight: '900', fontSize: 13 },
   pillPerHr: { color: 'rgba(255,255,255,0.85)', fontWeight: '700', fontSize: 9, marginLeft: 1, marginBottom: 1 },
+  pillDivider: {
+    width: 1,
+    height: 11,
+    marginHorizontal: 6,
+    marginBottom: 1,
+    backgroundColor: 'rgba(255,255,255,0.45)',
+  },
+  pillFree: { color: '#fff', fontWeight: '800', fontSize: 11, marginBottom: 1 },
   pillTail: {
     width: 0, height: 0, marginTop: -2,
     borderLeftWidth: 5, borderRightWidth: 5, borderTopWidth: 7,
