@@ -228,58 +228,30 @@ class BookingController {
   }
 
   /**
-   * FINDER CHECKOUT (Finder Only, bypasses checkout OTP)
+   * FINDER CHECKOUT — RETIRED.
+   *
+   * This used to let a finder call Booking.complete() on their own booking
+   * directly: no checkout OTP, and — more importantly — no owner confirmation.
+   * That is the entire thing request-checkout / confirm-checkout exists to
+   * enforce. A rider could close the session themselves, the bay would free up
+   * and the billable end time would lock, with the spot owner never asked
+   * whether the car had actually left.
+   *
+   * Nothing calls it. The finder app uses request-checkout (index.tsx:4621,
+   * 4669) and the spotter app confirms it (spotter/_layout.tsx:101). If an
+   * owner never responds, bookingExpiryService.autoCompleteBooking closes the
+   * session on a timer — so removing this leaves no one stranded.
+   *
+   * The route is kept, answering 409, rather than deleted: an older build
+   * still calling it gets a message that says what to do instead of a bare
+   * 404 that looks like the server is broken.
    */
   static async finderCheckout(req, res) {
-    try {
-      if (!req.user.role || req.user.role.toLowerCase() !== 'finder') {
-        return res.status(403).json({
-          success: false,
-          message: 'Only finders can end their session'
-        });
-      }
-
-      const bookingId = req.params.id;
-      const booking = await Booking.findById(bookingId);
-
-      if (!booking) {
-        return res.status(404).json({
-          success: false,
-          message: 'Booking not found'
-        });
-      }
-
-      if (booking.user_id !== req.user.id) {
-        return res.status(403).json({
-          success: false,
-          message: 'Unauthorized to complete this booking'
-        });
-      }
-
-      // Complete the booking directly
-      const completedBooking = await Booking.complete(bookingId);
-
-      // 💰 Settle commission + payout (unified — gated on payment collection)
-      const settledBooking = await Booking.findById(bookingId);
-      if (settledBooking) {
-        await BookingSettlementService.settleCompletedBooking(
-          settledBooking,
-          settledBooking.parking_spots
-        );
-      }
-
-      return res.status(200).json({
-        success: true,
-        message: 'Booking completed successfully',
-        data: completedBooking
-      });
-    } catch (error) {
-      logger.error('Error during finder checkout:', error);
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to end session'
-      });
-    }
+    return res.status(409).json({
+      success: false,
+      code: 'CHECKOUT_REQUIRES_OWNER',
+      message: 'Ending a session now needs the spot owner to confirm. Please update the app and use "End session".'
+    });
   }
 
   /**
@@ -657,6 +629,21 @@ class BookingController {
         return res.status(404).json({ success: false, message: 'Booking not found' });
       }
 
+      // Only the two people with business here.
+      //
+      // This endpoint had NO authorization at all — any authenticated user
+      // could read any booking's price by guessing an id, and with it the
+      // rider's arrears, which is their negative wallet balance across the
+      // whole platform. Role alone is not enough either: being a spotter does
+      // not entitle you to another spotter's bookings.
+      const spot = await ParkingSpot.findById(booking.spot_id);
+      const isFinder = booking.user_id === req.user.id;
+      const isOwner = !!spot && spot.spotter_id === req.user.id;
+
+      if (!isFinder && !isOwner) {
+        return res.status(403).json({ success: false, message: 'Not your booking' });
+      }
+
       // Lock-in the quoted price from booking time
       const basePrice = Number(booking.total_price || 0);
 
@@ -669,14 +656,27 @@ class BookingController {
         arrears = finder && finder.balance < 0 ? Math.abs(Number(finder.balance)) : 0;
       }
 
+      // The owner is told the total to collect, but not the breakdown.
+      //
+      // They legitimately need the figure — it is what the QR charges — but
+      // the arrears line says "this person owes money elsewhere on ParkStop",
+      // which is the rider's business and nobody else's. The finder sees their
+      // own breakdown in full.
       res.json({
         success: true,
-        data: {
-          booking_id: booking.id,
-          base_price: basePrice,
-          arrears: arrears,
-          total_amount: basePrice + arrears
-        }
+        data: isFinder
+          ? {
+              booking_id: booking.id,
+              base_price: basePrice,
+              arrears,
+              total_amount: basePrice + arrears
+            }
+          : {
+              booking_id: booking.id,
+              base_price: basePrice,
+              includes_arrears: arrears > 0,
+              total_amount: basePrice + arrears
+            }
       });
 
     } catch (error) {
