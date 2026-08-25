@@ -5,6 +5,25 @@ const logger = require('../utils/logger');
 const OCCUPYING_STATUSES = ['reserved', 'active', 'checkout_pending'];
 
 /**
+ * How far a finder is willing to walk, in kilometres.
+ *
+ * One number, defined once. This used to be a default of 5 here, 5 again in the
+ * controller, 10 from the map, 1000 from the place-search and 50 from an unused
+ * hook — five answers to the same question, so the same spot appeared in one
+ * view and not another.
+ */
+const SEARCH_RADIUS_KM = Number(process.env.SEARCH_RADIUS_KM) || 2;
+
+/**
+ * The furthest a *fallback* suggestion may be when nothing is in range.
+ *
+ * Distinct from the search radius on purpose: "there is nothing within 2 km,
+ * here is something at 6 km" is a useful answer. "Here is something in Delhi"
+ * is not, which is what an uncapped fallback produced.
+ */
+const FALLBACK_RADIUS_KM = Number(process.env.FALLBACK_RADIUS_KM) || 10;
+
+/**
  * Replace a spot's stored availability with the counted truth.
  *
  * `available_slots` is a running counter, incremented and decremented by the
@@ -102,7 +121,7 @@ class ParkingSpot {
     });
   }
 
-  static async findNearby(lat, lng, radius = 5) {
+  static async findNearby(lat, lng, radius = SEARCH_RADIUS_KM) {
     // Uses the lat/lng index for bounding box pre-filter, then Haversine for precision
     const latDelta = radius / 111.0;
     const lngDelta = radius / (111.0 * Math.cos(lat * Math.PI / 180));
@@ -149,9 +168,29 @@ class ParkingSpot {
       .filter((r) => r.available_slots > 0);
   }
 
-  static async findAbsoluteNearest(lat, lng, limit = 5) {
-    return prisma.$queryRaw`
+  /**
+   * Nearest spots when the search radius came back empty.
+   *
+   * TWO BUGS FIXED HERE.
+   *
+   * 1. There was no distance limit at all. "LIMIT 5 ORDER BY distance" over the
+   *    whole table means the five nearest spots *in existence* — so a finder in
+   *    Bengaluru with nothing in range was shown spots hundreds of kilometres
+   *    away under the message "Showing the nearest alternatives". With listings
+   *    concentrated in one area, that is what early users outside it would see.
+   *    Suggestions are now capped at FALLBACK_RADIUS_KM; beyond that the honest
+   *    answer is an empty list.
+   *
+   * 2. It filtered on `is_available` and `available_slots` — the drifting
+   *    counters already removed from findNearby for exactly this reason. A spot
+   *    whose counter had leaked to zero was invisible here however empty it
+   *    really was, and one that had leaked the other way was offered when it
+   *    was full. It now counts live bookings, like every other read path.
+   */
+  static async findAbsoluteNearest(lat, lng, limit = 5, maxKm = FALLBACK_RADIUS_KM) {
+    const rows = await prisma.$queryRaw`
       SELECT parking_spots.*,
+      COALESCE(b.taken, 0)::int AS taken_now,
       (
         6371 *
         acos(
@@ -164,13 +203,31 @@ class ParkingSpot {
       ) AS distance
       FROM parking_spots
       JOIN users u ON parking_spots.spotter_id = u.id
+      LEFT JOIN (
+        SELECT spot_id, COUNT(*)::int AS taken
+        FROM bookings
+        WHERE status IN ('reserved', 'active', 'checkout_pending')
+        GROUP BY spot_id
+      ) b ON b.spot_id = parking_spots.id
       WHERE is_active = true
-        AND is_available = true
-        AND available_slots > 0
         AND u.balance >= -500
+        AND (
+          6371 *
+          acos(
+            cos(radians(${lat})) *
+            cos(radians(latitude)) *
+            cos(radians(longitude) - radians(${lng})) +
+            sin(radians(${lat})) *
+            sin(radians(latitude))
+          )
+        ) < ${maxKm}
       ORDER BY distance ASC
       LIMIT ${limit}
     `;
+
+    return rows
+      .map((r) => withLiveAvailability(r))
+      .filter((r) => r.available_slots > 0);
   }
 
   static async findAvailable() {
@@ -519,5 +576,10 @@ class ParkingSpot {
     return spot?.spotter_id === parseInt(userId);
   }
 }
+
+// Exported as properties rather than a separate object so every existing
+// `require('../models/ParkingSpot')` keeps working unchanged.
+ParkingSpot.SEARCH_RADIUS_KM = SEARCH_RADIUS_KM;
+ParkingSpot.FALLBACK_RADIUS_KM = FALLBACK_RADIUS_KM;
 
 module.exports = ParkingSpot;
