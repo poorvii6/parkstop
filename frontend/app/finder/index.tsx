@@ -48,6 +48,31 @@ const getSocketUrl = () => {
 const SOCKET_URL = getSocketUrl();
 
 /**
+ * How far around the place a finder is looking we show parking, in kilometres.
+ *
+ * ONE number for the whole screen. It used to be three: 10 km when searching
+ * from the current location, and 1000 km — the width of the subcontinent —
+ * from the place-search, whose comment cheerfully claimed it fetched "all
+ * available spots in that area". A rider searching an address in Hoskote could
+ * be shown a spot in Mumbai and told it was nearby.
+ *
+ * The server clamps anything wider, so this is the product decision, not the
+ * load-bearing limit.
+ */
+const SEARCH_RADIUS_KM = 2;
+
+/**
+ * How far the search origin may drift before we search again.
+ *
+ * Must be a fraction of the radius, not a fixed number. This was hard-coded to
+ * 2 km back when the radius was 10 — fine then, useless now: a rider could
+ * travel 1.9 km, stand entirely outside the circle we last searched, and never
+ * trigger a refresh. A quarter of the radius keeps the ground we have covered
+ * and the rider's actual position overlapping.
+ */
+const REFETCH_DRIFT_KM = SEARCH_RADIUS_KM / 4;
+
+/**
  * Turn a routing step into a human action + icon.
  *
  * Module scope so BOTH the live navigation watcher and the reroute handler
@@ -1715,7 +1740,7 @@ export default function FinderDashboard() {
             // ran from the wrong place and "No spots found" stuck there
             // permanently, however good the GPS got afterwards.
             //
-            // Two triggers: the search origin moved far enough that a 10km
+            // Two triggers: the search origin moved far enough that the search
             // radius would now cover different ground, or the first search was
             // made from a fix too coarse to trust and we finally have a good
             // one.
@@ -1723,7 +1748,7 @@ export default function FinderDashboard() {
             if (from) {
               const movedKm = getDistanceKm(from.lat, from.lng, newCoords.lat, newCoords.lng);
               const originWasCoarse = from.acc > 150 && acc <= 50;
-              if (movedKm > 2 || originWasCoarse) {
+              if (movedKm > REFETCH_DRIFT_KM || originWasCoarse) {
                 spotsFetchedFrom.current = { ...newCoords, acc };
                 fetchNearbySpots(newCoords.lat, newCoords.lng);
               }
@@ -1753,7 +1778,7 @@ export default function FinderDashboard() {
         // above fetches spots itself once a position finally arrives.
         try {
           if (!coords) throw new Error('no-fix');
-          const res = await apiClient.get(`/spots/nearby?lat=${coords.lat}&lng=${coords.lng}&radius=10`);
+          const res = await apiClient.get(`/spots/nearby?lat=${coords.lat}&lng=${coords.lng}&radius=${SEARCH_RADIUS_KM}`);
           if (res.data.success) {
             setSpots(res.data.data.map((sp: any) => ({
               id: sp.id.toString(),
@@ -1937,7 +1962,7 @@ export default function FinderDashboard() {
   const spotsLenRef = useRef(0);
   useEffect(() => { spotsLenRef.current = spots.length; }, [spots]);
 
-  const fetchNearbySpots = async (lat: number | string, lon: number | string, radius: number = 10) => {
+  const fetchNearbySpots = async (lat: number | string, lon: number | string, radius: number = SEARCH_RADIUS_KM) => {
     // Throttle: identical-area refreshes within 5s are dropped (GPS ticks were
     // spamming this several times per second).
     const nLat = parseFloat(String(lat));
@@ -2018,10 +2043,10 @@ export default function FinderDashboard() {
       if (mapRef.current) {
         mapRef.current.animateCamera({
           center: { latitude: lat, longitude: lon },
-          zoom: 11
+          zoom: 14
         }, { duration: 1000 });
       }
-      await fetchNearbySpots(lat, lon, 1000);
+      await fetchNearbySpots(lat, lon);
       setIsSearching(false);
       return;
     }
@@ -2084,10 +2109,10 @@ export default function FinderDashboard() {
         if (mapRef.current) {
           mapRef.current.animateCamera({
             center: { latitude: rLat, longitude: rLon },
-            zoom: (top && top.verified) ? 12 : 15
+            zoom: (top && top.verified) ? 14 : 15
           }, { duration: 1200 });
         }
-        await fetchNearbySpots(rLat, rLon, 1000);
+        await fetchNearbySpots(rLat, rLon);
         setIsSearching(false);
       } else {
         throw new Error("No results");
@@ -2106,10 +2131,10 @@ export default function FinderDashboard() {
           if (mapRef.current) {
             mapRef.current.animateCamera({
               center: { latitude: parseFloat(lat), longitude: parseFloat(lon) },
-              zoom: 13
+              zoom: 14
             }, { duration: 1200 });
           }
-          await fetchNearbySpots(parseFloat(lat), parseFloat(lon), 1000);
+          await fetchNearbySpots(parseFloat(lat), parseFloat(lon));
           setIsSearching(false);
           return;
         }
@@ -2258,11 +2283,11 @@ export default function FinderDashboard() {
     if (mapRef.current) {
       mapRef.current.animateCamera({
         center: { latitude: lat, longitude: lon },
-        zoom: isArea ? 12 : 16
+        zoom: isArea ? 14 : 16
       }, { duration: 1200 });
     }
     // Then: fetch all available spots in that area
-    await fetchNearbySpots(lat, lon, 1000);
+    await fetchNearbySpots(lat, lon);
   };
 
   // "Directions" from the place card: draw the route to the EXACT place the

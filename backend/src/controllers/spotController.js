@@ -3,6 +3,15 @@ const PricingService = require('../services/PricingService');
 const prisma = require('../config/prisma');
 const logger = require('../utils/logger');
 
+/**
+ * Hard ceiling on a client-supplied search radius, in kilometres.
+ *
+ * Not a product setting — a guard. The product radius lives in ParkingSpot;
+ * this only stops an over-wide request from turning the proximity query into a
+ * full table scan.
+ */
+const MAX_SEARCH_RADIUS_KM = Number(process.env.MAX_SEARCH_RADIUS_KM) || 25;
+
 class SpotController {
 
   /**
@@ -226,7 +235,7 @@ class SpotController {
    */
   static async getNearbySpots(req, res) {
     try {
-      const { lat, lng, radius = 5 } = req.query;
+      const { lat, lng } = req.query;
 
       if (!lat || !lng) {
         return res.status(400).json({
@@ -235,18 +244,32 @@ class SpotController {
         });
       }
 
-      const spots = await ParkingSpot.findNearby(
-        Number(lat),
-        Number(lng),
-        Number(radius)
-      );
+      // A client may narrow the search but not widen it past the cap.
+      //
+      // `radius` is validated as any positive float, so a caller could ask for
+      // 1000 km — and one did: the place-search screen passed exactly that,
+      // turning "parking near this address" into a scan of the subcontinent.
+      // The bounding-box prefilter degenerates at that size and the query ends
+      // up walking the table. The ceiling makes that impossible from outside.
+      const asked = Number(req.query.radius);
+      const radius = Number.isFinite(asked) && asked > 0
+        ? Math.min(asked, MAX_SEARCH_RADIUS_KM)
+        : ParkingSpot.SEARCH_RADIUS_KM;
+
+      const spots = await ParkingSpot.findNearby(Number(lat), Number(lng), radius);
 
       let returnSpots = spots;
       let message = 'Spots retrieved successfully';
 
       if (spots.length === 0) {
-        returnSpots = await ParkingSpot.findAbsoluteNearest(Number(lat), Number(lng), 5);
-        message = 'No spots available exactly nearby. Showing the nearest alternatives.';
+        // Capped, and the message says how far. "Nearest alternatives" with no
+        // distance attached invites a rider to tap something an hour away.
+        returnSpots = await ParkingSpot.findAbsoluteNearest(
+          Number(lat), Number(lng), 5, ParkingSpot.FALLBACK_RADIUS_KM
+        );
+        message = returnSpots.length
+          ? `No spots within ${radius} km. Showing the nearest within ${ParkingSpot.FALLBACK_RADIUS_KM} km.`
+          : `No spots available within ${ParkingSpot.FALLBACK_RADIUS_KM} km.`;
       }
 
       // 🔥 ENRICH WITH REAL-TIME PRICING & SURGE DATA
