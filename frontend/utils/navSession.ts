@@ -32,6 +32,27 @@ import {
 let sessionPromise: Promise<NavigationSessionStatus> | null = null;
 
 /**
+ * Why the last permission check failed, when it failed.
+ *
+ * The SDK's status enum has one value for "no location permission", but there
+ * are three quite different ways to get there and the rider has to do something
+ * different in each. Kept alongside the status rather than folded into it so
+ * the enum this module returns stays Google's.
+ *
+ *   'denied'    — they said no, or have not been asked.
+ *   'coarse'    — they granted APPROXIMATE. See below.
+ *   'services'  — permission is fine, the phone's location is switched off.
+ */
+export type LocationIssue = 'denied' | 'coarse' | 'services' | null;
+
+let locationIssue: LocationIssue = null;
+
+/** What went wrong with location on the last session attempt, if anything. */
+export function getLocationIssue(): LocationIssue {
+  return locationIssue;
+}
+
+/**
  * Ensure terms are accepted and the session is initialised.
  * Safe to call from anywhere, as often as you like.
  */
@@ -56,8 +77,58 @@ export function ensureNavSession(
       // caller is told the session is ready, so no map view can be mounted
       // while the activity is pausing. Returns immediately when permission was
       // granted on a previous launch.
+      locationIssue = null;
+
       const perm = await Location.requestForegroundPermissionsAsync();
-      if (!perm.granted) return NavigationSessionStatus.LOCATION_PERMISSION_MISSING;
+      if (!perm.granted) {
+        locationIssue = 'denied';
+        return NavigationSessionStatus.LOCATION_PERMISSION_MISSING;
+      }
+
+      // GRANTED IS NOT ENOUGH — IT MUST BE *PRECISE*.
+      //
+      // This is the bug behind "Searching for GPS…" sitting on the map forever
+      // with the speed stuck at 0.
+      //
+      // Since Android 12 the location dialog offers Precise or Approximate, and
+      // `perm.granted` is true for BOTH. Approximate grants only
+      // ACCESS_COARSE_LOCATION, which is network-derived and accurate to
+      // roughly a kilometre. The Navigation SDK cannot road-snap a fix that
+      // vague, so it never accepts one: it computes the route (that only needs
+      // a rough origin), draws the map, and then waits for a precise fix that
+      // by definition can never arrive. Google's own grey "Searching for GPS…"
+      // chip is the only symptom, and it never names the cause.
+      //
+      // One tap on the wrong half of a system dialog, on first launch,
+      // permanently breaks navigation. Nothing in the app said so until now.
+      //
+      // NOT fatal to the session, though. The browsing map is perfectly usable
+      // with an approximate fix - only turn-by-turn guidance genuinely needs a
+      // precise one. Failing here would have replaced a working map with a
+      // permission error for anyone who tapped Approximate, which is a worse
+      // bug than the one being fixed. The flag is recorded and navigation
+      // decides what to do with it.
+      if (perm.android && perm.android.accuracy !== 'fine') {
+        locationIssue = 'coarse';
+      }
+
+      // Permission can be perfect while the phone's location switch is off —
+      // same blank result, completely different fix. enableNetworkProviderAsync
+      // shows Google Play's own "turn on location?" sheet, which flips it
+      // without sending the rider into Settings.
+      // Recorded, not fatal, for the same reason as above - and 'coarse' is
+      // not overwritten, because precise-but-switched-off and approximate are
+      // different problems and the first one found is the one to report.
+      if (!(await Location.hasServicesEnabledAsync())) {
+        try {
+          await Location.enableNetworkProviderAsync();
+        } catch {
+          // They declined the sheet, or the device has no Play Services.
+        }
+        if (!locationIssue && !(await Location.hasServicesEnabledAsync())) {
+          locationIssue = 'services';
+        }
+      }
 
       // Google requires their driver-awareness terms before a session can
       // exist. Acceptance is remembered by the SDK across launches, so this
@@ -80,28 +151,12 @@ export function ensureNavSession(
           title: 'Navigate with ParkStop',
           companyName: 'ParkStop',
           showOnlyDisclaimer: true,
-          // LIGHT, deliberately — this is not a styling preference.
-          //
-          // The SDK exposes exactly five colours: background, title, main text
-          // and the two button labels. Everything else in this dialog — the
-          // "How navigation data is used" headings and the paragraphs under
-          // them — is styled internally by Google for a LIGHT background, and
-          // there is no parameter that reaches it.
-          //
-          // Setting a dark background therefore left most of the text dark grey
-          // on dark navy: technically branded, practically unreadable, on a
-          // consent dialog where the user is being asked to agree to something.
-          //
-          // So the surface stays light, matching the text we cannot recolour,
-          // and ParkStop's identity is carried by the title, the company name
-          // and the indigo accent on the accept button — which is exactly how
-          // Google Maps presents its own version of this dialog.
           uiParams: {
-            backgroundColor: '#ffffff',
-            titleColor: '#202124',
-            mainTextColor: '#3c4043',
-            acceptButtonTextColor: '#4f46e5',
-            cancelButtonTextColor: '#5f6368',
+            backgroundColor: '#0f172a',
+            titleColor: '#ffffff',
+            mainTextColor: '#cbd5e1',
+            acceptButtonTextColor: '#818cf8',
+            cancelButtonTextColor: '#94a3b8',
           },
         });
         if (!ok) return NavigationSessionStatus.TERMS_NOT_ACCEPTED;

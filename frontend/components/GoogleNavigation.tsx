@@ -36,7 +36,7 @@ import {
   type ArrivalEvent,
   type Location as NavLocation,
 } from '@googlemaps/react-native-navigation-sdk';
-import { ensureNavSession, isDestinationPrepared, clearPreparedDestination } from '../utils/navSession';
+import { ensureNavSession, isDestinationPrepared, clearPreparedDestination, getLocationIssue } from '../utils/navSession';
 
 type Props = {
   /** Where the rider is going — the booked parking spot. */
@@ -81,11 +81,40 @@ function describeSessionFailure(status: NavigationSessionStatus): string {
     case NavigationSessionStatus.TERMS_NOT_ACCEPTED:
       return 'Navigation needs you to accept Google’s terms before it can start.';
     case NavigationSessionStatus.LOCATION_PERMISSION_MISSING:
-      return 'Navigation needs location permission.';
+      // One enum value, three different things for the rider to do. Telling
+      // someone who granted Approximate that we "need location permission" is
+      // worse than useless — they already gave it, conclude the app is broken,
+      // and close it.
+      switch (getLocationIssue()) {
+        case 'coarse':
+          return 'Navigation needs your exact location. It is currently set to Approximate — turn on “Use precise location” for ParkStop.';
+        case 'services':
+          return 'Location is switched off on this phone. Turn it on to navigate.';
+        default:
+          return 'Navigation needs location permission.';
+      }
     case NavigationSessionStatus.NETWORK_ERROR:
       return 'Could not reach Google to start navigation. Check your connection.';
     default:
       return 'Navigation could not start.';
+  }
+}
+
+/**
+ * What the rider should do about a location problem we detected at startup.
+ *
+ * Returned separately from the session status because none of these stop the
+ * session - the map and the route both work with an approximate fix. What they
+ * stop is guidance, silently, which is the whole bug.
+ */
+function describeLocationIssue(): string | null {
+  switch (getLocationIssue()) {
+    case 'coarse':
+      return 'Turn-by-turn needs your exact location. It is set to Approximate — switch on “Use precise location” for ParkStop in Settings, then reopen navigation.';
+    case 'services':
+      return 'Location is switched off on this phone. Turn it on, then reopen navigation.';
+    default:
+      return null;
   }
 }
 
@@ -132,6 +161,23 @@ export default function GoogleNavigation({
   const insets = useSafeAreaInsets();
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+
+  /**
+   * Watchdog for "guidance is running, but there is no position".
+   *
+   * Google shows a small grey "Searching for GPS..." chip and nothing else. It
+   * never times out, never explains, and looks identical whether the rider is
+   * under a flyover for ten seconds or has Approximate location set and will
+   * therefore wait forever. Riders read it as the app being broken - and when
+   * the cause is a permission we could have checked at startup, they are right.
+   *
+   * `lastFixAt` is stamped by the location listener below; when it goes stale
+   * we say something the rider can actually act on.
+   */
+  const lastFixAt = useRef<number>(0);
+  const [staleFix, setStaleFix] = useState(false);
+  /** A location problem detected at startup, in words the rider can act on. */
+  const [locationHint, setLocationHint] = useState<string | null>(null);
 
   /**
    * MEASURE THE CONTAINER, THEN FILL IT EXACTLY.
@@ -265,6 +311,15 @@ export default function GoogleNavigation({
       const lat = l.lat ?? l.latitude;
       const lng = l.lng ?? l.longitude;
       if (typeof lat === 'number' && typeof lng === 'number') {
+        // Any fix at all clears the watchdog. This callback is the only signal
+        // the SDK gives us that its location engine is alive.
+        lastFixAt.current = Date.now();
+        if (mounted.current) {
+          setStaleFix(false);
+          // A precise fix arriving proves the problem is gone, whatever the
+          // permission looked like when navigation opened.
+          setLocationHint(null);
+        }
         onLocation?.({ lat, lng });
       }
     });
@@ -312,6 +367,12 @@ export default function GoogleNavigation({
         setError(describeSessionFailure(status));
         return;
       }
+
+      // The session is fine, but location may still be too vague for guidance.
+      // Say so NOW rather than letting the rider watch Google's grey chip for
+      // twenty seconds first. Guidance is still attempted - if they fix the
+      // setting mid-trip a fix arrives and the notice clears itself.
+      if (mounted.current) setLocationHint(describeLocationIssue());
 
       // Already computed during booking confirmation? Then skip straight to
       // guidance — this is the whole point of the pre-warm, and it removes the
@@ -373,6 +434,27 @@ export default function GoogleNavigation({
   useEffect(() => {
     start();
   }, [start]);
+
+  // ── No-fix watchdog ──────────────────────────────────────────
+  //
+  // Runs only once guidance is up. A route can be computed from a rough origin,
+  // so "route drawn, map drawn, speed stuck at 0" is a perfectly reachable
+  // state - it is exactly what the SDK's grey chip means, and it is silent.
+  //
+  // GRACE is generous on purpose: a genuine tunnel or a covered car park should
+  // never trigger this. What it catches is the case that never resolves.
+  useEffect(() => {
+    if (!ready || error) return;
+    const GRACE_MS = 20000;
+    // Guidance has just started; treat now as the last known-good moment so a
+    // slow first fix does not fire this instantly.
+    if (!lastFixAt.current) lastFixAt.current = Date.now();
+    const t = setInterval(() => {
+      if (!mounted.current) return;
+      setStaleFix(Date.now() - lastFixAt.current > GRACE_MS);
+    }, 5000);
+    return () => clearInterval(t);
+  }, [ready, error]);
 
   // Retry a transient "waiting for location" without the rider doing anything.
   useEffect(() => {
@@ -626,6 +708,18 @@ export default function GoogleNavigation({
       {error ? (
         <View style={styles.errorBar} pointerEvents="box-none">
           <Text style={styles.errorText}>{error}</Text>
+        </View>
+      ) : null}
+
+      {/* Guidance is running but no position has arrived for a while. Google's
+        * own chip says "Searching for GPS..." and stops there; this says which
+        * of the three fixable causes it probably is. */}
+      {!error && (locationHint || staleFix) ? (
+        <View style={styles.errorBar} pointerEvents="box-none">
+          <Text style={styles.errorText}>
+            {locationHint ||
+              'No GPS signal yet. If this does not clear, check that ParkStop has “Use precise location” turned on and that Location is switched on for the phone.'}
+          </Text>
         </View>
       ) : null}
     </View>
