@@ -163,20 +163,18 @@ export default function GoogleNavigation({
   const [ready, setReady] = useState(false);
 
   /**
-   * Watchdog for "guidance is running, but there is no position".
+   * A location problem detected at startup, in words the rider can act on.
    *
-   * Google shows a small grey "Searching for GPS..." chip and nothing else. It
-   * never times out, never explains, and looks identical whether the rider is
-   * under a flyover for ten seconds or has Approximate location set and will
-   * therefore wait forever. Riders read it as the app being broken - and when
-   * the cause is a permission we could have checked at startup, they are right.
-   *
-   * `lastFixAt` is stamped by the location listener below; when it goes stale
-   * we say something the rider can actually act on.
+   * NOTE, because I got this wrong once: this is set from the PERMISSION state,
+   * never from a timer. An earlier version of this file also warned when no
+   * position had arrived for twenty seconds, and that was unsound — road-snapped
+   * location updates are driven by MOVEMENT, so a rider stopped at a signal, in
+   * traffic, or parked emits nothing at all while their GPS is perfectly
+   * healthy. It fired over a working map with the vehicle drawn on the road and
+   * the ETA counting down. The same movement-driven behaviour is documented in
+   * the finder's arrival backstop; there is no way to tell "no signal" from
+   * "not moving" by watching the callback, so we do not try.
    */
-  const lastFixAt = useRef<number>(0);
-  const [staleFix, setStaleFix] = useState(false);
-  /** A location problem detected at startup, in words the rider can act on. */
   const [locationHint, setLocationHint] = useState<string | null>(null);
 
   /**
@@ -274,6 +272,30 @@ export default function GoogleNavigation({
   // object literal from the finder's render, so it is a new reference on every
   // render — keying effects on it directly would restart guidance continuously.
   const startedFor = useRef<string | null>(null);
+
+  /**
+   * THE PARENT'S CALLBACKS, HELD BY REFERENCE.
+   *
+   * The finder passes onArrive/onLocation/onRemaining as inline arrow
+   * functions, so each one is a brand-new value on every render of a screen
+   * that re-renders constantly during a trip — ETA ticks, sheet state, spot
+   * list. They were in the listener effect's dependency array, which meant that
+   * effect tore down and rebuilt itself on almost every render, calling
+   * removeAllListeners() each time.
+   *
+   * Every teardown leaves a window with NO listeners registered at all, and an
+   * SDK event that lands in one of those windows is simply lost. Arrival fires
+   * exactly once per trip, so it only has to be unlucky once — which is a very
+   * plausible reading of the note in the finder saying Google's arrival event
+   * "has never fired in production".
+   *
+   * Reading the callbacks through a ref lets the listeners register once and
+   * stay registered, while still calling whatever the parent passed most
+   * recently.
+   */
+  const cb = useRef({ onArrive, onLocation, onRemaining });
+  cb.current = { onArrive, onLocation, onRemaining };
+
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -295,7 +317,7 @@ export default function GoogleNavigation({
       // while the rider is filling in check-in.
       if (event.isFinalDestination !== false) {
         navigationController.stopGuidance().catch(() => {});
-        onArrive?.();
+        cb.current.onArrive?.();
       }
     });
 
@@ -313,14 +335,10 @@ export default function GoogleNavigation({
       if (typeof lat === 'number' && typeof lng === 'number') {
         // Any fix at all clears the watchdog. This callback is the only signal
         // the SDK gives us that its location engine is alive.
-        lastFixAt.current = Date.now();
-        if (mounted.current) {
-          setStaleFix(false);
-          // A precise fix arriving proves the problem is gone, whatever the
-          // permission looked like when navigation opened.
-          setLocationHint(null);
-        }
-        onLocation?.({ lat, lng });
+        // A precise fix arriving proves the problem is gone, whatever the
+        // permission looked like when navigation opened.
+        if (mounted.current) setLocationHint(null);
+        cb.current.onLocation?.({ lat, lng });
       }
     });
 
@@ -332,10 +350,13 @@ export default function GoogleNavigation({
         meters,
         severity: Number(td.delaySeverity) || 0,
       });
-      onRemaining?.(meters);
+      cb.current.onRemaining?.(meters);
     });
 
     return () => removeAllListeners();
+    // onArrive / onLocation / onRemaining are deliberately NOT dependencies:
+    // they change identity every render and are read through `cb` instead. See
+    // the comment on that ref.
   }, [
     navigationController,
     setOnArrival,
@@ -343,9 +364,6 @@ export default function GoogleNavigation({
     setOnNavigationReady,
     setOnRemainingTimeOrDistanceChanged,
     removeAllListeners,
-    onArrive,
-    onLocation,
-    onRemaining,
   ]);
 
   // ── Start guidance ───────────────────────────────────────────
@@ -434,27 +452,6 @@ export default function GoogleNavigation({
   useEffect(() => {
     start();
   }, [start]);
-
-  // ── No-fix watchdog ──────────────────────────────────────────
-  //
-  // Runs only once guidance is up. A route can be computed from a rough origin,
-  // so "route drawn, map drawn, speed stuck at 0" is a perfectly reachable
-  // state - it is exactly what the SDK's grey chip means, and it is silent.
-  //
-  // GRACE is generous on purpose: a genuine tunnel or a covered car park should
-  // never trigger this. What it catches is the case that never resolves.
-  useEffect(() => {
-    if (!ready || error) return;
-    const GRACE_MS = 20000;
-    // Guidance has just started; treat now as the last known-good moment so a
-    // slow first fix does not fire this instantly.
-    if (!lastFixAt.current) lastFixAt.current = Date.now();
-    const t = setInterval(() => {
-      if (!mounted.current) return;
-      setStaleFix(Date.now() - lastFixAt.current > GRACE_MS);
-    }, 5000);
-    return () => clearInterval(t);
-  }, [ready, error]);
 
   // Retry a transient "waiting for location" without the rider doing anything.
   useEffect(() => {
@@ -714,12 +711,9 @@ export default function GoogleNavigation({
       {/* Guidance is running but no position has arrived for a while. Google's
         * own chip says "Searching for GPS..." and stops there; this says which
         * of the three fixable causes it probably is. */}
-      {!error && (locationHint || staleFix) ? (
+      {!error && locationHint ? (
         <View style={styles.errorBar} pointerEvents="box-none">
-          <Text style={styles.errorText}>
-            {locationHint ||
-              'No GPS signal yet. If this does not clear, check that ParkStop has “Use precise location” turned on and that Location is switched on for the phone.'}
-          </Text>
+          <Text style={styles.errorText}>{locationHint}</Text>
         </View>
       ) : null}
     </View>
