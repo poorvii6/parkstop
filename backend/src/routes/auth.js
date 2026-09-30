@@ -35,7 +35,14 @@ router.post(
 
 router.post(
   '/login',
+  loginRateLimiter,
   AuthController.login
+);
+
+router.post(
+  '/login/verify-otp',
+  verifyOtpRateLimiter,
+  AuthController.verifyLoginOTP
 );
 
 /**

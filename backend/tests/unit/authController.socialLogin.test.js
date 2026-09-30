@@ -25,6 +25,14 @@ jest.mock('../../src/config/firebase', () => ({
 jest.mock('../../src/models/User', () => ({
   getStats: jest.fn().mockResolvedValue({}),
 }));
+jest.mock('../../src/services/otpService', () => ({
+  generateOTP: jest.fn().mockResolvedValue('123456'),
+  sendEmailOTP: jest.fn().mockResolvedValue(undefined),
+  canSendOTP: jest.fn().mockResolvedValue({ allowed: true }),
+  verifyOTP: jest.fn().mockResolvedValue({ ok: true }),
+  generateOTPToken: jest.fn().mockReturnValue('mock-otp-token'),
+  validateOTPToken: jest.fn().mockReturnValue(true),
+}));
 jest.mock('../../src/utils/logger', () => ({
   info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn(),
 }));

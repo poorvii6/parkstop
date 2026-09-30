@@ -242,6 +242,12 @@ class AuthController {
   /**
    * 🔑 LOGIN (E2E Test / Mock login fallback)
    */
+  /**
+   * LOGIN - STEP 1 (sends OTP, does NOT issue session).
+   * 2FA: every login triggers an email OTP. Returns a short-lived
+   * pending_login_token that must be presented with the OTP at
+   * /auth/login/verify-otp to complete authentication.
+   */
   static async login(req, res) {
     try {
       const { email } = req.body;
@@ -249,8 +255,9 @@ class AuthController {
         return res.status(400).json({ success: false, message: 'Email is required' });
       }
 
+      const normalizedEmail = email.toLowerCase();
       const user = await prisma.users.findUnique({
-        where: { email: email.toLowerCase() }
+        where: { email: normalizedEmail }
       });
 
       if (!user) {
@@ -260,7 +267,105 @@ class AuthController {
         });
       }
 
+      const { generateOTP, sendEmailOTP, canSendOTP } = require('../services/otpService');
+      const gate = await canSendOTP(normalizedEmail);
+      if (!gate.allowed) {
+        return res.status(429).json({
+          success: false,
+          message: `Please wait ${gate.retryAfterSec}s before requesting another code.`,
+          retry_after: gate.retryAfterSec
+        });
+      }
+
+      const code = await generateOTP(normalizedEmail);
+      await sendEmailOTP(normalizedEmail, code);
+
       const jwt = require('jsonwebtoken');
+      const pendingToken = jwt.sign(
+        {
+          purpose: 'login_pending',
+          email: normalizedEmail,
+          user_id: user.id
+        },
+        process.env.JWT_SECRET || 'jwt_default_secret_key',
+        { expiresIn: '5m' }
+      );
+
+      return res.status(200).json({
+        success: true,
+        requires_otp: true,
+        message: 'OTP sent to your email. Please verify to complete login.',
+        pending_login_token: pendingToken
+      });
+    } catch (error) {
+      logger.error('Login initiate error:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Login failed: ' + error.message
+      });
+    }
+  }
+
+  /**
+   * LOGIN - STEP 2 (verify OTP + issue session token).
+   */
+  static async verifyLoginOTP(req, res) {
+    try {
+      const { email, code, pending_login_token } = req.body;
+
+      if (!email || !code || !pending_login_token) {
+        return res.status(400).json({
+          success: false,
+          message: 'Email, code and pending_login_token are all required'
+        });
+      }
+
+      const jwt = require('jsonwebtoken');
+      const normalizedEmail = email.toLowerCase();
+
+      let decoded;
+      try {
+        decoded = jwt.verify(
+          pending_login_token,
+          process.env.JWT_SECRET || 'jwt_default_secret_key'
+        );
+      } catch (err) {
+        return res.status(401).json({
+          success: false,
+          message: 'Login session expired. Please try logging in again.'
+        });
+      }
+
+      if (decoded.purpose !== 'login_pending' || decoded.email !== normalizedEmail) {
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid login session.'
+        });
+      }
+
+      const { verifyOTP } = require('../services/otpService');
+      const result = await verifyOTP(normalizedEmail, code);
+      if (!result.ok) {
+        const message = result.reason === 'too_many_attempts'
+          ? 'Too many incorrect attempts. Please request a new login OTP.'
+          : 'Invalid or expired OTP code';
+        return res.status(result.reason === 'too_many_attempts' ? 429 : 400).json({
+          success: false,
+          message
+        });
+      }
+
+      const user = await prisma.users.findUnique({
+        where: { id: decoded.user_id }
+      });
+
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'User not found'
+        });
+      }
+
       const token = jwt.sign(
         {
           id: user.id,
@@ -283,10 +388,10 @@ class AuthController {
         }
       });
     } catch (error) {
-      logger.error('Mock login error:', error);
+      logger.error('Verify login OTP error:', error);
       return res.status(500).json({
         success: false,
-        message: 'Login failed: ' + error.message
+        message: 'Login verification failed: ' + error.message
       });
     }
   }
@@ -410,9 +515,27 @@ class AuthController {
 
       const stats = await User.getStats(user.id, user.role);
 
+      // 2FA: even social login requires OTP verification
+      const { generateOTP: genLoginOTP, sendEmailOTP: sendLoginOTP } = require('../services/otpService');
+      const loginCode = await genLoginOTP(user.email);
+      await sendLoginOTP(user.email, loginCode);
+
+      const jwtLib = require('jsonwebtoken');
+      const socialPendingToken = jwtLib.sign(
+        {
+          purpose: 'login_pending',
+          email: user.email.toLowerCase(),
+          user_id: user.id
+        },
+        process.env.JWT_SECRET || 'jwt_default_secret_key',
+        { expiresIn: '5m' }
+      );
+
       res.json({
         success: true,
-        message: 'Profile synchronized successfully',
+        requires_otp: true,
+        message: 'Profile synchronized. OTP sent to your email - verify to complete login.',
+        pending_login_token: socialPendingToken,
         data: {
           user: { ...user, name: user.full_name },
           stats
