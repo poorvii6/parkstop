@@ -160,6 +160,9 @@ model users {
   // null on either = quiet hours disabled.
   quiet_hours_start         Int?
   quiet_hours_end           Int?
+  // Legacy column from the old spotter-verification work. Kept so prisma db push
+  // does not try to drop it (it holds data). Values: draft/pending/approved/rejected.
+  verification_status       String?
 
   bookings              bookings[]
   locations             locations[]
