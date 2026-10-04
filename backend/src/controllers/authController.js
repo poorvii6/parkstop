@@ -278,7 +278,9 @@ class AuthController {
       }
 
       const code = await generateOTP(normalizedEmail);
-      await sendEmailOTP(normalizedEmail, code);
+      // Send the email in the background. Waiting for it made the app time
+      // out and show a false "You're offline" message.
+      sendEmailOTP(normalizedEmail, code).catch((e) => logger.error('Login OTP email failed:', e));
 
       const jwt = require('jsonwebtoken');
       const pendingToken = jwt.sign(
@@ -518,7 +520,8 @@ class AuthController {
       // 2FA: even social login requires OTP verification
       const { generateOTP: genLoginOTP, sendEmailOTP: sendLoginOTP } = require('../services/otpService');
       const loginCode = await genLoginOTP(user.email);
-      await sendLoginOTP(user.email, loginCode);
+      // Send the email in the background so the app gets a fast reply.
+      sendLoginOTP(user.email, loginCode).catch((e) => logger.error('Social login OTP email failed:', e));
 
       const jwtLib = require('jsonwebtoken');
       const socialPendingToken = jwtLib.sign(

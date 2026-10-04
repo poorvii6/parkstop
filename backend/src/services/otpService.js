@@ -112,6 +112,7 @@ async function sendEmailOTP(email, code) {
   try {
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
+      signal: AbortSignal.timeout(8000), // never hang on the email provider
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${resendApiKey}`
