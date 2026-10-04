@@ -44,6 +44,7 @@ export default function AdminDashboard() {
     await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user_role', 'is_dual_user']);
     try {
       const { auth } = require('../../services/firebase');
+      try { await require('@react-native-async-storage/async-storage').default.removeItem('otp_verified_uid'); } catch {}
       await auth.signOut();
     } catch (err) {}
     router.replace('/login');

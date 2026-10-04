@@ -8,6 +8,8 @@ import { BlueprintTheme, BlueprintColors } from '../constants/BlueprintTheme';
 import { signInWithEmailAndPassword, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 import { auth } from '../services/firebase';
 import { presentAuthError } from '../utils/authErrors';
+import LoginOtpModal from '../components/LoginOtpModal';
+import { markOtpVerified, clearOtpVerified } from '../utils/otpGate';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
@@ -15,7 +17,64 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const router = useRouter();
 
+  // Pending OTP step: set when the server says "OTP sent, verify to finish".
+  const [otp, setOtp] = useState<{ email: string; token: string; uid: string } | null>(null);
+
+  const finishLogin = async (user: any) => {
+    await AsyncStorage.setItem('user_role', user.role);
+    const isDualUser = user.is_finder_registered && user.is_spotter_registered;
+    await AsyncStorage.setItem('is_dual_user', isDualUser ? 'true' : 'false');
+    // After sign-in, returning users pick their role next
+    if (String(user.role).toUpperCase() === 'ADMIN') router.replace('/admin');
+    else router.replace('/role-selection');
+  };
+
+  // Every login must pass the email OTP. If the server did not ask for one,
+  // refuse rather than letting the user in without it.
+  const handleServerReply = async (data: any, firebaseUser: any) => {
+    if (data?.success && data.requires_otp && data.pending_login_token) {
+      setOtp({
+        email: data.data?.user?.email || firebaseUser.email,
+        token: data.pending_login_token,
+        uid: firebaseUser.uid,
+      });
+      return;
+    }
+    await auth.signOut().catch(() => {});
+    Alert.alert('Sign-in failed', data?.message || 'Could not start email verification. Please try again.');
+  };
+
+  const resendLoginOtp = async (): Promise<string | null> => {
+    try {
+      const u = auth.currentUser;
+      if (!u) return null;
+      const token = await u.getIdToken();
+      const res = await apiClient.post('/auth/social-login', { email: u.email, token });
+      return res.data?.pending_login_token || null;
+    } catch {
+      return null;
+    }
+  };
+
+  const cancelOtp = async () => {
+    setOtp(null);
+    await clearOtpVerified();
+    await auth.signOut().catch(() => {});
+    try {
+      const { GoogleSignin } = require('@react-native-google-signin/google-signin');
+      await GoogleSignin.signOut();
+    } catch {}
+  };
+
+  const onOtpVerified = async (user: any) => {
+    const current = otp;
+    setOtp(null);
+    await markOtpVerified(current?.uid || auth.currentUser?.uid);
+    if (user) await finishLogin(user);
+  };
+
   const handleLogin = async () => {
+    await clearOtpVerified(); // a new sign-in must pass a new OTP
     if (!email || !password) return Alert.alert('Hold up!', 'Please enter your email and password');
     setLoading(true);
 
@@ -33,17 +92,7 @@ export default function LoginScreen() {
         token: firebaseToken
       });
 
-      if (response.data.success) {
-        const user = response.data.data.user;
-        const role = user.role.toUpperCase();
-        await AsyncStorage.setItem('user_role', user.role);
-
-        const isDualUser = user.is_finder_registered && user.is_spotter_registered;
-        await AsyncStorage.setItem('is_dual_user', isDualUser ? 'true' : 'false');
-        // After sign-in, returning users pick their role next
-        if (role === 'ADMIN') router.replace('/admin');
-        else router.replace('/role-selection');
-      }
+      await handleServerReply(response.data, firebaseUser);
     } catch (error: any) {
       console.log('[AUTH] Login Error:', error.response?.data || error.message); // handled below; not a crash
       presentAuthError(error);
@@ -53,6 +102,7 @@ export default function LoginScreen() {
   };
 
   const handleSocialLogin = async (providerName: 'google') => {
+    await clearOtpVerified(); // a new sign-in must pass a new OTP
 
     try {
       setLoading(true);
@@ -114,17 +164,7 @@ export default function LoginScreen() {
         token: firebaseToken
       });
 
-      if (response.data.success) {
-        const user = response.data.data.user;
-        const role = user.role.toUpperCase();
-        await AsyncStorage.setItem('user_role', user.role);
-
-        const isDualUser = user.is_finder_registered && user.is_spotter_registered;
-        await AsyncStorage.setItem('is_dual_user', isDualUser ? 'true' : 'false');
-        // After sign-in, returning users pick their role next
-        if (role === 'ADMIN') router.replace('/admin');
-        else router.replace('/role-selection');
-      }
+      await handleServerReply(response.data, firebaseUser);
     } catch (error: any) {
       console.log('[SOCIAL AUTH] OAuth Error:', error); // handled below; not a crash
       presentAuthError(error);
@@ -206,6 +246,14 @@ export default function LoginScreen() {
           )}
         </ScrollView>
       </KeyboardAvoidingView>
+      <LoginOtpModal
+        visible={!!otp}
+        email={otp?.email || ''}
+        pendingToken={otp?.token || ''}
+        onResend={resendLoginOtp}
+        onVerified={onOtpVerified}
+        onCancel={cancelOtp}
+      />
     </SafeAreaView>
   );
 }

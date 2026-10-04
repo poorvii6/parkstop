@@ -15,9 +15,21 @@ export const OFFLINE_MESSAGE = 'Please check your internet connection and try ag
 
 /** Map any auth/network error to a clean { title, message } pair. */
 export function getAuthErrorMessage(error: any): { title: string; message: string } {
-  // Offline / can't reach the server — the case this was built for.
+  // Server too slow (e.g. waking up). This is NOT the user's internet.
+  if (error?.code === 'ECONNABORTED' || /timeout/i.test(String(error?.message || ''))) {
+    return { title: 'Server is slow', message: 'ParkStop is taking too long to respond. Please try again in a few seconds.' };
+  }
+  // Google Play Services network error (code 7).
+  if (error?.code === 7 || error?.code === '7') {
+    return { title: 'Google sign-in failed', message: 'Google could not finish sign-in (code 7). Please try again.' };
+  }
+  // Firebase could not reach Google's servers.
+  if (error?.code === 'auth/network-request-failed') {
+    return { title: 'Google sign-in failed', message: 'Could not reach Google sign-in servers (auth/network-request-failed). Please try again.' };
+  }
+  // No reply at all from the ParkStop server.
   if (isNetworkError(error)) {
-    return { title: OFFLINE_TITLE, message: OFFLINE_MESSAGE };
+    return { title: "Can't reach ParkStop", message: `The ParkStop server did not respond (${error?.code || error?.message || 'no response'}). Please try again.` };
   }
 
   const code: string | number | undefined = error?.code;

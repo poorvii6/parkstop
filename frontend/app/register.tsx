@@ -8,6 +8,8 @@ import { createUserWithEmailAndPassword, GoogleAuthProvider, signInWithPopup } f
 import { auth } from '../services/firebase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { presentAuthError } from '../utils/authErrors';
+import LoginOtpModal from '../components/LoginOtpModal';
+import { markOtpVerified, clearOtpVerified } from '../utils/otpGate';
 
 export default function RegisterScreen() {
   const [name, setName] = useState('');
@@ -29,6 +31,44 @@ export default function RegisterScreen() {
   const [resending, setResending] = useState(false);
 
   const router = useRouter();
+
+  // OTP step for Google sign-up (the server emails a code on /auth/social-login).
+  const [loginOtp, setLoginOtp] = useState<{ email: string; token: string; uid: string } | null>(null);
+
+  const resendLoginOtp = async (): Promise<string | null> => {
+    try {
+      const u = auth.currentUser;
+      if (!u) return null;
+      const token = await u.getIdToken();
+      const res = await apiClient.post('/auth/social-login', { email: u.email, token, role });
+      return res.data?.pending_login_token || null;
+    } catch {
+      return null;
+    }
+  };
+
+  const cancelLoginOtp = async () => {
+    setLoginOtp(null);
+    await clearOtpVerified();
+    await auth.signOut().catch(() => {});
+    try {
+      const { GoogleSignin } = require('@react-native-google-signin/google-signin');
+      await GoogleSignin.signOut();
+    } catch {}
+  };
+
+  const onLoginOtpVerified = async (user: any) => {
+    const current = loginOtp;
+    setLoginOtp(null);
+    await markOtpVerified(current?.uid || auth.currentUser?.uid);
+    if (!user) return;
+    await AsyncStorage.setItem('user_role', user.role);
+    const isDualUser = user.is_finder_registered && user.is_spotter_registered;
+    await AsyncStorage.setItem('is_dual_user', isDualUser ? 'true' : 'false');
+    if (Platform.OS === 'web') alert('Welcome to ParkStop!');
+    else Alert.alert('Welcome to ParkStop!', 'Thank you for joining our network.');
+    router.replace('/role-selection');
+  };
 
   // Countdown for the resend button. The backend enforces a 60s per-address
   // cooldown, so the UI mirrors it rather than letting the user tap into a 429.
@@ -59,6 +99,7 @@ export default function RegisterScreen() {
   };
 
   const handleSocialLogin = async (providerName: 'google') => {
+    await clearOtpVerified(); // a new sign-in must pass a new OTP
     if (!agreedToTerms) {
       Alert.alert('Terms Required', 'Please accept the Terms of Service to continue.');
       return;
@@ -124,16 +165,17 @@ export default function RegisterScreen() {
         role: role
       });
 
-      if (response.data.success) {
-        const user = response.data.data.user;
-        await AsyncStorage.setItem('user_role', user.role);
-        if (Platform.OS === 'web') alert('Welcome to ParkStop!');
-        else Alert.alert('Welcome to ParkStop!', 'Thank you for joining our network.');
-
-        const isDualUser = user.is_finder_registered && user.is_spotter_registered;
-        await AsyncStorage.setItem('is_dual_user', isDualUser ? 'true' : 'false');
-        // Continue to role selection
-        router.replace('/role-selection');
+      const data = response.data;
+      if (data?.success && data.requires_otp && data.pending_login_token) {
+        setLoginOtp({
+          email: data.data?.user?.email || firebaseUser.email,
+          token: data.pending_login_token,
+          uid: firebaseUser.uid,
+        });
+      } else {
+        // Never let a Google sign-up through without the email code.
+        await auth.signOut().catch(() => {});
+        Alert.alert('Sign-up failed', data?.message || 'Could not start email verification. Please try again.');
       }
     } catch (error: any) {
       console.log('[SOCIAL AUTH] OAuth Error:', error); // handled below; not a crash
@@ -252,6 +294,9 @@ export default function RegisterScreen() {
 
         if (response.data.success) {
           const user = response.data.data.user;
+          // Email sign-up already verified the address with an OTP before
+          // the account was created, so this login counts as verified.
+          await markOtpVerified(firebaseUser.uid);
           await AsyncStorage.setItem('user_role', user.role);
           if (Platform.OS === 'web') alert('Welcome to ParkStop!');
           else Alert.alert('Welcome to ParkStop!', 'Thank you for joining our network.');
@@ -459,6 +504,14 @@ export default function RegisterScreen() {
           </View>
         </View>
       </Modal>
+      <LoginOtpModal
+        visible={!!loginOtp}
+        email={loginOtp?.email || ''}
+        pendingToken={loginOtp?.token || ''}
+        onResend={resendLoginOtp}
+        onVerified={onLoginOtpVerified}
+        onCancel={cancelLoginOtp}
+      />
     </SafeAreaView>
   );
 }

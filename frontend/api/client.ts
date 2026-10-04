@@ -50,7 +50,7 @@ const getAPIUrl = async () => {
 
 const apiClient = axios.create({
   baseURL: getAPIUrlSync(),
-  timeout: 15000,
+  timeout: 30000, // Railway cold start can take ~20s
   headers: {
     'Bypass-Tunnel-Reminder': 'true',
   },
@@ -205,7 +205,7 @@ apiClient.interceptors.response.use(
       isSigningOut = true;
 
       try {
-        await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user_role']);
+        await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user_role', 'otp_verified_uid']);
 
         try {
           await auth.signOut();

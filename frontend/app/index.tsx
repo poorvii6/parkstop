@@ -5,6 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BlueprintColors } from '../constants/BlueprintTheme';
 import { auth } from '../services/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
+import { isOtpVerified } from '../utils/otpGate';
 
 export default function SplashScreen() {
   const router = useRouter();
@@ -30,6 +31,14 @@ export default function SplashScreen() {
 
         // Not signed in -> Welcome (which then reveals the walkthrough)
         if (!firebaseUser && !isOffline) { router.replace('/welcome'); return; }
+
+        // Signed in to Firebase but never finished the email OTP on this phone
+        // (e.g. closed the app at the code screen). Sign out and start over.
+        if (firebaseUser && !(await isOtpVerified(firebaseUser.uid))) {
+          await auth.signOut().catch(() => {});
+          router.replace('/welcome');
+          return;
+        }
 
         const role = await AsyncStorage.getItem('user_role');
         const isDualUser = await AsyncStorage.getItem('is_dual_user');

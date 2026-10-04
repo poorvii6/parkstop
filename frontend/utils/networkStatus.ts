@@ -1,112 +1,108 @@
 /**
  * networkStatus.ts — accurate, non-annoying connectivity feedback.
  *
- * The problem this solves: a single failed or slow request — e.g. the Railway
- * backend cold-starting, or one flaky endpoint — should NOT make the app shout
- * "You're offline" when the device is perfectly online.
- *
- * Strategy (no native dependency needed):
- *   1. A network failure does NOT show the banner immediately. It starts a short
- *      GRACE timer. If ANY request succeeds within that window, the pending
- *      banner is cancelled — so cold-starts and transient blips never surface.
- *   2. Only if nothing succeeds for the whole grace window do we show one banner,
- *      and then at most once per throttle window.
- *   3. The wording does not falsely blame the user's internet — the problem may
- *      be our server, so it says "can't reach ParkStop".
- *   4. When a request finally succeeds again, we emit ONLINE so the banner hides.
+ * The banner must NEVER appear when the device is actually online. Rules:
+ *   1. Startup grace: ignore all failures for the first 20 seconds after module
+ *      load. The app bootstraps a lot — Firebase, Expo, push, splash — and any
+ *      brief flake at that moment is not a user-visible connectivity problem.
+ *   2. Need SEVERAL consecutive failures with NO successes to show the banner.
+ *      A single blip or a backend cold-start never counts.
+ *   3. A successful request immediately resets the failure counter and clears
+ *      the banner.
+ *   4. NetInfo's negative signal does NOT trigger the banner. Its captive-
+ *      portal probe (connectivitycheck.gstatic.com) is unreliable on carrier
+ *      networks, VPNs, custom DNS, and Jio/Airtel hotspots. We only trust it
+ *      for the POSITIVE recovery signal.
  */
 import { DeviceEventEmitter, NativeModules } from 'react-native';
 
 export const OFFLINE_EVENT = 'network-offline';
 export const ONLINE_EVENT = 'network-online';
 
-/**
- * True when an error is a connectivity-level failure (no server response was
- * received), as opposed to a real HTTP error like 401/404/500 which DID reach
- * the server and must not be treated as "offline".
- */
 export function isNetworkError(error: any): boolean {
   if (!error) return false;
-  if (error.code === 'auth/network-request-failed') return true; // Firebase token refresh offline
-  if (error.code === 'ERR_NETWORK') return true;                 // axios: no network
+  if (error.code === 'auth/network-request-failed') return true;
+  if (error.code === 'ERR_NETWORK') return true;
   if (error.message === 'Network Error') return true;
-  if (error.isAxiosError && !error.response) return true;         // request sent, no response
-  if (error.code === 'ECONNABORTED') return true;                // timeout (often a slow/cold server)
-
-  // Native Google Sign-In (@react-native-google-signin) offline error:
-  // it surfaces as { code: 7, message: 'NETWORK_ERROR' }.
+  if (error.isAxiosError && !error.response) return true;
+  if (error.code === 'ECONNABORTED') return true;
   if (error.code === 7 || error.code === '7') return true;
   if (typeof error.message === 'string' && error.message.toUpperCase() === 'NETWORK_ERROR') return true;
-
   return false;
 }
 
-const GRACE_MS = 4000;     // wait this long, watching for a success, before deciding we're cut off
-const THROTTLE_MS = 8000;  // show the banner at most once per this window
+// -------- Tuning knobs --------
+const STARTUP_GRACE_MS = 20000;   // ignore every failure for the first 20s after launch
+const FAILURE_WINDOW_MS = 12000;  // failures older than this don't count
+const FAILURES_TO_SHOW = 3;       // need N failures within the window with no success in between
+const THROTTLE_MS = 15000;        // show the banner at most once per this window
 
-let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+// -------- State --------
+const bootTime = Date.now();
+let failureTimestamps: number[] = [];
 let bannerVisible = false;
 let lastShownAt = 0;
+let deviceOnline: boolean | null = null;
 
 const DEFAULT_MSG = "Connection problem — can't reach ParkStop. Check your internet.";
 
+function nowPastStartupGrace(): boolean {
+  return Date.now() - bootTime > STARTUP_GRACE_MS;
+}
+
+function pruneOldFailures(now: number): void {
+  failureTimestamps = failureTimestamps.filter(t => now - t <= FAILURE_WINDOW_MS);
+}
+
 /**
- * Report a network-level failure. The banner only appears if NO successful
- * request clears it within the grace window — so a single blip or a backend
- * cold-start that recovers quickly will never show anything.
+ * Report a network-level failure. The banner only appears if we have had
+ * FAILURES_TO_SHOW consecutive failures within FAILURE_WINDOW_MS with no
+ * success in between, AND we're past the startup grace period.
  */
 export function reportNetworkFailure(message: string = DEFAULT_MSG): void {
-  if (pendingTimer || bannerVisible) return; // already deciding, or already shown
-  pendingTimer = setTimeout(() => {
-    pendingTimer = null;
-    const now = Date.now();
-    if (now - lastShownAt < THROTTLE_MS) return;
-    lastShownAt = now;
-    bannerVisible = true;
-    DeviceEventEmitter.emit(OFFLINE_EVENT, message);
-  }, GRACE_MS);
-}
+  const now = Date.now();
 
-/**
- * Report a successful response. Cancels any pending banner and, if one is
- * showing, hides it (we're clearly reachable again).
- */
-export function reportNetworkSuccess(): void {
-  const wasFailing = !!pendingTimer || bannerVisible;
-  if (pendingTimer) {
-    clearTimeout(pendingTimer);
-    pendingTimer = null;
-  }
-  bannerVisible = false;
-  // Emit ONLINE on ANY recovery from a failed state — even a brief blip that
-  // never showed the banner — so screens refetch stale data immediately. The
-  // OfflineBanner ignores this unless it was actually showing "offline".
-  if (wasFailing) DeviceEventEmitter.emit(ONLINE_EVENT);
-}
+  // Startup grace: ignore everything that fires during app bootstrap.
+  if (!nowPastStartupGrace()) return;
 
-/**
- * Show the offline banner IMMEDIATELY — no grace window. Used by the OS
- * connectivity monitor, which KNOWS the device is offline (airplane mode / Wi-Fi
- * off), so there's nothing to second-guess. Deduped + throttled.
- */
-export function forceOffline(message: string = DEFAULT_MSG): void {
-  if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; }
+  // Already showing the banner — nothing more to do.
   if (bannerVisible) return;
+
+  failureTimestamps.push(now);
+  pruneOldFailures(now);
+
+  if (failureTimestamps.length < FAILURES_TO_SHOW) return;
+  if (now - lastShownAt < THROTTLE_MS) return;
+
+  lastShownAt = now;
   bannerVisible = true;
-  lastShownAt = Date.now();
   DeviceEventEmitter.emit(OFFLINE_EVENT, message);
 }
 
 /**
- * Best-known device connectivity, kept live by the NetInfo monitor below.
- *
- * `null` means "not determined yet" — NetInfo hasn't reported, or its native
- * module isn't linked in this build. Callers must treat null as ONLINE and
- * proceed: blocking on an unknown state would lock out every user on a build
- * without NetInfo, which is far worse than occasionally letting someone
- * through who then gets a normal request failure.
+ * Report a successful response. Resets the failure counter and, if the banner
+ * is showing, hides it (we're clearly reachable).
  */
-let deviceOnline: boolean | null = null;
+export function reportNetworkSuccess(): void {
+  const wasFailing = failureTimestamps.length > 0 || bannerVisible;
+  failureTimestamps = [];
+  if (bannerVisible) {
+    bannerVisible = false;
+    DeviceEventEmitter.emit(ONLINE_EVENT);
+  } else if (wasFailing) {
+    // Brief dip that never surfaced — still emit ONLINE so screens refetch.
+    DeviceEventEmitter.emit(ONLINE_EVENT);
+  }
+}
+
+/**
+ * NOT USED. Kept as an export for back-compat so a hypothetical caller that
+ * imports it does not crash. The device-level connectivity probe we had was
+ * unreliable; the banner is driven exclusively by request-based detection now.
+ */
+export function forceOffline(_message: string = DEFAULT_MSG): void {
+  // Intentionally a no-op. Do not force the banner from any OS-level signal.
+}
 
 /** True only when we positively know the device has no connection. */
 export function isDefinitelyOffline(): boolean {
@@ -115,30 +111,24 @@ export function isDefinitelyOffline(): boolean {
 
 let monitorStarted = false;
 /**
- * Start listening to the OS connectivity state via @react-native-community/netinfo
- * so we detect "internet off" the instant it happens (sub-second) instead of
- * waiting for a request to fail. If the package isn't installed, we silently
- * fall back to the request-failure-based detection.
+ * Start listening to the OS connectivity state. We ONLY use it to CLEAR the
+ * banner on reconnect — never to show it. The pessimistic signal (gstatic
+ * probe) is too unreliable on real-world networks.
  */
 export function initConnectivityMonitor(): void {
   if (monitorStarted) return;
   monitorStarted = true;
   try {
-    // Only use NetInfo if its NATIVE module is actually linked in this build.
-    // If it isn't (e.g. the app wasn't rebuilt after adding it), requiring the
-    // package throws "RNCNetInfo is null" — so we check first and, when absent,
-    // silently fall back to the request-failure-based detection (no native
-    // module needed). This keeps the app crash-free with or without NetInfo.
     if (!(NativeModules as any)?.RNCNetInfo) return;
     const NetInfo = require('@react-native-community/netinfo').default;
     if (!NetInfo?.addEventListener) return;
     NetInfo.addEventListener((state: any) => {
-      if (state?.isConnected === false) {
-        deviceOnline = false;
-        forceOffline(); // device is genuinely offline — show now, no grace
-      } else if (state?.isConnected === true) {
+      if (state?.isConnected === true) {
         deviceOnline = true;
-        reportNetworkSuccess(); // back online — hide banner + trigger refetch
+        reportNetworkSuccess();
+      } else if (state?.isConnected === false) {
+        // Note it locally; never force the banner.
+        deviceOnline = false;
       }
     });
   } catch {
