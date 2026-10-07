@@ -24,6 +24,9 @@ interface RazorpayCheckoutProps {
    * payment stays a genuine Razorpay order payment.
    */
   preferUpi?: boolean;
+  /** The signed-in user's real details, shown pre-filled in Checkout. */
+  prefillEmail?: string;
+  prefillName?: string;
 }
 
 export default function RazorpayCheckout({
@@ -36,6 +39,8 @@ export default function RazorpayCheckout({
   onCancel,
   onFailure,
   preferUpi = false,
+  prefillEmail = '',
+  prefillName = '',
 }: RazorpayCheckoutProps) {
   const [loading, setLoading] = useState(true);
 
@@ -87,12 +92,12 @@ export default function RazorpayCheckout({
 
       <script>
         const options = {
-          "key": "${keyId}",
-          "amount": "${amount}", // Amount is in paise
-          "currency": "${currency}",
+          "key": ${JSON.stringify(keyId)},
+          "amount": ${JSON.stringify(String(amount))}, // Amount is in paise
+          "currency": ${JSON.stringify(currency)},
           "name": "ParkStop",
           "description": "Secure Parking Reservation",
-          "order_id": "${orderId}",
+          "order_id": ${JSON.stringify(orderId)},
           "handler": function (response) {
             const data = {
               status: 'success',
@@ -103,12 +108,12 @@ export default function RazorpayCheckout({
             window.ReactNativeWebView.postMessage(JSON.stringify(data));
           },
           "prefill": {
-            "name": "ParkStop User",
-            "email": "user@parkstop.com"
+            "name": ${JSON.stringify(prefillName)},
+            "email": ${JSON.stringify(prefillEmail)}
             ${preferUpi ? ',"method": "upi"' : ''}
           },
           "theme": {
-            "color": "#6366f1"
+            "color": "#FF6B2C"
           },
           "modal": {
             "ondismiss": function () {

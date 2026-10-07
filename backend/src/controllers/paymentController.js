@@ -34,8 +34,13 @@ class PaymentController {
       const user = await prisma.users.findUnique({
         where: { id: req.user.id }
       });
-      const arrears = user.balance < 0 ? Math.abs(Number(user.balance)) : 0;
-      const finalAmountToCharge = Number(booking.total_price) + arrears;
+      if (booking.payment_status === 'paid') {
+        return res.status(409).json({ success: false, message: 'This booking is already paid.' });
+      }
+      if (['cancelled', 'expired'].includes(String(booking.status))) {
+        return res.status(409).json({ success: false, message: `This booking is ${booking.status} and cannot be paid.` });
+      }
+      const { arrears, total: finalAmountToCharge } = PaymentService.computePayable(booking, user);
 
       // Find the spot and the spotter
       const spot = await prisma.parking_spots.findUnique({
@@ -48,7 +53,7 @@ class PaymentController {
       const useRazorpay = true;
 
       if (useRazorpay) {
-        const order = await PaymentService.createRazorpayOrder(finalAmountToCharge, req.user.id, bookingId);
+        const order = await PaymentService.createRazorpayOrder(finalAmountToCharge, req.user.id, bookingId, { arrears });
         res.json({
           success: true,
           provider: 'razorpay',
@@ -301,19 +306,6 @@ class PaymentController {
     }
   }
 
-  /**
-   * 💸 REFUND PAYMENT
-   */
-  static async refundPayment(req, res) {
-    try {
-      const { bookingId, amount } = req.body;
-      const result = await PaymentService.processRefund(bookingId, amount);
-      res.json({ success: true, message: 'Refund processed successfully', data: result });
-    } catch (error) {
-      logger.error('Refund Controller Error:', error);
-      res.status(500).json({ success: false, message: error.message || 'Refund failed' });
-    }
-  }
 
   /**
    * 🛒 CREATE RAZORPAY ORDER
@@ -338,18 +330,30 @@ class PaymentController {
          return res.status(403).json({ success: false, message: 'Unauthorized access to this booking' });
       }
 
-      // Charge the spot fee plus the advance fee. The verification step checks
-      // the captured amount against exactly this sum, so the two must agree.
-      const payable = Number(booking.total_price) + Number(booking.advance_fee || 0);
+      if (booking.payment_status === 'paid') {
+        return res.status(409).json({ success: false, message: 'This booking is already paid.' });
+      }
+      if (['cancelled', 'expired'].includes(String(booking.status))) {
+        return res.status(409).json({ success: false, message: `This booking is ${booking.status} and cannot be paid.` });
+      }
 
-      const order = await PaymentService.createRazorpayOrder(payable, req.user.id, bookingId);
+      // Spot fee + advance fee + any old unpaid dues. The verify step checks the
+      // payment against this exact order, and clears only the dues recorded here.
+      const user = await prisma.users.findUnique({ where: { id: req.user.id } });
+      const { arrears, total } = PaymentService.computePayable(booking, user);
+      if (!(total > 0)) {
+        return res.status(400).json({ success: false, message: 'Nothing to pay for this booking.' });
+      }
+
+      const order = await PaymentService.createRazorpayOrder(total, req.user.id, bookingId, { arrears });
 
       res.json({
         success: true,
         order_id: order.orderId,
         amount: order.amount,
         currency: order.currency,
-        key_id: process.env.RAZORPAY_KEY_ID
+        key_id: process.env.RAZORPAY_KEY_ID,
+        breakdown: { booking: total - arrears, previous_dues: arrears }
       });
     } catch (error) {
       logger.error('Razorpay Create Order error:', error);
@@ -444,7 +448,8 @@ class PaymentController {
         razorpay_order_id,
         razorpay_payment_id,
         razorpay_signature,
-        bookingId
+        bookingId,
+        req.user.id
       );
 
       res.json({
@@ -454,7 +459,7 @@ class PaymentController {
       });
     } catch (error) {
       logger.error('Razorpay Verify Payment error:', error);
-      res.status(500).json({ success: false, message: error.message || 'Failed to verify Razorpay payment' });
+      res.status(400).json({ success: false, message: error.message || 'Failed to verify Razorpay payment' });
     }
   }
 

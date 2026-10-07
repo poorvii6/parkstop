@@ -75,12 +75,9 @@ router.post(
   PaymentController.withdrawEarnings
 );
 
-router.post(
-  '/refund',
-  authenticate,
-  authorize('FINDER'),
-  PaymentController.refundPayment
-);
+// /refund removed: refunds happen only through BookingRefundService when a
+// booking is cancelled. The old route let any finder refund any booking.
+
 
 /**
  * 💳 RAZORPAY PAYMENT FLOW

@@ -10,7 +10,6 @@ import RazorpayCheckout from '../../components/RazorpayCheckout';
 import razorpayService from '../../services/razorpayService';
 import { registerForPushNotificationsAsync, getCurrentPushToken } from '../../services/notifications';
 import { onRealtime } from '../../services/realtime';
-import { setCashfreeCallbacks, removeCashfreeCallbacks, payBookingWithCashfree, verifyCashfreePayment } from '../../services/cashfree';
 
 import { io, Socket } from 'socket.io-client';
 import * as Location from 'expo-location';
@@ -2131,19 +2130,22 @@ export default function FinderDashboard() {
       });
 
       if (verification.success) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         setStep('receipt');
       } else {
-        Alert.alert('Verification Failed', 'Could not confirm payment signature. Please contact support.');
+        Alert.alert('Payment not confirmed', `${verification.message || 'We could not confirm this payment.'}\n\nIf money was deducted, do not pay again — it will be confirmed or refunded automatically. Payment ID: ${data.razorpay_payment_id}`);
       }
     } catch (e: any) {
-      Alert.alert('Verification Error', e.message || 'Failed to verify payment with server.');
+      Alert.alert('Payment not confirmed', `${e.message || 'We could not confirm this payment yet.'}\n\nIf money was deducted, do not pay again — it will be confirmed or refunded automatically. Payment ID: ${data.razorpay_payment_id}`);
     } finally {
+      paymentInFlight.current = false;
       setIsLoading(false);
       setRazorpayOrder(null);
     }
   };
 
   const handleRazorpayCancel = () => {
+    paymentInFlight.current = false;
     setIsRazorpayVisible(false);
     setPreferUpiCheckout(false);
     setRazorpayOrder(null);
@@ -2151,50 +2153,46 @@ export default function FinderDashboard() {
   };
 
   const handleRazorpayFailure = (error: string) => {
+    paymentInFlight.current = false;
     setIsRazorpayVisible(false);
     setPreferUpiCheckout(false);
     setRazorpayOrder(null);
     Alert.alert('Payment Failed', error || 'Failed to complete transaction.');
   };
 
-  // ── Cashfree UPI checkout (Easy Split: 80% spotter / 20% ParkStop) ──
-  const cashfreeOrderRef = useRef<string | null>(null);
+  // ── Online payment: Razorpay Checkout (UPI first, cards/netbanking too) ──
+  // The server builds the order (spot price + advance fee + any old dues) and
+  // later checks the payment against that exact order before marking it paid.
+  const paymentInFlight = useRef(false);
 
-  const handleCashfreePay = async () => {
-    if (!bookingDetails?.id) return;
+  const handleRazorpayPay = async () => {
+    if (!bookingDetails?.id || paymentInFlight.current || isRazorpayVisible) return; // no double taps
+    paymentInFlight.current = true;
+    setIsLoading(true);
     try {
-      setIsLoading(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      await apiClient.patch(`/bookings/${bookingDetails.id}/payment-mode`, { payment_mode: 'online' }).catch(() => {});
-      cashfreeOrderRef.current = await payBookingWithCashfree(Number(bookingDetails.id));
+      await apiClient.patch(`/bookings/${bookingDetails.id}/payment-mode`, { payment_mode: 'online' });
+      setBookingDetails(prev => prev ? { ...prev, payment_mode: 'online' } : null);
+
+      const order = await razorpayService.createOrder(Number(bookingDetails.id));
+      if (!order?.success || !order.order_id || !order.key_id) {
+        throw new Error('Could not start the payment. Please try again.');
+      }
+      setRazorpayOrder({
+        orderId: order.order_id,
+        amount: order.amount,
+        currency: order.currency || 'INR',
+        keyId: order.key_id,
+      });
+      setPreferUpiCheckout(true);
+      setIsRazorpayVisible(true);
     } catch (e: any) {
+      paymentInFlight.current = false;
       Alert.alert('Payment Error', e?.response?.data?.message || e?.message || 'Could not start payment');
     } finally {
       setIsLoading(false);
     }
   };
-
-  useEffect(() => {
-    setCashfreeCallbacks({
-      onSuccess: async (orderId: string) => {
-        try {
-          const paid = await verifyCashfreePayment(orderId, Number(bookingDetails?.id));
-          if (paid) {
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            setStep('receipt');
-          } else {
-            Alert.alert('Payment pending', 'We could not confirm the payment yet. If money was debited it will reflect shortly.');
-          }
-        } catch (e: any) {
-          Alert.alert('Verification error', e?.response?.data?.message || e?.message || 'Could not verify payment');
-        }
-      },
-      onError: (msg: string) => {
-        Alert.alert('Payment failed', msg);
-      },
-    });
-    return () => removeCashfreeCallbacks();
-  }, [bookingDetails?.id]);
 
   const isBottomPanelFull = ['arriving', 'active_parking', 'payment', 'receipt'].includes(step);
   // Route is visible during spot preview (the "blue line" when a spot is
@@ -2473,6 +2471,7 @@ export default function FinderDashboard() {
                         await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user_role', 'is_dual_user']);
                         try {
                           const { auth } = require('../../services/firebase');
+                          try { await AsyncStorage.removeItem('otp_verified_uid'); } catch {}
                           await auth.signOut();
                         } catch (err) {}
                         router.replace('/login');
@@ -3979,10 +3978,11 @@ export default function FinderDashboard() {
                         paddingVertical: 18, borderRadius: 20, 
                         alignItems: 'center',
                       }} 
+                      disabled={isLoading || isRazorpayVisible}
                       onPress={() => {
                         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
                         if (selectedPaymentMethod === 'online') {
-                          handleCashfreePay();
+                          handleRazorpayPay();
                         } else {
                           processPayment();
                         }
@@ -4131,6 +4131,8 @@ export default function FinderDashboard() {
           currency={razorpayOrder.currency}
           keyId={razorpayOrder.keyId}
           preferUpi={preferUpiCheckout}
+          prefillEmail={require('../../services/firebase').auth?.currentUser?.email || ''}
+          prefillName={require('../../services/firebase').auth?.currentUser?.displayName || ''}
           onSuccess={handleRazorpaySuccess}
           onCancel={handleRazorpayCancel}
           onFailure={handleRazorpayFailure}

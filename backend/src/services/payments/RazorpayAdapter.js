@@ -73,7 +73,7 @@ class RazorpayAdapter {
    * then settles the booking. booking_id travels in notes so the webhook can
    * recover it. Raw REST (Basic auth) to stay independent of SDK versions.
    */
-  async createQrCode({ amountPaise, bookingId, description, closeBy }) {
+  async createQrCode({ amountPaise, bookingId, description, closeBy, notes = {} }) {
     const auth = Buffer.from(`${process.env.RAZORPAY_KEY_ID}:${process.env.RAZORPAY_KEY_SECRET}`).toString('base64');
     const body = {
       type: 'upi_qr',
@@ -82,7 +82,7 @@ class RazorpayAdapter {
       fixed_amount: true,
       payment_amount: amountPaise,
       description: description || `ParkStop booking ${bookingId}`,
-      notes: { booking_id: String(bookingId) },
+      notes: { ...notes, booking_id: String(bookingId) },
     };
     if (closeBy) body.close_by = closeBy;
     const res = await fetch('https://api.razorpay.com/v1/payments/qr_codes', {
@@ -138,6 +138,14 @@ class RazorpayAdapter {
    * FETCH PAYMENT DETAILS
    * Retrieve full payment details from Razorpay after verification.
    */
+  /**
+   * CAPTURE an authorized payment (used when auto-capture is off), so the
+   * money is kept instead of being auto-refunded by Razorpay.
+   */
+  async capturePayment(paymentId, amountPaise) {
+    return razorpay.payments.capture(paymentId, amountPaise, 'INR');
+  }
+
   async fetchPayment(paymentId) {
     try {
       const payment = await razorpay.payments.fetch(paymentId);

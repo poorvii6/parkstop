@@ -191,11 +191,10 @@ async function handleConfirmBookingLogic(req, res, spotId, adjustedDuration, boo
     const user = await prisma.users.findUnique({
       where: { id: userId }
     });
-    const arrears = user.balance < 0 ? Math.abs(Number(user.balance)) : 0;
-    const finalAmountToCharge = Number(booking.total_price) + arrears;
+    const { arrears, total: finalAmountToCharge } = PaymentService.computePayable(booking, user);
 
-    // 4. Create Razorpay order
-    const order = await PaymentService.createRazorpayOrder(finalAmountToCharge, userId, booking.id);
+    // 4. Create Razorpay order (arrears recorded so only those dues are cleared)
+    const order = await PaymentService.createRazorpayOrder(finalAmountToCharge, userId, booking.id, { arrears });
 
     res.json({
       success: true,

@@ -85,14 +85,38 @@ describe('amount_paid records this booking only', () => {
       .mockResolvedValueOnce({ total_price: 400, advance_fee: 0, status: 'reserved' })
       .mockResolvedValueOnce({ ...settled('reserved'), users: { balance: -300 } });
 
-    await PaymentService._finalizeClaimedBooking(100, 'pay_abc');
+    // The order recorded ₹300 of old dues, so ₹300 is cleared.
+    await PaymentService._finalizeClaimedBooking(100, 'pay_abc', 300);
 
     expect(prisma.bookings.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ amount_paid: 400 }) })
     );
-    // The arrears still get cleared — that behaviour is untouched.
     expect(prisma.users.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { balance: { increment: 300 } } })
+    );
+  });
+
+  test('old dues NOT included in the payment are not forgiven', async () => {
+    // The order was created without arrears (e.g. settled via webhook). The
+    // finder still owes the ₹300 afterwards.
+    prisma.bookings.findUnique
+      .mockResolvedValueOnce({ total_price: 400, advance_fee: 0, status: 'reserved' })
+      .mockResolvedValueOnce({ ...settled('reserved'), users: { balance: -300 } });
+
+    await PaymentService._finalizeClaimedBooking(100, 'pay_abc');
+
+    expect(prisma.users.update).not.toHaveBeenCalled();
+  });
+
+  test('never clears more than the finder actually owes', async () => {
+    prisma.bookings.findUnique
+      .mockResolvedValueOnce({ total_price: 400, advance_fee: 0, status: 'reserved' })
+      .mockResolvedValueOnce({ ...settled('reserved'), users: { balance: -100 } });
+
+    await PaymentService._finalizeClaimedBooking(100, 'pay_abc', 300);
+
+    expect(prisma.users.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { balance: { increment: 100 } } })
     );
   });
 });
