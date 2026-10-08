@@ -15,6 +15,7 @@
  * Spotters become "vendors" via onboardVendor (their PAN + bank/UPI).
  */
 const prisma = require('../config/prisma');
+const { hasRole } = require('../utils/roles');
 const logger = require('../utils/logger');
 const Cashfree = require('../services/payments/CashfreeAdapter');
 
@@ -27,7 +28,7 @@ class CashfreeController {
    */
   static async createCheckout(req, res) {
     try {
-      if (!req.user.role || req.user.role.toLowerCase() !== 'finder') {
+      if (!hasRole(req.user, 'FINDER')) {
         return res.status(403).json({ success: false, message: 'Only finders can pay for a booking' });
       }
 
@@ -156,7 +157,7 @@ class CashfreeController {
    */
   static async verifyPayment(req, res) {
     try {
-      if (!req.user.role || req.user.role.toLowerCase() !== 'finder') {
+      if (!hasRole(req.user, 'FINDER')) {
         return res.status(403).json({ success: false, message: 'Only finders can verify a payment' });
       }
       const orderId = req.body.orderId;
@@ -192,7 +193,7 @@ class CashfreeController {
    */
   static async onboardVendor(req, res) {
     try {
-      if (!req.user.role || req.user.role.toLowerCase() !== 'spotter') {
+      if (!hasRole(req.user, 'SPOTTER')) {
         return res.status(403).json({ success: false, message: 'Only spotters can set up payouts' });
       }
 

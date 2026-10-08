@@ -193,6 +193,14 @@ export default function SpotterTabsLayout() {
             href: null,
           }}
         />
+        <Tabs.Screen
+          name="verification"
+          options={{
+            title: 'Verification',
+            href: null,
+            tabBarStyle: { display: 'none' },
+          }}
+        />
       </Tabs>
 
       {/* #2 Loud new-booking banner overlay */}

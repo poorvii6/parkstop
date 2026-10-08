@@ -165,6 +165,7 @@ describe('the reservation hold is anchored to arrival, not to tapping Book', () 
     prisma.$transaction.mockImplementation(async (fn) => fn({
       $executeRaw: jest.fn(),
       parking_spots: { findUnique: jest.fn().mockResolvedValue(spotRow), update: jest.fn() },
+      users: { findUnique: jest.fn().mockResolvedValue({ verification_status: 'approved' }) },
       bookings: {
         create: jest.fn(async (a) => { captured = a.data; return { id: 10, ...a.data }; }),
         // Availability is counted from live bookings now, not read from the

@@ -146,6 +146,7 @@ class ParkingSpot {
       ) b ON b.spot_id = parking_spots.id
       WHERE is_active = true
         AND u.balance >= -500
+        AND u.verification_status = 'approved'
         AND latitude BETWEEN ${lat - latDelta} AND ${lat + latDelta}
         AND longitude BETWEEN ${lng - lngDelta} AND ${lng + lngDelta}
         AND (
@@ -211,6 +212,7 @@ class ParkingSpot {
       ) b ON b.spot_id = parking_spots.id
       WHERE is_active = true
         AND u.balance >= -500
+        AND u.verification_status = 'approved'
         AND (
           6371 *
           acos(
@@ -238,7 +240,9 @@ class ParkingSpot {
       where: {
         is_active: true,
         users: {
-          balance: { gte: -500 }
+          balance: { gte: -500 },
+          // Only verified owners' spots are shown to drivers.
+          verification_status: 'approved'
         }
       },
       include: {

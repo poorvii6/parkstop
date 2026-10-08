@@ -28,6 +28,7 @@ const reviewRoutes = require('./routes/reviews');
 const disputeRoutes = require('./routes/disputes');
 const bookingsSimpleRoutes = require('./routes/bookingsSimple');
 const notificationRoutes = require('./routes/notifications');
+const ownerVerificationRoutes = require('./routes/ownerVerification');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -152,6 +153,7 @@ app.get('/health', async (req, res) => {
 const API_PREFIX = '/api/v1';
 
 app.use(`${API_PREFIX}/auth`, authRoutes);
+app.use(`${API_PREFIX}/owner-verification`, ownerVerificationRoutes);
 app.use(`${API_PREFIX}/spots`, spotRoutes);
 app.use(`${API_PREFIX}/bookings`, bookingRoutes);
 app.use(`${API_PREFIX}/locations`, locationRoutes);

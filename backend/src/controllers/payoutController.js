@@ -1,4 +1,5 @@
 const PayoutService = require('../services/payments/PayoutService');
+const { hasRole } = require('../utils/roles');
 const logger = require('../utils/logger');
 const prisma = require('../config/prisma');
 
@@ -10,8 +11,17 @@ class PayoutController {
    * Creates a RazorpayX Contact + Fund Account.
    */
   static async setupPayoutAccount(req, res) {
+    // Payout bank details are set ONLY by the verified bank step of owner
+    // verification (name-matched to Aadhaar). Accepting raw details here let a
+    // stolen login redirect an owner's payouts.
+    return res.status(409).json({
+      success: false,
+      code: 'USE_OWNER_VERIFICATION',
+      message: 'Payout account is set in Owner Verification → Bank account.'
+    });
+    // eslint-disable-next-line no-unreachable
     try {
-      if (req.user.role.toLowerCase() !== 'spotter') {
+      if (!hasRole(req.user, 'SPOTTER')) {
         return res.status(403).json({ success: false, message: 'Only spotters can set up payout accounts' });
       }
 
@@ -152,8 +162,14 @@ class PayoutController {
    * Spotter updates their UPI ID or bank details.
    */
   static async updatePayoutDetails(req, res) {
+    return res.status(409).json({
+      success: false,
+      code: 'USE_OWNER_VERIFICATION',
+      message: 'Payout account is set in Owner Verification → Bank account.'
+    });
+    // eslint-disable-next-line no-unreachable
     try {
-      if (req.user.role.toLowerCase() !== 'spotter') {
+      if (!hasRole(req.user, 'SPOTTER')) {
         return res.status(403).json({ success: false, message: 'Only spotters can update payout details' });
       }
 

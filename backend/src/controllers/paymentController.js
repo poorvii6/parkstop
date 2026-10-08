@@ -1,4 +1,5 @@
 const PaymentService = require('../services/paymentService');
+const { hasRole } = require('../utils/roles');
 const logger = require('../utils/logger');
 const Booking = require('../models/Booking');
 const prisma = require('../config/prisma');
@@ -11,7 +12,7 @@ class PaymentController {
    */
   static async createCheckoutSession(req, res) {
     try {
-      if (req.user.role.toLowerCase() !== 'finder') {
+      if (!hasRole(req.user, 'FINDER')) {
         return res.status(403).json({ success: false, message: 'Only finders can process payments' });
       }
 
@@ -194,6 +195,9 @@ class PaymentController {
       if (!methodId || !Number.isFinite(amount) || amount <= 0 || amount > 1000000) {
         return res.status(400).json({ success: false, message: 'A valid positive amount and method are required' });
       }
+      if (hasRole(req.user, 'SPOTTER') && req.user.verification_status !== 'approved') {
+        return res.status(403).json({ success: false, code: 'OWNER_NOT_VERIFIED', message: 'Complete owner verification before withdrawing.' });
+      }
 
       // Use a transaction to prevent race conditions
       const result = await prisma.$transaction(async (tx) => {
@@ -312,7 +316,7 @@ class PaymentController {
    */
   static async createRazorpayOrder(req, res) {
     try {
-      if (req.user.role.toLowerCase() !== 'finder') {
+      if (!hasRole(req.user, 'FINDER')) {
         return res.status(403).json({ success: false, message: 'Only finders can process payments' });
       }
 
@@ -430,7 +434,7 @@ class PaymentController {
    */
   static async verifyRazorpayPayment(req, res) {
     try {
-      if (req.user.role.toLowerCase() !== 'finder') {
+      if (!hasRole(req.user, 'FINDER')) {
         return res.status(403).json({ success: false, message: 'Only finders can process payments' });
       }
 
@@ -468,7 +472,7 @@ class PaymentController {
    */
   static async verifyStripePayment(req, res) {
     try {
-      if (req.user.role.toLowerCase() !== 'finder') {
+      if (!hasRole(req.user, 'FINDER')) {
         return res.status(403).json({ success: false, message: 'Only finders can process payments' });
       }
 
@@ -638,7 +642,7 @@ class PaymentController {
    */
   static async topUpWallet(req, res) {
     try {
-      if (req.user.role.toLowerCase() !== 'finder') {
+      if (!hasRole(req.user, 'FINDER')) {
         return res.status(403).json({ success: false, message: 'Only finders can top up wallet' });
       }
 

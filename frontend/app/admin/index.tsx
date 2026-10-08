@@ -40,6 +40,18 @@ export default function AdminDashboard() {
   // Refresh analytics when connectivity returns.
   useOnlineRefresh(fetchAnalytics);
 
+  // Admins keep admin rights on the server while using the other screens.
+  const openAs = async (role: 'FINDER' | 'SPOTTER') => {
+    try {
+      await apiClient.post('/auth/switch-role', { newRole: role });
+      await AsyncStorage.setItem('user_role', role);
+      router.replace(role === 'FINDER' ? '/finder' : '/spotter');
+    } catch (e: any) {
+      const { Alert } = require('react-native');
+      Alert.alert('Could not open', e?.response?.data?.message || 'Please try again.');
+    }
+  };
+
   const handleLogout = async () => {
     await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user_role', 'is_dual_user']);
     try {
@@ -90,36 +102,32 @@ export default function AdminDashboard() {
           </View>
         )}
 
-        <Text style={styles.sectionTitle}>System Status</Text>
-        <View style={styles.statusGrid}>
-          <View style={[BlueprintTheme.glassCard, styles.statusItem]}>
-            <View style={styles.statusHeader}>
-              <Text style={styles.statusName}>Payment Engine</Text>
-              <View style={[styles.statusIndicator, { backgroundColor: BlueprintColors.success }]} />
-            </View>
-            <Text style={styles.statusDetail}>Razorpay Gateway</Text>
-            <Text style={styles.statusPing}>12ms latency</Text>
-          </View>
-          
-          <View style={[BlueprintTheme.glassCard, styles.statusItem]}>
-            <View style={styles.statusHeader}>
-              <Text style={styles.statusName}>Chatbot AI</Text>
-              <View style={[styles.statusIndicator, { backgroundColor: BlueprintColors.success }]} />
-            </View>
-            <Text style={styles.statusDetail}>OpenAI / NLP Hub</Text>
-            <Text style={styles.statusPing}>45ms latency</Text>
-          </View>
-        </View>
-
-        <TouchableOpacity style={[BlueprintTheme.buttonPrimary, { marginTop: 40 }]}>
-          <Text style={BlueprintTheme.buttonPrimaryText}>System Re-sync</Text>
+        <Text style={styles.sectionTitle}>Manage</Text>
+        <TouchableOpacity style={[BlueprintTheme.glassCard, styles.actionCard]} onPress={() => router.push('/admin/verifications' as any)}>
+          <Text style={styles.actionTitle}>Owner verifications</Text>
+          <Text style={styles.actionSub}>Review and approve new spot owners</Text>
         </TouchableOpacity>
+
+        <Text style={styles.sectionTitle}>Use the app</Text>
+        <View style={{ flexDirection: 'row', gap: 12 }}>
+          <TouchableOpacity style={[BlueprintTheme.glassCard, styles.actionCard, { flex: 1 }]} onPress={() => openAs('FINDER')}>
+            <Text style={styles.actionTitle}>Driver</Text>
+            <Text style={styles.actionSub}>Find and book parking</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[BlueprintTheme.glassCard, styles.actionCard, { flex: 1 }]} onPress={() => openAs('SPOTTER')}>
+            <Text style={styles.actionTitle}>Owner</Text>
+            <Text style={styles.actionSub}>List and manage spots</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  actionCard: { padding: 18, marginBottom: 12 },
+  actionTitle: { color: '#FFFFFF', fontSize: 16, fontWeight: '800' },
+  actionSub: { color: BlueprintColors.textSecondary, fontSize: 13, marginTop: 4 },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, backgroundColor: BlueprintColors.background },
   logoText: { color: '#FFFFFF', fontSize: 24, fontWeight: '900', letterSpacing: -1 },
   adminTag: { fontSize: 12, color: BlueprintColors.primaryAccent, textTransform: 'uppercase', fontWeight: '800' },

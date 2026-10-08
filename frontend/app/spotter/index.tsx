@@ -13,6 +13,7 @@ import RevenueChart from '../../components/spotter/RevenueChart';
 import { useSpotterDashboard } from '../../hooks/useSpotterDashboard';
 import { SC, TF, SP, RAD, SS } from '../../constants/SpotterTheme';
 import RazorpayCheckout from '../../components/RazorpayCheckout';
+import OwnerVerificationBanner from '../../components/spotter/OwnerVerificationBanner';
 import { Alert } from 'react-native';
 
 /* ── Stat Card ─────────────────────────────────────────────────── */
@@ -105,9 +106,9 @@ export default function SpotterDashboard() {
     const bal = Number(dashboardData.balance || 0);
     if (bal <= 0) { Alert.alert('Nothing to withdraw', 'You have no available balance yet.'); return; }
     if (payoutSetup === false) {
-      Alert.alert('Set up payout first', 'Add your UPI or bank account to receive withdrawals.', [
+      Alert.alert('Verify your bank account', 'Complete owner verification to add the bank account your earnings are paid into.', [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Set up', onPress: () => router.push('/spotter/payout-setup') },
+        { text: 'Set up', onPress: () => router.push('/spotter/verification' as any) },
       ]);
       return;
     }
@@ -120,9 +121,9 @@ export default function SpotterDashboard() {
           const methods = m.data?.data || [];
           const method = methods.find((x: any) => x.is_default) || methods[0];
           if (!method) {
-            Alert.alert('Set up payout first', 'Add your UPI or bank account to receive withdrawals.', [
+            Alert.alert('Verify your bank account', 'Complete owner verification to add the bank account your earnings are paid into.', [
               { text: 'Cancel', style: 'cancel' },
-              { text: 'Set up', onPress: () => router.push('/spotter/payout-setup') },
+              { text: 'Set up', onPress: () => router.push('/spotter/verification' as any) },
             ]);
             return;
           }
@@ -281,6 +282,9 @@ export default function SpotterDashboard() {
           />
         }
       >
+        {/* Until the owner is verified, their spots are hidden from drivers. */}
+        <OwnerVerificationBanner />
+
         {/* OFFLINE BANNER — the numbers below may be stale, say so plainly. */}
         {loadFailed && (
           <TouchableOpacity
@@ -338,7 +342,7 @@ export default function SpotterDashboard() {
             <Text style={{ color: SC.textSecondary, fontSize: 12, marginBottom: 8 }}>Finish these to start receiving bookings.</Text>
             {[
               { done: (dashboardData.active_spots > 0 || (dashboardData.inventory || []).length > 0), label: 'Add a parking spot', hint: 'List where drivers can park', onPress: () => router.push('/spotter/spots') },
-              { done: payoutSetup === true, label: 'Set up payouts', hint: 'Link UPI or bank to get paid', onPress: () => router.push('/spotter/payout-setup') },
+              { done: payoutSetup === true, label: 'Verify your bank account', hint: 'Done in owner verification', onPress: () => router.push('/spotter/verification' as any) },
               { done: !!dashboardData.global_online, label: 'Go online', hint: 'Make your spots bookable', onPress: () => toggleGlobalStatus(!!dashboardData.global_online) },
             ].map((step: any, i: number) => (
               <TouchableOpacity key={i} onPress={step.done ? undefined : step.onPress} activeOpacity={step.done ? 1 : 0.8}
@@ -439,7 +443,7 @@ export default function SpotterDashboard() {
           {payoutSetup === false && (
             <TouchableOpacity
               style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(245,158,11,0.15)', padding: 12, borderRadius: RAD.md, borderWidth: 1, borderColor: 'rgba(245,158,11,0.3)' }}
-              onPress={() => router.push('/spotter/payout-setup')}
+              onPress={() => router.push('/spotter/verification' as any)}
             >
               <Ionicons name="wallet" size={20} color="#f59e0b" style={{ marginRight: 8 }} />
               <View style={{ flex: 1 }}>

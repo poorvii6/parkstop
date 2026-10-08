@@ -176,6 +176,7 @@ model users {
   disputes              disputes[]
   device_tokens         device_tokens[]
   notifications         notifications[]
+  owner_verification    owner_verifications?
 
   @@index([email])
   @@index([role])
@@ -303,4 +304,65 @@ model disputes {
 
   @@index([status])
   @@index([booking_id])
+}
+
+/// Spot-owner identity verification (one row per owner).
+/// Stores RESULTS only: no full Aadhaar number, no Aadhaar photo, no selfie.
+model owner_verifications {
+  id                         Int       @id @default(autoincrement())
+  user_id                    Int       @unique
+  /// not_started | in_progress | pending | approved | rejected
+  status                     String    @default("not_started") @db.VarChar(20)
+
+  // Aadhaar via DigiLocker (Cashfree Secure ID)
+  digilocker_verification_id String?   @db.VarChar(50)
+  aadhaar_name               String?   @db.VarChar(150)
+  aadhaar_last4              String?   @db.VarChar(4)
+  aadhaar_dob                String?   @db.VarChar(20)
+  aadhaar_gender             String?   @db.VarChar(10)
+  aadhaar_state              String?   @db.VarChar(60)
+  aadhaar_pincode            String?   @db.VarChar(10)
+  aadhaar_verified_at        DateTime? @db.Timestamp(6)
+
+  // PAN (masked + keyed hash for duplicate detection)
+  pan_masked                 String?   @db.VarChar(10)
+  pan_hash                   String?   @db.VarChar(64)
+  pan_registered_name        String?   @db.VarChar(150)
+  pan_name_match             String?   @db.VarChar(30)
+  pan_aadhaar_linked         String?   @db.VarChar(4)
+  pan_verified_at            DateTime? @db.Timestamp(6)
+
+  // Live selfie vs Aadhaar photo (scores only, no images kept)
+  liveness_score             Float?
+  face_match_score           Float?
+  selfie_verified_at         DateTime? @db.Timestamp(6)
+
+  // Bank account (penny-less check); full number lives on users for payouts
+  bank_last4                 String?   @db.VarChar(4)
+  bank_ifsc                  String?   @db.VarChar(11)
+  bank_name                  String?   @db.VarChar(100)
+  bank_name_at_bank          String?   @db.VarChar(150)
+  bank_name_match            String?   @db.VarChar(30)
+  bank_verified_at           DateTime? @db.Timestamp(6)
+
+  // Property proof (private Cloudinary upload, reviewed by admin)
+  property_doc_type          String?   @db.VarChar(30)
+  property_doc_public_id     String?   @db.VarChar(255)
+  property_address           String?   @db.VarChar(300)
+  property_uploaded_at       DateTime? @db.Timestamp(6)
+
+  // Review
+  flags                      Json?
+  attempts                   Json?
+  submitted_at               DateTime? @db.Timestamp(6)
+  reviewed_at                DateTime? @db.Timestamp(6)
+  reviewed_by                Int?
+  rejection_reason           String?   @db.VarChar(500)
+  created_at                 DateTime  @default(now()) @db.Timestamp(6)
+  updated_at                 DateTime  @default(now()) @updatedAt @db.Timestamp(6)
+
+  users                      users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([pan_hash])
 }

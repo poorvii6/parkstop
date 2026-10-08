@@ -26,7 +26,8 @@ const mockTx = {
     count: jest.fn(),
   },
   parking_spots: { findUnique: jest.fn(), update: jest.fn() },
-  users: { update: jest.fn() },
+  // Spot owner lookup: only verified owners' spots can be booked.
+  users: { update: jest.fn(), findUnique: jest.fn(async () => ({ verification_status: 'approved' })) },
 };
 
 jest.mock('../../src/config/prisma', () => ({
@@ -219,6 +220,15 @@ describe('Booking.create', () => {
     await expect(
       Booking.create({ user_id: 1, spot_id: 10, ...validWindow() })
     ).rejects.toThrow('Parking spot not found');
+  });
+
+  test('rejects a spot whose owner is not verified yet', async () => {
+    mockTx.parking_spots.findUnique.mockResolvedValue(activeSpot());
+    mockTx.users.findUnique.mockResolvedValueOnce({ verification_status: 'in_progress' });
+    await expect(
+      Booking.create({ user_id: 1, spot_id: 10, ...validWindow() })
+    ).rejects.toThrow('not available for booking yet');
+    expect(mockTx.bookings.create).not.toHaveBeenCalled();
   });
 
   test('rejects an invalid duration (end <= start)', async () => {

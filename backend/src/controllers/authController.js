@@ -641,34 +641,24 @@ class AuthController {
 
       const targetRole = newRole.toUpperCase();
 
-      // Finding parking requires no registration — anyone can be a Finder.
-      // Only becoming a Spotter (which needs payout details) may require a
-      // registration step.
-      if (targetRole === 'SPOTTER' && !user.is_spotter_registered && !registrationDetails) {
-        return res.json({
-          success: false,
-          registrationRequired: true,
-          message: 'Spotter registration is required.'
-        });
-      }
-
-      const updateData = { role: targetRole };
+      // Anyone can become a driver or an owner. Becoming an owner gives access
+      // to the owner screens straight away; their spots stay hidden from
+      // drivers until owner verification is approved. Payout details are NOT
+      // accepted here — they come only from the verified bank step.
+      // An admin stays an admin while using the driver or owner screens.
+      const updateData = { role: String(user.role).toUpperCase() === 'ADMIN' ? 'ADMIN' : targetRole };
       if (targetRole === 'FINDER') {
         updateData.is_finder_registered = true;
       } else {
         updateData.is_spotter_registered = true;
+        if (!user.verification_status) updateData.verification_status = 'not_started';
       }
 
       if (registrationDetails) {
-        const { address, dob, phone, upi_id, bank_account_number, bank_ifsc, bank_account_name, payout_mode } = registrationDetails;
+        const { address, dob, phone } = registrationDetails;
         if (address) updateData.address = address;
         if (dob) updateData.dob = dob;
         if (phone) updateData.phone = phone;
-        if (upi_id) updateData.upi_id = upi_id;
-        if (bank_account_number) updateData.bank_account_number = bank_account_number;
-        if (bank_ifsc) updateData.bank_ifsc = bank_ifsc;
-        if (bank_account_name) updateData.bank_account_name = bank_account_name;
-        if (payout_mode) updateData.payout_mode = payout_mode;
       }
 
       const updatedUser = await prisma.users.update({

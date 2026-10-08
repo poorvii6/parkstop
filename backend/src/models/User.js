@@ -70,19 +70,14 @@ class User {
   }
 
   static async update(id, updates) {
-    const { name, phone, address, dob, upi_id, bank_account_number, bank_ifsc, bank_account_name, payout_mode, is_finder_registered, is_spotter_registered } = updates;
+    // Profile edits are limited to personal details. Payout details come only
+    // from the verified bank step, and roles only from switch-role.
+    const { name, phone, address, dob } = updates;
     const updateData = {};
     if (name) { updateData.full_name = name; updateData.name = name; }
     if (phone) updateData.phone = phone;
     if (address) updateData.address = address;
     if (dob) updateData.dob = dob;
-    if (upi_id !== undefined) updateData.upi_id = upi_id;
-    if (bank_account_number !== undefined) updateData.bank_account_number = bank_account_number;
-    if (bank_ifsc !== undefined) updateData.bank_ifsc = bank_ifsc;
-    if (bank_account_name !== undefined) updateData.bank_account_name = bank_account_name;
-    if (payout_mode !== undefined) updateData.payout_mode = payout_mode;
-    if (is_finder_registered !== undefined) updateData.is_finder_registered = is_finder_registered;
-    if (is_spotter_registered !== undefined) updateData.is_spotter_registered = is_spotter_registered;
 
     const user = await prisma.users.update({
       where: { id: parseInt(id) },

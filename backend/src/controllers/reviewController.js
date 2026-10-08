@@ -1,4 +1,5 @@
 const prisma = require('../config/prisma');
+const { hasRole } = require('../utils/roles');
 const logger = require('../utils/logger');
 
 class ReviewController {
@@ -9,7 +10,7 @@ class ReviewController {
       const { booking_id, rating, comment } = req.body;
       const finderId = req.user.id;
 
-      if (req.user.role.toLowerCase() !== 'finder') {
+      if (!hasRole(req.user, 'FINDER')) {
         return res.status(403).json({ success: false, message: 'Only finders can leave reviews' });
       }
 

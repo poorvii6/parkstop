@@ -40,20 +40,17 @@ export default function RoleSelectionScreen() {
     setLoading(true);
     const r = activeRole.toUpperCase();
     try {
-      // Sync the chosen role to the backend so authorization works (booking,
-      // spot management, etc.). Without this the backend keeps a stale role and
-      // finder/spotter actions fail with 403.
+      // Tell the server first. Only open the screens once it has agreed —
+      // routing anyway left owners on screens where every action failed with
+      // "Access denied".
       const res = await apiClient.post('/auth/switch-role', { newRole: r });
-      if (res.data && res.data.registrationRequired) {
-        // Becoming a Spotter needs payout details — send them to spotter setup.
-        await AsyncStorage.setItem('user_role', activeRole);
-        setLoading(false);
-        router.replace('/spotter');
-        return;
-      }
-    } catch (e) {
-      // Non-fatal: still route locally so the user isn't stuck.
-      console.log('[Role] switch-role failed:', (e as any)?.message);
+      if (!res.data?.success) throw new Error(res.data?.message || 'Could not switch.');
+      const u = res.data?.data?.user;
+      if (u) await AsyncStorage.setItem('is_dual_user', u.is_finder_registered && u.is_spotter_registered ? 'true' : 'false');
+    } catch (e: any) {
+      setLoading(false);
+      Alert.alert('Could not continue', e?.response?.data?.message || e?.message || 'Please check your connection and try again.');
+      return;
     }
     await AsyncStorage.setItem('user_role', activeRole);
     setLoading(false);

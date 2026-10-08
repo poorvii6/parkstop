@@ -31,6 +31,8 @@ export default function RootLayout() {
         <Stack.Screen name="finder/index" options={{ headerShown: false }} />
         <Stack.Screen name="spotter" options={{ headerShown: false }} />
         <Stack.Screen name="admin/index" options={{ headerShown: false }} />
+        <Stack.Screen name="admin/verifications" options={{ headerShown: false, animation: 'slide_from_right' }} />
+        <Stack.Screen name="admin/verification/[userId]" options={{ headerShown: false, animation: 'slide_from_right' }} />
 
         {/* 7. Overlays */}
         <Stack.Screen name="payments" options={{ headerShown: false, animation: 'slide_from_right' }} />

@@ -1,4 +1,5 @@
 const prisma = require('../config/prisma');
+const { hasRole } = require('../utils/roles');
 const logger = require('../utils/logger');
 
 class AnalyticsController {
@@ -7,7 +8,7 @@ class AnalyticsController {
     try {
       const { spotterId } = req.params;
 
-      if (req.user.role.toLowerCase() !== 'spotter' || req.user.id != spotterId) {
+      if (!hasRole(req.user, 'SPOTTER') || req.user.id != spotterId) {
         return res.status(403).json({
           success: false,
           message: 'Access denied'

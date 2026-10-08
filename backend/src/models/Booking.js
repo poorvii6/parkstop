@@ -23,6 +23,16 @@ class Booking {
 
       if (!spot || !spot.is_active) throw new Error('Parking spot not found');
 
+      // Only spots of verified owners can be booked (search already hides the
+      // rest; this stops direct bookings by spot id).
+      const owner = await tx.users.findUnique({
+        where: { id: spot.spotter_id },
+        select: { verification_status: true }
+      });
+      if (owner?.verification_status !== 'approved') {
+        throw new Error('This parking spot is not available for booking yet.');
+      }
+
       // Count what is actually holding a bay, rather than trusting the counter.
       //
       // available_slots is maintained by the booking lifecycle, so it is only

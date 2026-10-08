@@ -1,4 +1,5 @@
 const ParkingSpot = require('../models/ParkingSpot');
+const { hasRole } = require('../utils/roles');
 const PricingService = require('../services/PricingService');
 const prisma = require('../config/prisma');
 const logger = require('../utils/logger');
@@ -19,7 +20,7 @@ class SpotController {
    */
   static async getDashboardData(req, res) {
     try {
-      if (!req.user.role || req.user.role.toLowerCase() !== 'spotter') {
+      if (!hasRole(req.user, 'SPOTTER')) {
         return res.status(403).json({
           success: false,
           message: 'Only spotters can view dashboard stats'
@@ -169,7 +170,7 @@ class SpotController {
    */
   static async createSpot(req, res) {
     try {
-      if (req.user.role.toLowerCase() !== 'spotter') {
+      if (!hasRole(req.user, 'SPOTTER')) {
         return res.status(403).json({
           success: false,
           message: 'Only spotters can create spots'
@@ -441,7 +442,7 @@ class SpotController {
    */
   static async toggleAllSpots(req, res) {
     try {
-      if (!req.user.role || req.user.role.toLowerCase() !== 'spotter') {
+      if (!hasRole(req.user, 'SPOTTER')) {
         return res.status(403).json({
           success: false,
           message: 'Only spotters can toggle spot status'

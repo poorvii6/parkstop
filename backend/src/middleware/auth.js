@@ -2,6 +2,7 @@ const config = require('../config/env');
 const logger = require('../utils/logger');
 const admin = require('../config/firebase');
 const { resolveUserFromFirebase } = require('../services/authUserService');
+const { hasAnyRole } = require('../utils/roles');
 
 /**
  * 🔒 Authenticate user (Firebase ID Token Only)
@@ -53,7 +54,10 @@ const authenticate = async (req, res, next) => {
         email: user.email,
         role: user.role,
         full_name: user.full_name || user.name,
-        firebase_uid: user.firebase_uid
+        firebase_uid: user.firebase_uid,
+        is_finder_registered: user.is_finder_registered,
+        is_spotter_registered: user.is_spotter_registered,
+        verification_status: user.verification_status || null
       };
     }
 
@@ -80,10 +84,9 @@ const authorize = (...allowedRoles) => {
       });
     }
 
-    const checkRoles = allowedRoles.map(r => r.toUpperCase());
-    const userRole = req.user.role ? req.user.role.toUpperCase() : '';
-
-    if (!checkRoles.includes(userRole)) {
+    // Capability-based: a registered owner may use owner routes even while
+    // their app is in driver mode, and vice versa. See utils/roles.js.
+    if (!hasAnyRole(req.user, allowedRoles)) {
       return res.status(403).json({
         success: false,
         message: `Access denied. Allowed: ${allowedRoles.join(', ')}`,
@@ -119,7 +122,10 @@ const optionalAuth = async (req, res, next) => {
             email: user.email,
             role: user.role,
             full_name: user.full_name || user.name,
-            firebase_uid: user.firebase_uid
+            firebase_uid: user.firebase_uid,
+            is_finder_registered: user.is_finder_registered,
+            is_spotter_registered: user.is_spotter_registered,
+            verification_status: user.verification_status || null
           };
         }
       }

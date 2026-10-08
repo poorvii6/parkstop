@@ -46,11 +46,19 @@ beforeEach(() => {
 });
 
 describe('withdrawal actually moves money', () => {
+  test('an owner who is not verified cannot withdraw', async () => {
+    const req = { user: { id: 7, role: 'spotter', verification_status: 'in_progress' }, body: { methodId: 3, amount: 300 } };
+    const res = makeRes();
+    await PaymentController.withdrawEarnings(req, res);
+    expect(res.statusCode || res.code).toBe(403);
+    expect(PayoutService.createPayout).not.toHaveBeenCalled();
+  });
+
   test('with a linked rail, the payout is SENT (not left pending)', async () => {
     prisma.users.findUnique.mockResolvedValue({ razorpay_fund_account_id: 'fa_1', payout_mode: 'upi' });
     PayoutService.createPayout.mockResolvedValue({ id: 1, status: 'processing' });
 
-    const req = { user: { id: 7, role: 'spotter' }, body: { methodId: 3, amount: 300 } };
+    const req = { user: { id: 7, role: 'spotter', verification_status: 'approved' }, body: { methodId: 3, amount: 300 } };
     const res = makeRes();
     await PaymentController.withdrawEarnings(req, res);
 
@@ -63,7 +71,7 @@ describe('withdrawal actually moves money', () => {
     prisma.users.findUnique.mockResolvedValue({ razorpay_fund_account_id: 'fa_1', payout_mode: 'upi' });
     PayoutService.createPayout.mockRejectedValue(new Error('rail down'));
 
-    const req = { user: { id: 7, role: 'spotter' }, body: { methodId: 3, amount: 300 } };
+    const req = { user: { id: 7, role: 'spotter', verification_status: 'approved' }, body: { methodId: 3, amount: 300 } };
     const res = makeRes();
     await PaymentController.withdrawEarnings(req, res);
 
@@ -77,7 +85,7 @@ describe('withdrawal actually moves money', () => {
   test('with no rail linked it stays pending and does NOT claim to have sent', async () => {
     prisma.users.findUnique.mockResolvedValue({ razorpay_fund_account_id: null });
 
-    const req = { user: { id: 7, role: 'spotter' }, body: { methodId: 3, amount: 300 } };
+    const req = { user: { id: 7, role: 'spotter', verification_status: 'approved' }, body: { methodId: 3, amount: 300 } };
     const res = makeRes();
     await PaymentController.withdrawEarnings(req, res);
 

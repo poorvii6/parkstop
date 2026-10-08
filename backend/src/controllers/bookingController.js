@@ -1,4 +1,5 @@
 const Booking = require('../models/Booking');
+const { hasRole } = require('../utils/roles');
 const ParkingSpot = require('../models/ParkingSpot');
 const logger = require('../utils/logger');
 const { emitToUser } = require('../config/socket');
@@ -16,7 +17,7 @@ class BookingController {
    */
   static async createBooking(req, res) {
     try {
-      if (!req.user.role || req.user.role.toLowerCase() !== 'finder') {
+      if (!hasRole(req.user, 'FINDER')) {
         return res.status(403).json({
           success: false,
           message: 'Only finders can create bookings'
@@ -102,7 +103,7 @@ class BookingController {
    */
   static async verifyOTP(req, res) {
     try {
-      if (!req.user.role || req.user.role.toLowerCase() !== 'spotter') {
+      if (!hasRole(req.user, 'SPOTTER')) {
         return res.status(403).json({
           success: false,
           message: 'Only spotters can verify OTP'
@@ -165,7 +166,7 @@ class BookingController {
    */
   static async verifyCheckoutOTP(req, res) {
     try {
-      if (!req.user.role || req.user.role.toLowerCase() !== 'spotter') {
+      if (!hasRole(req.user, 'SPOTTER')) {
         return res.status(403).json({
           success: false,
           message: 'Only spotters can verify checkout OTP'
@@ -263,7 +264,7 @@ class BookingController {
    */
   static async requestCheckout(req, res) {
     try {
-      if (!req.user.role || req.user.role.toLowerCase() !== 'finder') {
+      if (!hasRole(req.user, 'FINDER')) {
         return res.status(403).json({ success: false, message: 'Only finders can end their session' });
       }
 
@@ -327,7 +328,7 @@ class BookingController {
    */
   static async confirmCheckout(req, res) {
     try {
-      if (!req.user.role || req.user.role.toLowerCase() !== 'spotter') {
+      if (!hasRole(req.user, 'SPOTTER')) {
         return res.status(403).json({ success: false, message: 'Only the spot owner can confirm checkout' });
       }
 
@@ -373,7 +374,7 @@ class BookingController {
    */
   static async completeBooking(req, res) {
     try {
-      if (!req.user.role || req.user.role.toLowerCase() !== 'spotter') {
+      if (!hasRole(req.user, 'SPOTTER')) {
         return res.status(403).json({
           success: false,
           message: 'Only spotters can complete bookings'
@@ -434,7 +435,7 @@ class BookingController {
    */
   static async checkoutUnpaid(req, res) {
     try {
-      if (!req.user.role || req.user.role.toLowerCase() !== 'spotter') {
+      if (!hasRole(req.user, 'SPOTTER')) {
         return res.status(403).json({ success: false, message: 'Only spotters can perform this action' });
       }
 
@@ -524,7 +525,7 @@ class BookingController {
    */
   static async checkoutCash(req, res) {
     try {
-      if (!req.user.role || req.user.role.toLowerCase() !== 'spotter') {
+      if (!hasRole(req.user, 'SPOTTER')) {
         return res.status(403).json({ success: false, message: 'Only spotters can perform this action' });
       }
 
@@ -690,7 +691,7 @@ class BookingController {
    */
   static async extendBooking(req, res) {
     try {
-      if (!req.user.role || req.user.role.toLowerCase() !== 'finder') {
+      if (!hasRole(req.user, 'FINDER')) {
         return res.status(403).json({
           success: false,
           message: 'Only finders can extend bookings'
@@ -746,7 +747,7 @@ class BookingController {
   static async cancelBooking(req, res) {
     try {
 
-      if (!req.user.role || req.user.role.toLowerCase() !== 'finder') {
+      if (!hasRole(req.user, 'FINDER')) {
         return res.status(403).json({
           success: false,
           message: 'Only finders can cancel bookings'
@@ -827,7 +828,7 @@ class BookingController {
    */
   static async getUserBookings(req, res) {
     try {
-      if (!req.user.role || req.user.role.toLowerCase() !== 'finder') {
+      if (!hasRole(req.user, 'FINDER')) {
         return res.status(403).json({
           success: false,
           message: 'Only finders can view their bookings'
@@ -856,7 +857,7 @@ class BookingController {
    */
   static async getSpotterBookings(req, res) {
     try {
-      if (!req.user.role || req.user.role.toLowerCase() !== 'spotter') {
+      if (!hasRole(req.user, 'SPOTTER')) {
         return res.status(403).json({
           success: false,
           message: 'Only spotters can access this'
@@ -939,7 +940,7 @@ class BookingController {
    */
   static async claimRefund(req, res) {
     try {
-      if (!req.user.role || req.user.role.toLowerCase() !== 'finder') {
+      if (!hasRole(req.user, 'FINDER')) {
         return res.status(403).json({
           success: false,
           message: 'Only finders can claim a refund'
@@ -1008,7 +1009,7 @@ class BookingController {
    */
   static async updatePaymentMode(req, res) {
     try {
-      if (!req.user.role || req.user.role.toLowerCase() !== 'finder') {
+      if (!hasRole(req.user, 'FINDER')) {
         return res.status(403).json({
           success: false,
           message: 'Only finders can update payment mode'
