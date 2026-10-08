@@ -80,13 +80,21 @@ export default function VerificationOverview() {
           {STEPS.map((step, i) => {
             const done = !!data?.steps[step.key];
             const needsAadhaar = step.key !== 'aadhaar' && step.key !== 'property' && !data?.steps.aadhaar;
-            const disabled = locked || needsAadhaar;
             return (
               <TouchableOpacity
                 key={step.key}
-                style={[s.step, done && s.stepDone, disabled && !done && { opacity: 0.45 }]}
-                onPress={() => router.push(step.route as any)}
-                disabled={disabled}
+                style={[s.step, done && s.stepDone, (locked || needsAadhaar) && !done && { opacity: 0.55 }]}
+                onPress={() => {
+                  if (needsAadhaar) {
+                    Alert.alert('Do Aadhaar first', `${step.title} is checked against the name and photo on your Aadhaar, so please complete the Aadhaar step first.`, [
+                      { text: 'Later', style: 'cancel' },
+                      { text: 'Go to Aadhaar', onPress: () => router.push('/spotter/verification/aadhaar' as any) },
+                    ]);
+                    return;
+                  }
+                  router.push(step.route as any);
+                }}
+                disabled={locked}
                 activeOpacity={0.85}
               >
                 <View style={[s.stepIcon, done && { backgroundColor: SC.successSoft }]}>
@@ -98,7 +106,7 @@ export default function VerificationOverview() {
                     {done ? doneText(step.key, data) : needsAadhaar ? 'Complete Aadhaar first' : step.desc}
                   </Text>
                 </View>
-                {!locked && <Ionicons name="chevron-forward" size={18} color={SC.textMuted} />}
+                {!locked && <Ionicons name={needsAadhaar ? 'lock-closed' : 'chevron-forward'} size={18} color={SC.textMuted} />}
               </TouchableOpacity>
             );
           })}

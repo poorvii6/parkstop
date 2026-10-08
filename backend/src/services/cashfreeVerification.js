@@ -12,8 +12,9 @@
  *   CASHFREE_VRS_PUBLIC_KEY     PEM public key for 2FA signature (x-cf-signature).
  *                               Needed because Railway has no fixed IP to whitelist.
  *   CASHFREE_VRS_ENV            optional: "sandbox" | "production". If unset, it is
- *                               taken from the client id (TEST... => sandbox), so
- *                               test keys can never hit production or vice versa.
+ *                               worked out from the keys themselves (secret
+ *                               "..._test_..." or id "TEST..." => sandbox), so test
+ *                               keys can never be sent to production or vice versa.
  */
 const crypto = require('crypto');
 const logger = require('../utils/logger');
@@ -38,9 +39,15 @@ function config() {
     });
   }
   const explicit = (process.env.CASHFREE_VRS_ENV || '').toLowerCase();
-  const env = explicit === 'production' || explicit === 'sandbox'
-    ? explicit
-    : (clientId.startsWith('TEST') ? 'sandbox' : 'production');
+  let env;
+  if (explicit === 'production' || explicit === 'sandbox') env = explicit;
+  else if (/_test_/i.test(clientSecret) || /^TEST/i.test(clientId)) env = 'sandbox';
+  else if (/_prod_/i.test(clientSecret)) env = 'production';
+  else {
+    throw new VerificationError('Identity verification keys are set, but it is unclear if they are test or live keys. Set CASHFREE_VRS_ENV to "sandbox" or "production".', {
+      status: 503, code: 'NOT_CONFIGURED',
+    });
+  }
   const base = env === 'sandbox' ? 'https://sandbox.cashfree.com/verification' : 'https://api.cashfree.com/verification';
   return { clientId, clientSecret, env, base };
 }
