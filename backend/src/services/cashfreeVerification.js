@@ -64,11 +64,24 @@ function signature(clientId) {
   ).toString('base64');
 }
 
+let loggedSetup = false;
 function headers(extra = {}) {
-  const { clientId, clientSecret } = config();
-  const h = { 'x-client-id': clientId, 'x-client-secret': clientSecret, ...extra };
-  const sig = signature(clientId);
+  const { clientId, clientSecret, env } = config();
+  // Cashfree's 2FA (public key) docs send x-api-version with the signature.
+  const h = { 'x-client-id': clientId, 'x-client-secret': clientSecret, 'x-api-version': '2022-09-13', ...extra };
+  let sig = null;
+  try {
+    sig = signature(clientId);
+  } catch (err) {
+    logger.error(`Cashfree VRS: CASHFREE_VRS_PUBLIC_KEY could not be read as a public key (${err.message}). Paste the whole .pem file, including the BEGIN/END lines.`);
+    throw new VerificationError('Identity verification setup problem: the security key on the server is not valid.', { status: 503, code: 'BAD_PUBLIC_KEY' });
+  }
   if (sig) h['x-cf-signature'] = sig;
+  if (!loggedSetup) {
+    loggedSetup = true;
+    // Safe to log: no secrets, just what is configured.
+    logger.info(`Cashfree VRS setup: env=${env}, clientId=${clientId.slice(0, 6)}…, publicKey=${sig ? 'loaded, signing requests' : 'MISSING (CASHFREE_VRS_PUBLIC_KEY not set) — Cashfree will check IP instead'}`);
+  }
   return h;
 }
 
