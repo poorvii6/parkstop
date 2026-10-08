@@ -97,7 +97,9 @@ async function request(method, path, { json, form, query, apiVersion } = {}) {
     const msg = data?.message || `Verification service error (${res.status})`;
     logger.error(`Cashfree VRS ${method} ${path} -> ${res.status}: ${msg}`);
     if (res.status === 401 || res.status === 403) {
-      throw new VerificationError('Identity verification is not set up correctly on the server (keys or security key).', { status: 503, code: 'UPSTREAM_AUTH' });
+      // Include Cashfree's own reason: it says exactly which key/setting is wrong.
+      const which = res.status === 401 ? 'App ID / Secret Key' : 'security key (2FA) or IP';
+      throw new VerificationError(`Identity verification setup problem (${which}): ${msg}`, { status: 503, code: 'UPSTREAM_AUTH' });
     }
     if (res.status === 422) {
       throw new VerificationError('Identity verification is temporarily unavailable. Please try again later.', { status: 503, code: 'UPSTREAM_BALANCE' });
