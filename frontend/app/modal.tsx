@@ -131,7 +131,12 @@ export default function ProfileModal() {
       { text: 'Cancel', style: 'cancel' },
       { text: 'Sign Out', style: 'destructive', onPress: async () => {
         try { await apiClient.post('/auth/logout', { push_token: getCurrentPushToken() }); } catch (e) {}
-        await AsyncStorage.multiRemove(['access_token', 'user_role', 'discovered_api_url', 'is_dual_user']);
+        await AsyncStorage.multiRemove(['access_token', 'refresh_token', 'user_role', 'discovered_api_url', 'is_dual_user', 'otp_verified_uid']);
+        // Really sign out: without this Firebase kept the session and the next
+        // app launch logged the user straight back in.
+        try { require('../services/realtime').disconnectRealtime?.(); } catch {}
+        try { await require('../services/firebase').auth.signOut(); } catch {}
+        try { await require('@react-native-google-signin/google-signin').GoogleSignin.signOut(); } catch {}
         router.replace('/login');
       }},
     ]);
@@ -140,15 +145,6 @@ export default function ProfileModal() {
   const handleSwitchRole = async () => {
     const currentRole = (profile?.role || '').toLowerCase();
     const newRole = currentRole === 'spotter' ? 'finder' : 'spotter';
-
-    // Handle offline guest mode
-    const token = await AsyncStorage.getItem('access_token');
-    if (token === 'offline_token') {
-      const nextRole = newRole.toUpperCase();
-      await AsyncStorage.setItem('user_role', nextRole);
-      router.replace(nextRole === 'FINDER' ? '/finder' : '/spotter');
-      return;
-    }
 
     const isRegistered = newRole === 'finder' ? profile?.is_finder_registered : profile?.is_spotter_registered;
 
