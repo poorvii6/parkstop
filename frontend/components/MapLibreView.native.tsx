@@ -13,6 +13,13 @@ import { WebView } from 'react-native-webview';
 import GoogleMapNative from './GoogleMapNative';
 
 // Try to load native MapLibre
+/** 40 -> "40", 40.5 -> "40.5", "40.00" -> "40" (no long decimals on the map). */
+function formatPrice(p: any): string {
+  const n = Number(p);
+  if (!Number.isFinite(n)) return '';
+  return String(Math.round(n * 100) / 100);
+}
+
 let MapLibreGL: any = null;
 let NATIVE_AVAILABLE = false;
 try {
@@ -168,9 +175,13 @@ const WebViewFallback = React.forwardRef((props: MapProps, ref: any) => {
 <style>
 body,html{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#0a0e17}
 #map{position:absolute;top:0;bottom:0;left:0;right:0}
-.spot-marker{background:#4285F4;color:#fff;padding:5px 10px;border-radius:16px;border:2px solid rgba(255,255,255,0.85);font-size:12px;font-weight:800;box-shadow:0 3px 8px rgba(0,0,0,0.5);white-space:nowrap;cursor:pointer;font-family:-apple-system,BlinkMacSystemFont,sans-serif}
+.spot-marker{position:relative;display:flex;align-items:center;height:24px;background:#4285F4;color:#fff;padding:0 10px 0 4px;border-radius:14px;border:2px solid #fff;font-size:12px;font-weight:800;box-shadow:0 2px 6px rgba(0,0,0,0.35);white-space:nowrap;cursor:pointer;font-family:-apple-system,BlinkMacSystemFont,Roboto,sans-serif;margin-bottom:7px}
+.spot-marker::after{content:'';position:absolute;left:50%;bottom:-8px;margin-left:-6px;border-left:6px solid transparent;border-right:6px solid transparent;border-top:7px solid #4285F4}
+.spot-marker .pb{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:#fff;color:#4285F4;font-weight:900;font-size:12px;margin-right:5px}
 .spot-marker.unavailable{background:#ea4335}
-.spot-marker.active{border-color:#fff;transform:scale(1.15)}
+.spot-marker.unavailable::after{border-top-color:#ea4335}
+.spot-marker.unavailable .pb{color:#ea4335}
+.spot-marker.active{border-color:#111827;transform:scale(1.12)}
 .dest-pin{width:36px;height:50px;position:relative}
 .dest-pin::before{content:'';width:30px;height:30px;background:#EA4335;border-radius:50%;position:absolute;top:0;left:3px;box-shadow:0 3px 8px rgba(0,0,0,0.4)}
 .dest-pin::after{content:'';width:6px;height:6px;background:#fff;border-radius:50%;position:absolute;top:12px;left:15px}
@@ -216,6 +227,7 @@ function removeDestPin(){
   if(destMarker){ destMarker.remove(); destMarker=null; }
 }
 
+function fmtPrice(p){ var n=Number(p); if(!isFinite(n)) return ''; return (Math.round(n*100)/100).toString(); }
 function setSpotMarkers(markers,activeDest){
   var seen={};
   markers.forEach(function(m){
@@ -225,11 +237,11 @@ function setSpotMarkers(markers,activeDest){
       spotMarkers[m.id].setLngLat([m.lng,m.lat]);
       var e=spotMarkers[m.id].getElement();
       e.className='spot-marker'+(m.available?'':' unavailable')+(isActive?' active':'');
-      e.innerHTML='🅿️ ₹'+m.price;
+      e.innerHTML='<span class="pb">P</span>₹'+fmtPrice(m.price);
     } else {
       var el=document.createElement('div');
       el.className='spot-marker'+(m.available?'':' unavailable')+(isActive?' active':'');
-      el.innerHTML='🅿️ ₹'+m.price;
+      el.innerHTML='<span class="pb">P</span>₹'+fmtPrice(m.price);
       el.onclick=function(id){ return function(){ window.ReactNativeWebView.postMessage(JSON.stringify({type:'markerPress',id:id})); }; }(m.id);
       spotMarkers[m.id]=new maplibregl.Marker({element:el,anchor:'bottom'}).setLngLat([m.lng,m.lat]).addTo(map);
     }
@@ -814,22 +826,27 @@ const MapLibreView = React.forwardRef((props: MapProps, ref: any) => {
         })()}
 
         {/* ── Spot markers ── */}
-        {markers.map(m => (
-          <MapLibreGL.MarkerView key={m.id} coordinate={[m.lng, m.lat]} anchor={{ x: 0.5, y: 1 }}>
-            <TouchableOpacity
-              activeOpacity={0.8}
-              onPress={() => onMarkerPress?.(m.id)}
-              style={[
-                styles.spotMarker,
-                { backgroundColor: m.available ? '#4285F4' : '#ea4335' },
-                destination && Math.abs((destination.lat || 0) - m.lat) < 0.001 && Math.abs((destination.lng || 0) - m.lng) < 0.001
-                  ? styles.activeSpotMarker : null
-              ]}
-            >
-              <Text style={styles.spotMarkerText}>🅿️ ₹{m.price}</Text>
-            </TouchableOpacity>
-          </MapLibreGL.MarkerView>
-        ))}
+        {markers.map(m => {
+          // Drawn badge instead of the 🅿️ emoji, which many Android fonts show
+          // as a blank box or clip inside the marker.
+          const color = m.available ? '#4285F4' : '#ea4335';
+          const isActive = !!destination && Math.abs((destination.lat || 0) - m.lat) < 0.001 && Math.abs((destination.lng || 0) - m.lng) < 0.001;
+          return (
+            <MapLibreGL.MarkerView key={m.id} coordinate={[m.lng, m.lat]} anchor={{ x: 0.5, y: 1 }} allowOverlap>
+              <TouchableOpacity activeOpacity={0.8} onPress={() => onMarkerPress?.(m.id)} style={styles.spotPinWrap}>
+                <View style={[styles.spotMarker, { backgroundColor: color }, isActive && styles.activeSpotMarker]}>
+                  <View style={styles.pBadge}>
+                    <Text style={[styles.pBadgeText, { color }]} allowFontScaling={false}>P</Text>
+                  </View>
+                  <Text style={styles.spotMarkerText} allowFontScaling={false} numberOfLines={1}>
+                    ₹{formatPrice(m.price)}
+                  </Text>
+                </View>
+                <View style={[styles.spotTail, { borderTopColor: color }]} />
+              </TouchableOpacity>
+            </MapLibreGL.MarkerView>
+          );
+        })}
 
         {/* ── User location marker ── */}
         <MapLibreGL.MarkerView coordinate={displayPos} anchor={{ x: 0.5, y: 0.5 }}>
@@ -946,13 +963,25 @@ const styles = StyleSheet.create({
     position: 'absolute', top: 12,
   },
   // Spot markers
+  spotPinWrap: { alignItems: 'center' },
   spotMarker: {
-    paddingHorizontal: 10, paddingVertical: 5, borderRadius: 16,
-    borderWidth: 2, borderColor: 'rgba(255,255,255,0.85)',
-    shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 6, elevation: 8,
+    flexDirection: 'row', alignItems: 'center',
+    height: 28, paddingLeft: 4, paddingRight: 10, borderRadius: 14,
+    borderWidth: 2, borderColor: '#ffffff',
+    shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 4, elevation: 6,
   },
-  activeSpotMarker: { borderColor: '#4285F4' },
-  spotMarkerText: { color: '#fff', fontSize: 12, fontWeight: '800' },
+  activeSpotMarker: { borderColor: '#111827', transform: [{ scale: 1.12 }] },
+  pBadge: {
+    width: 18, height: 18, borderRadius: 9, backgroundColor: '#ffffff',
+    alignItems: 'center', justifyContent: 'center', marginRight: 5,
+  },
+  pBadgeText: { fontSize: 12, fontWeight: '900', lineHeight: 14, includeFontPadding: false, textAlign: 'center' },
+  spotMarkerText: { color: '#fff', fontSize: 12, fontWeight: '800', includeFontPadding: false },
+  spotTail: {
+    width: 0, height: 0, marginTop: -1,
+    borderLeftWidth: 6, borderRightWidth: 6, borderTopWidth: 7,
+    borderLeftColor: 'transparent', borderRightColor: 'transparent',
+  },
   // Compass
   compass: {
     position: 'absolute', top: 80, left: 16,
