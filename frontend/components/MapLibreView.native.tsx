@@ -825,29 +825,6 @@ const MapLibreView = React.forwardRef((props: MapProps, ref: any) => {
           );
         })()}
 
-        {/* ── Spot markers ── */}
-        {markers.map(m => {
-          // Drawn badge instead of the 🅿️ emoji, which many Android fonts show
-          // as a blank box or clip inside the marker.
-          const color = m.available ? '#4285F4' : '#ea4335';
-          const isActive = !!destination && Math.abs((destination.lat || 0) - m.lat) < 0.001 && Math.abs((destination.lng || 0) - m.lng) < 0.001;
-          return (
-            <MapLibreGL.MarkerView key={m.id} coordinate={[m.lng, m.lat]} anchor={{ x: 0.5, y: 1 }} allowOverlap>
-              <TouchableOpacity activeOpacity={0.8} onPress={() => onMarkerPress?.(m.id)} style={styles.spotPinWrap}>
-                <View style={[styles.spotMarker, { backgroundColor: color }, isActive && styles.activeSpotMarker]}>
-                  <View style={styles.pBadge}>
-                    <Text style={[styles.pBadgeText, { color }]} allowFontScaling={false}>P</Text>
-                  </View>
-                  <Text style={styles.spotMarkerText} allowFontScaling={false} numberOfLines={1}>
-                    ₹{formatPrice(m.price)}
-                  </Text>
-                </View>
-                <View style={[styles.spotTail, { borderTopColor: color }]} />
-              </TouchableOpacity>
-            </MapLibreGL.MarkerView>
-          );
-        })}
-
         {/* ── User location marker ── */}
         <MapLibreGL.MarkerView coordinate={displayPos} anchor={{ x: 0.5, y: 0.5 }}>
           {isActiveNavigation ? (
@@ -861,6 +838,34 @@ const MapLibreView = React.forwardRef((props: MapProps, ref: any) => {
             </View>
           )}
         </MapLibreGL.MarkerView>
+
+        {/* ── Spot markers ── */}
+        {markers.map(m => {
+          // Drawn badge instead of the 🅿️ emoji, which many Android fonts show
+          // as a blank box or clip inside the marker.
+          const color = m.available ? '#4285F4' : '#ea4335';
+          const isActive = !!destination && Math.abs((destination.lat || 0) - m.lat) < 0.001 && Math.abs((destination.lng || 0) - m.lng) < 0.001;
+          // Fixed, measured size: Android's MarkerView clips children it
+          // measures too small, which cut the pin in half.
+          const label = `₹${formatPrice(m.price)}`;
+          const pillW = Math.max(60, 46 + label.length * 8);
+          return (
+            <MapLibreGL.MarkerView key={m.id} coordinate={[m.lng, m.lat]} anchor={{ x: 0.5, y: 1 }} allowOverlap>
+              <TouchableOpacity activeOpacity={0.8} onPress={() => onMarkerPress?.(m.id)} style={[styles.spotPinWrap, { width: pillW + 12, height: 40 }]}>
+                <View style={[styles.spotMarker, { backgroundColor: color, width: pillW }, isActive && styles.activeSpotMarker]}>
+                  <View style={styles.pBadge}>
+                    <Text style={[styles.pBadgeText, { color }]} allowFontScaling={false}>P</Text>
+                  </View>
+                  <Text style={styles.spotMarkerText} allowFontScaling={false} numberOfLines={1}>
+                    {label}
+                  </Text>
+                </View>
+                <View style={[styles.spotTail, { borderTopColor: color }]} />
+              </TouchableOpacity>
+            </MapLibreGL.MarkerView>
+          );
+        })}
+
       </MapLibreGL.MapView>
 
       {/* ── Compass overlay ── */}
@@ -963,10 +968,10 @@ const styles = StyleSheet.create({
     position: 'absolute', top: 12,
   },
   // Spot markers
-  spotPinWrap: { alignItems: 'center' },
+  spotPinWrap: { alignItems: 'center', justifyContent: 'flex-start', paddingTop: 2 },
   spotMarker: {
     flexDirection: 'row', alignItems: 'center',
-    height: 28, paddingLeft: 4, paddingRight: 10, borderRadius: 14,
+    height: 30, paddingLeft: 4, paddingRight: 8, borderRadius: 15, justifyContent: 'flex-start',
     borderWidth: 2, borderColor: '#ffffff',
     shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 4, elevation: 6,
   },
