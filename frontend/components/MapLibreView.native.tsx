@@ -175,13 +175,12 @@ const WebViewFallback = React.forwardRef((props: MapProps, ref: any) => {
 <style>
 body,html{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#0a0e17}
 #map{position:absolute;top:0;bottom:0;left:0;right:0}
-.spot-marker{position:relative;display:flex;align-items:center;height:24px;background:#4285F4;color:#fff;padding:0 10px 0 4px;border-radius:14px;border:2px solid #fff;font-size:12px;font-weight:800;box-shadow:0 2px 6px rgba(0,0,0,0.35);white-space:nowrap;cursor:pointer;font-family:-apple-system,BlinkMacSystemFont,Roboto,sans-serif;margin-bottom:7px}
-.spot-marker::after{content:'';position:absolute;left:50%;bottom:-8px;margin-left:-6px;border-left:6px solid transparent;border-right:6px solid transparent;border-top:7px solid #4285F4}
-.spot-marker .pb{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:#fff;color:#4285F4;font-weight:900;font-size:12px;margin-right:5px}
-.spot-marker.unavailable{background:#ea4335}
-.spot-marker.unavailable::after{border-top-color:#ea4335}
-.spot-marker.unavailable .pb{color:#ea4335}
-.spot-marker.active{border-color:#111827;transform:scale(1.12)}
+.spot-marker{position:relative;width:28px;height:28px;border-radius:50%;background:#1A73E8;border:3px solid #fff;box-sizing:border-box;box-shadow:0 2px 6px rgba(0,0,0,0.35);cursor:pointer;margin-bottom:9px}
+.spot-marker::before{content:'';position:absolute;left:50%;top:50%;width:8px;height:8px;margin:-4px 0 0 -4px;border-radius:50%;background:#fff}
+.spot-marker::after{content:'';position:absolute;left:50%;bottom:-11px;margin-left:-6px;border-left:6px solid transparent;border-right:6px solid transparent;border-top:10px solid #1A73E8}
+.spot-marker.unavailable{background:#EA4335}
+.spot-marker.unavailable::after{border-top-color:#EA4335}
+.spot-marker.active{border-color:#111827}
 .dest-pin{width:36px;height:50px;position:relative}
 .dest-pin::before{content:'';width:30px;height:30px;background:#EA4335;border-radius:50%;position:absolute;top:0;left:3px;box-shadow:0 3px 8px rgba(0,0,0,0.4)}
 .dest-pin::after{content:'';width:6px;height:6px;background:#fff;border-radius:50%;position:absolute;top:12px;left:15px}
@@ -237,11 +236,11 @@ function setSpotMarkers(markers,activeDest){
       spotMarkers[m.id].setLngLat([m.lng,m.lat]);
       var e=spotMarkers[m.id].getElement();
       e.className='spot-marker'+(m.available?'':' unavailable')+(isActive?' active':'');
-      e.innerHTML='<span class="pb">P</span>₹'+fmtPrice(m.price);
+      e.innerHTML='';
     } else {
       var el=document.createElement('div');
       el.className='spot-marker'+(m.available?'':' unavailable')+(isActive?' active':'');
-      el.innerHTML='<span class="pb">P</span>₹'+fmtPrice(m.price);
+      el.innerHTML='';
       el.onclick=function(id){ return function(){ window.ReactNativeWebView.postMessage(JSON.stringify({type:'markerPress',id:id})); }; }(m.id);
       spotMarkers[m.id]=new maplibregl.Marker({element:el,anchor:'bottom'}).setLngLat([m.lng,m.lat]).addTo(map);
     }
@@ -840,27 +839,18 @@ const MapLibreView = React.forwardRef((props: MapProps, ref: any) => {
         </MapLibreGL.MarkerView>
 
         {/* ── Spot markers ── */}
+        {/* A plain map pin (no text, no "P" badge): fixed 30x40 so Android's
+            MarkerView can never clip it. Blue = free, red = full. */}
         {markers.map(m => {
-          // Drawn badge instead of the 🅿️ emoji, which many Android fonts show
-          // as a blank box or clip inside the marker.
-          const color = m.available ? '#4285F4' : '#ea4335';
+          const color = m.available ? '#1A73E8' : '#EA4335';
           const isActive = !!destination && Math.abs((destination.lat || 0) - m.lat) < 0.001 && Math.abs((destination.lng || 0) - m.lng) < 0.001;
-          // Fixed, measured size: Android's MarkerView clips children it
-          // measures too small, which cut the pin in half.
-          const label = `₹${formatPrice(m.price)}`;
-          const pillW = Math.max(60, 46 + label.length * 8);
           return (
             <MapLibreGL.MarkerView key={m.id} coordinate={[m.lng, m.lat]} anchor={{ x: 0.5, y: 1 }} allowOverlap>
-              <TouchableOpacity activeOpacity={0.8} onPress={() => onMarkerPress?.(m.id)} style={[styles.spotPinWrap, { width: pillW + 12, height: 40 }]}>
-                <View style={[styles.spotMarker, { backgroundColor: color, width: pillW }, isActive && styles.activeSpotMarker]}>
-                  <View style={styles.pBadge}>
-                    <Text style={[styles.pBadgeText, { color }]} allowFontScaling={false}>P</Text>
-                  </View>
-                  <Text style={styles.spotMarkerText} allowFontScaling={false} numberOfLines={1}>
-                    {label}
-                  </Text>
+              <TouchableOpacity activeOpacity={0.8} onPress={() => onMarkerPress?.(m.id)} style={styles.pinWrap}>
+                <View style={[styles.pinHead, { backgroundColor: color }, isActive && styles.pinHeadActive]}>
+                  <View style={styles.pinDot} />
                 </View>
-                <View style={[styles.spotTail, { borderTopColor: color }]} />
+                <View style={[styles.pinTail, { borderTopColor: color }]} />
               </TouchableOpacity>
             </MapLibreGL.MarkerView>
           );
@@ -968,23 +958,17 @@ const styles = StyleSheet.create({
     position: 'absolute', top: 12,
   },
   // Spot markers
-  spotPinWrap: { alignItems: 'center', justifyContent: 'flex-start', paddingTop: 2 },
-  spotMarker: {
-    flexDirection: 'row', alignItems: 'center',
-    height: 30, paddingLeft: 4, paddingRight: 8, borderRadius: 15, justifyContent: 'flex-start',
-    borderWidth: 2, borderColor: '#ffffff',
-    shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 4, elevation: 6,
+  pinWrap: { width: 30, height: 40, alignItems: 'center' },
+  pinHead: {
+    width: 28, height: 28, borderRadius: 14, borderWidth: 3, borderColor: '#FFFFFF',
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 3, elevation: 5,
   },
-  activeSpotMarker: { borderColor: '#111827', transform: [{ scale: 1.12 }] },
-  pBadge: {
-    width: 18, height: 18, borderRadius: 9, backgroundColor: '#ffffff',
-    alignItems: 'center', justifyContent: 'center', marginRight: 5,
-  },
-  pBadgeText: { fontSize: 12, fontWeight: '900', lineHeight: 14, includeFontPadding: false, textAlign: 'center' },
-  spotMarkerText: { color: '#fff', fontSize: 12, fontWeight: '800', includeFontPadding: false },
-  spotTail: {
-    width: 0, height: 0, marginTop: -1,
-    borderLeftWidth: 6, borderRightWidth: 6, borderTopWidth: 7,
+  pinHeadActive: { borderColor: '#111827' },
+  pinDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#FFFFFF' },
+  pinTail: {
+    width: 0, height: 0, marginTop: -2,
+    borderLeftWidth: 6, borderRightWidth: 6, borderTopWidth: 10,
     borderLeftColor: 'transparent', borderRightColor: 'transparent',
   },
   // Compass
