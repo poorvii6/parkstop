@@ -107,6 +107,10 @@ export default function AdminDashboard() {
           <Text style={styles.actionTitle}>Owner verifications</Text>
           <Text style={styles.actionSub}>Review and approve new spot owners</Text>
         </TouchableOpacity>
+        <TouchableOpacity style={[BlueprintTheme.glassCard, styles.actionCard]} onPress={() => router.push('/admin/payouts' as any)}>
+          <Text style={styles.actionTitle}>Owner payouts</Text>
+          <Text style={styles.actionSub}>Send owners their earnings and mark them paid</Text>
+        </TouchableOpacity>
 
         <Text style={styles.sectionTitle}>Use the app</Text>
         <View style={{ flexDirection: 'row', gap: 12 }}>

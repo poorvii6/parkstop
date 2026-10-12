@@ -37,7 +37,6 @@ export default function SpotterDashboard() {
     loadFailed,
     lastSyncedAt,
     payoutSetup,
-    payoutRailLive,
     refetch: fetchDashboardData,
     onRefresh,
   } = useSpotterDashboard();
@@ -72,42 +71,48 @@ export default function SpotterDashboard() {
     }
   };
 
-  const [isWithdrawing, setIsWithdrawing] = useState(false);
+  // Payouts: the owner asks, an admin sends the bank transfer by hand.
+  const [isRequesting, setIsRequesting] = useState(false);
+  const [payoutInfo, setPayoutInfo] = useState<{
+    open_request: { id: number; amount: number; bank_account_last4?: string; created_at: string } | null;
+    can_request: boolean;
+    blocked_reason: string | null;
+    min_amount: number;
+  } | null>(null);
 
-  // #4 WITHDRAW: cash out the available (positive) wallet balance to the
-  // spotter's linked payout method. Routes to payout-setup if none is linked.
-  const handleWithdraw = async () => {
+  const loadPayoutInfo = () => {
+    apiClient.get('/payouts/requests')
+      .then((r: any) => { if (r.data?.success) setPayoutInfo(r.data.data); })
+      .catch(() => {});
+  };
+  useEffect(() => { loadPayoutInfo(); }, [dashboardData.balance]);
+
+  const handleRequestPayout = () => {
     const bal = Number(dashboardData.balance || 0);
-    if (bal <= 0) { Alert.alert('Nothing to withdraw', 'You have no available balance yet.'); return; }
-    if (payoutSetup === false) {
-      Alert.alert('Verify your bank account', 'Complete owner verification to add the bank account your earnings are paid into.', [
+    if (!payoutInfo?.can_request) {
+      Alert.alert('Verify your bank account', payoutInfo?.blocked_reason || 'Complete owner verification first.', [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Set up', onPress: () => router.push('/spotter/verification' as any) },
+        { text: 'Open verification', onPress: () => router.push('/spotter/verification' as any) },
       ]);
       return;
     }
-    Alert.alert('Withdraw earnings', `Withdraw ₹${bal.toFixed(2)} to your linked account?`, [
+    if (bal < (payoutInfo?.min_amount || 100)) {
+      Alert.alert('Not enough yet', `You can request a payout once you have ₹${payoutInfo?.min_amount || 100}.`);
+      return;
+    }
+    Alert.alert('Request payout', `Send ₹${bal.toFixed(2)} to your verified bank account? It usually arrives within 2 working days.`, [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Withdraw', onPress: async () => {
-        setIsWithdrawing(true);
+      { text: 'Request', onPress: async () => {
+        setIsRequesting(true);
         try {
-          const m = await apiClient.get('/payments/methods');
-          const methods = m.data?.data || [];
-          const method = methods.find((x: any) => x.is_default) || methods[0];
-          if (!method) {
-            Alert.alert('Verify your bank account', 'Complete owner verification to add the bank account your earnings are paid into.', [
-              { text: 'Cancel', style: 'cancel' },
-              { text: 'Set up', onPress: () => router.push('/spotter/verification' as any) },
-            ]);
-            return;
-          }
-          await apiClient.post('/payments/withdraw', { methodId: method.id, amount: bal });
-          setToast({ msg: `Withdrawal of ₹${bal.toFixed(2)} requested`, kind: 'success' });
+          const r = await apiClient.post('/payouts/request');
+          setToast({ msg: r.data?.message || 'Payout requested', kind: 'success' });
           fetchDashboardData();
+          loadPayoutInfo();
         } catch (e: any) {
-          Alert.alert('Withdrawal failed', e.response?.data?.message || 'Could not process the withdrawal right now.');
+          Alert.alert('Could not request payout', e.response?.data?.message || 'Please try again.');
         } finally {
-          setIsWithdrawing(false);
+          setIsRequesting(false);
         }
       }},
     ]);
@@ -303,6 +308,17 @@ export default function SpotterDashboard() {
 
         {/* ACTION REQUIRED PILLS */}
         <View style={{ marginBottom: SP.xl, gap: 8 }}>
+          {payoutInfo?.open_request ? (
+            <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(59,130,246,0.15)', padding: 12, borderRadius: RAD.md, borderWidth: 1, borderColor: 'rgba(59,130,246,0.3)' }}>
+              <Ionicons name="paper-plane-outline" size={20} color="#60a5fa" style={{ marginRight: 8 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: '#60a5fa', fontWeight: '800', fontSize: 14 }}>₹{Number(payoutInfo.open_request.amount).toFixed(2)} on its way</Text>
+                <Text style={{ color: '#93c5fd', fontSize: 12 }}>
+                  To your bank account{payoutInfo.open_request.bank_account_last4 ? ` ending ${payoutInfo.open_request.bank_account_last4}` : ''}. Usually within 2 working days.
+                </Text>
+              </View>
+            </View>
+          ) : null}
           {dashboardData.balance < 0 ? (
             <TouchableOpacity 
               style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(239,68,68,0.15)', padding: 12, borderRadius: RAD.md, borderWidth: 1, borderColor: 'rgba(239,68,68,0.3)' }}
@@ -341,39 +357,32 @@ export default function SpotterDashboard() {
                 <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                   <Ionicons name="wallet" size={20} color="#10b981" style={{ marginRight: 8 }} />
                   <View style={{ flex: 1 }}>
-                    <Text style={{ color: '#10b981', fontWeight: '800', fontSize: 14 }}>Available to withdraw</Text>
-                    <Text style={{ color: '#34d399', fontSize: 12 }}>{payoutRailLive ? 'Your earnings, ready to withdraw.' : 'Your earnings, safe in your wallet.'}</Text>
+                    <Text style={{ color: '#10b981', fontWeight: '800', fontSize: 14 }}>Available to pay out</Text>
+                    <Text style={{ color: '#34d399', fontSize: 12 }}>Your earnings, safe in your ParkStop wallet.</Text>
                   </View>
                   <Text style={{ color: '#10b981', fontWeight: '900', fontSize: 18 }}>₹{Number(dashboardData.balance).toFixed(2)}</Text>
                 </View>
-                {payoutRailLive ? (
-                  <TouchableOpacity
-                    onPress={handleWithdraw}
-                    disabled={isWithdrawing}
-                    style={{ marginTop: 12, backgroundColor: '#10b981', borderRadius: RAD.md, paddingVertical: 12, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8 }}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Withdraw ${Number(dashboardData.balance).toFixed(2)} rupees to your linked account`}
-                  >
-                    {isWithdrawing ? <ActivityIndicator color="#fff" /> : (
-                      <>
-                        <Ionicons name="cash-outline" size={16} color="#fff" />
-                        <Text style={{ color: '#fff', fontWeight: '900', fontSize: 14 }}>Withdraw ₹{Number(dashboardData.balance).toFixed(2)}</Text>
-                      </>
-                    )}
-                  </TouchableOpacity>
-                ) : (
-                  <View style={{ marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: RAD.md, paddingVertical: 10, paddingHorizontal: 12 }}>
-                    <Ionicons name="time-outline" size={16} color={SC.textSecondary} />
-                    <Text style={{ color: SC.textSecondary, fontSize: 11.5, flex: 1 }}>Automatic payouts activate once your payout account is verified — your earnings stay safe here until then.</Text>
-                  </View>
-                )}
+                <TouchableOpacity
+                  onPress={handleRequestPayout}
+                  disabled={isRequesting || !!payoutInfo?.open_request}
+                  style={{ marginTop: 12, backgroundColor: '#10b981', borderRadius: RAD.md, paddingVertical: 12, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, opacity: payoutInfo?.open_request ? 0.5 : 1 }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Request payout of ${Number(dashboardData.balance).toFixed(2)} rupees to your bank account`}
+                >
+                  {isRequesting ? <ActivityIndicator color="#fff" /> : (
+                    <>
+                      <Ionicons name="cash-outline" size={16} color="#fff" />
+                      <Text style={{ color: '#fff', fontWeight: '900', fontSize: 14 }}>Request payout</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
               </View>
             ) : (
               <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(16,185,129,0.15)', padding: 12, borderRadius: RAD.md, borderWidth: 1, borderColor: 'rgba(16,185,129,0.3)' }}>
                 <Ionicons name="checkmark-circle" size={20} color="#10b981" style={{ marginRight: 8 }} />
                 <View style={{ flex: 1 }}>
-                  <Text style={{ color: '#10b981', fontWeight: '800', fontSize: 14 }}>No Pending Dues</Text>
-                  <Text style={{ color: '#34d399', fontSize: 12 }}>All platform fees settled.</Text>
+                  <Text style={{ color: '#10b981', fontWeight: '800', fontSize: 14 }}>Wallet</Text>
+                  <Text style={{ color: '#34d399', fontSize: 12 }}>Earnings from paid bookings show up here.</Text>
                 </View>
                 <Text style={{ color: '#10b981', fontWeight: 'bold' }}>₹0.00</Text>
               </View>

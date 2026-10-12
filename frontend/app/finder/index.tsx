@@ -1031,6 +1031,41 @@ export default function FinderDashboard() {
     }
   };
 
+  // Cancel before check-in. Free: nothing has been paid yet (payment happens
+  // after the session ends). The server refuses once the owner has checked
+  // the driver in.
+  const [isCancelling, setIsCancelling] = useState(false);
+  const handleCancelBooking = () => {
+    if (!bookingDetails?.id || isCancelling) return;
+    Alert.alert('Cancel this booking?', 'Your slot will be released for other drivers. There is no charge.', [
+      { text: 'Keep booking', style: 'cancel' },
+      {
+        text: 'Cancel booking',
+        style: 'destructive',
+        onPress: async () => {
+          setIsCancelling(true);
+          try {
+            await apiClient.put(`/bookings/${bookingDetails.id}/cancel`);
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            setStep('home');
+            setSelectedSpotId(null);
+            setBookingDetails(null);
+            setSelectedSlot('');
+            setResumableBooking(null);
+            if (userLocation) fetchNearbySpots(userLocation.lat, userLocation.lng);
+            Alert.alert('Booking cancelled', 'Your slot has been released.');
+          } catch (e: any) {
+            Alert.alert('Could not cancel', e?.response?.data?.message || 'Please try again.');
+            // If the owner already checked them in, move on to the session.
+            checkResumable();
+          } finally {
+            setIsCancelling(false);
+          }
+        },
+      },
+    ]);
+  };
+
   const handleExtendStay = async () => {
     if (!bookingDetails?.id) return;
     const minutes = Math.round(Number(selectedExtendMinutes));
@@ -2085,6 +2120,8 @@ export default function FinderDashboard() {
                       bookingId={bookingDetails?.id}
                       otp={bookingDetails?.otp}
                       onNavigate={spot ? () => openDirections(spot.lat, spot.lng) : undefined}
+                      onCancel={handleCancelBooking}
+                      cancelling={isCancelling}
                     />
                   );
                 })()}

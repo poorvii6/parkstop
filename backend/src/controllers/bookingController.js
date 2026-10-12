@@ -281,6 +281,16 @@ class BookingController {
         });
       } catch (e) { logger.warn('checkout_requested emit failed:', e?.message); }
 
+      // Also a push, so the owner hears about it with the app closed. If they
+      // do not confirm within 15 minutes, the server confirms for them.
+      Promise.resolve()
+        .then(() => NotificationService.sendPushNotification(spot.spotter_id, {
+          title: 'Driver is leaving',
+          body: `Confirm the car has left ${spot.title || 'your spot'} so the driver can pay.`,
+          data: { bookingId: updated.id, type: 'checkout_requested' }
+        }))
+        .catch((e) => logger.warn('checkout_requested push failed:', e?.message));
+
       return res.json({
         success: true,
         message: 'Waiting for the spot owner to confirm your checkout',

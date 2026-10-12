@@ -26,13 +26,16 @@ const Row = ({ label, value, color = '#fff' }: { label: string; value: string; c
 
 /* ── Booked: waiting for the owner to check the driver in ───────────────── */
 
-export function BookedPanel({ spotTitle, slot, bookingId, otp, onNavigate }: {
+export function BookedPanel({ spotTitle, slot, bookingId, otp, onNavigate, onCancel, cancelling }: {
   spotTitle?: string;
   slot: string;
   bookingId?: string;
   otp?: string;
   /** Opens Google Maps. Undefined when the spot's location is not known yet. */
   onNavigate?: () => void;
+  /** Cancel the booking (allowed until the owner checks the driver in). */
+  onCancel: () => void;
+  cancelling: boolean;
 }) {
   return (
     <View style={{ paddingVertical: 10 }}>
@@ -80,6 +83,17 @@ export function BookedPanel({ spotTitle, slot, bookingId, otp, onNavigate }: {
         <ActivityIndicator size="small" color="#818cf8" />
         <Text style={{ color: '#818cf8', fontWeight: '700', fontSize: 13 }}>Waiting for the owner to check you in…</Text>
       </View>
+
+      <TouchableOpacity
+        onPress={onCancel}
+        disabled={cancelling}
+        style={{ alignItems: 'center', paddingVertical: 14, marginTop: 4 }}
+        accessibilityRole="button"
+      >
+        {cancelling
+          ? <ActivityIndicator color="#f43f5e" />
+          : <Text style={{ color: '#f43f5e', fontWeight: '800', fontSize: 14 }}>Cancel booking</Text>}
+      </TouchableOpacity>
     </View>
   );
 }

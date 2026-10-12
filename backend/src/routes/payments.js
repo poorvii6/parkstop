@@ -14,29 +14,11 @@ router.post('/webhook', PaymentController.razorpayWebhook);
 // Booking payment QR — credits ParkStop (not the spotter's personal UPI).
 router.post('/booking-qr', authenticate, authorize('FINDER', 'SPOTTER'), PaymentController.createBookingQr);
 
-/**
- * 💳 MANAGE PAYMENT METHODS
- */
-
-router.get(
-  '/methods',
-  authenticate,
-  authorize('FINDER', 'SPOTTER'),
-  PaymentController.getPaymentMethods
-);
-
 router.get(
   '/history',
   authenticate,
   authorize('FINDER', 'SPOTTER'),
   PaymentController.getPaymentHistory
-);
-
-router.post(
-  '/withdraw',
-  authenticate,
-  authorize('FINDER', 'SPOTTER'),
-  PaymentController.withdrawEarnings
 );
 
 // /refund removed: refunds happen only through BookingRefundService when a

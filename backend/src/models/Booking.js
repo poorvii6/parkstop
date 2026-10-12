@@ -485,15 +485,19 @@ class Booking {
       });
 
       if (!booking) throw new Error('Booking not found');
-      if (booking.status !== 'reserved') throw new Error('Only reserved bookings can be cancelled');
+      if (booking.status !== 'reserved') throw new Error('You can only cancel before the owner checks you in.');
 
-      await tx.bookings.update({
-        where: { id: parseInt(bookingId) },
+      // Claim with a status guard: if the owner checked the driver in a
+      // moment ago, this changes nothing instead of cancelling a live session.
+      const claimed = await tx.bookings.updateMany({
+        where: { id: parseInt(bookingId), status: 'reserved' },
         data: {
           status: 'cancelled',
+          cancellation_reason: 'finder_cancelled',
           updated_at: new Date()
         }
       });
+      if (claimed.count === 0) throw new Error('You can only cancel before the owner checks you in.');
 
       const updateData = {
         available_slots: { increment: 1 },

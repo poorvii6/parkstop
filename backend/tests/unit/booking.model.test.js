@@ -248,13 +248,16 @@ describe('Booking.cancel', () => {
     mockTx.bookings.findFirst.mockResolvedValue({
       id: 1, status: 'reserved', spot_id: 10, vehicle_type: 'car', parking_spots: { id: 10 },
     });
-    mockTx.bookings.update.mockResolvedValue({});
+    mockTx.bookings.updateMany = jest.fn().mockResolvedValue({ count: 1 });
     mockTx.parking_spots.update.mockResolvedValue({});
 
     await Booking.cancel(1, 1);
 
-    expect(mockTx.bookings.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ status: 'cancelled' }) })
+    expect(mockTx.bookings.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ status: 'reserved' }),
+        data: expect.objectContaining({ status: 'cancelled' }),
+      })
     );
     expect(mockTx.parking_spots.update).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -267,7 +270,16 @@ describe('Booking.cancel', () => {
     mockTx.bookings.findFirst.mockResolvedValue({
       id: 1, status: 'active', spot_id: 10, parking_spots: { id: 10 },
     });
-    await expect(Booking.cancel(1, 1)).rejects.toThrow('Only reserved bookings can be cancelled');
+    await expect(Booking.cancel(1, 1)).rejects.toThrow(/before the owner checks you in/);
+    expect(mockTx.parking_spots.update).not.toHaveBeenCalled();
+  });
+
+  test('a check-in that lands first wins: nothing is cancelled or released', async () => {
+    mockTx.bookings.findFirst.mockResolvedValue({
+      id: 1, status: 'reserved', spot_id: 10, vehicle_type: 'car', parking_spots: { id: 10 },
+    });
+    mockTx.bookings.updateMany = jest.fn().mockResolvedValue({ count: 0 });
+    await expect(Booking.cancel(1, 1)).rejects.toThrow(/before the owner checks you in/);
     expect(mockTx.parking_spots.update).not.toHaveBeenCalled();
   });
 

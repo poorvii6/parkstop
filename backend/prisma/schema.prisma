@@ -172,6 +172,7 @@ model users {
   parking_spots         parking_spots[]
   payment_methods       payment_methods[]
   withdrawals           withdrawals[]
+  payout_requests       payout_requests[]
   saved_spots           saved_spots[]
   payouts               payouts[]
   reviews_given         reviews[]         @relation("reviewer")
@@ -230,6 +231,33 @@ model payouts {
 
   @@index([user_id])
   @@index([booking_id])
+  @@index([status])
+}
+
+/// An owner asks for their wallet balance to be sent to their verified bank
+/// account. The balance is taken out of the wallet when they ask; an admin
+/// sends the bank transfer by hand and marks it paid with the bank reference,
+/// or rejects it and the money goes back to the wallet.
+model payout_requests {
+  id                 Int       @id @default(autoincrement())
+  user_id            Int
+  amount             Decimal   @db.Decimal(10, 2)
+  /// requested | paid | rejected
+  status             String    @default("requested") @db.VarChar(20)
+  /// Bank details at the moment of the request, for the record.
+  bank_account_name  String?   @db.VarChar(100)
+  bank_account_last4 String?   @db.VarChar(4)
+  bank_ifsc          String?   @db.VarChar(15)
+  /// Bank transaction reference (UTR) entered by the admin when paid.
+  reference          String?   @db.VarChar(100)
+  /// Reason when rejected.
+  note               String?   @db.VarChar(300)
+  created_at         DateTime  @default(now()) @db.Timestamp(6)
+  processed_at       DateTime? @db.Timestamp(6)
+  processed_by       Int?
+  users              users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
   @@index([status])
 }
 

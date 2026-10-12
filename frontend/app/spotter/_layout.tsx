@@ -3,7 +3,7 @@ import { Tabs, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { SC, TF } from '../../constants/SpotterTheme';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { View, ActivityIndicator, Text, TouchableOpacity, Animated, Platform, Alert } from 'react-native';
+import { View, ActivityIndicator, Text, TouchableOpacity, Animated, Platform, Alert, AppState } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { registerForPushNotificationsAsync } from '../../services/notifications';
 import { onRealtime } from '../../services/realtime';
@@ -82,6 +82,27 @@ export default function SpotterTabsLayout() {
     return () => off();
   }, []);
 
+  // Also show checkouts that came in while the app was closed: look for any
+  // booking waiting on this owner when the app opens or comes back to the
+  // front. (The server confirms automatically after 15 minutes.)
+  const loadPendingCheckout = async () => {
+    try {
+      const res = await apiClient.get('/bookings/spotter-bookings');
+      const pending = (res.data?.data || []).find((b: any) => b.status === 'checkout_pending');
+      if (!pending) return;
+      const slot = pending.slot_name ? String(pending.slot_name).split('_').pop() : '';
+      setCheckoutReq({ id: pending.id, title: pending.parking_spots?.title || 'your spot', slot: slot || '' });
+      Animated.spring(slide2, { toValue: 0, useNativeDriver: true, bounciness: 10, speed: 12 }).start();
+    } catch {}
+  };
+
+  useEffect(() => {
+    if (checkingAuth) return;
+    loadPendingCheckout();
+    const sub = AppState.addEventListener('change', (st: string) => { if (st === 'active') loadPendingCheckout(); });
+    return () => sub.remove();
+  }, [checkingAuth]);
+
   const dismissCheckout = () => {
     Animated.timing(slide2, { toValue: -140, duration: 280, useNativeDriver: true }).start(() => setCheckoutReq(null));
   };
@@ -101,8 +122,12 @@ export default function SpotterTabsLayout() {
               await apiClient.post(`/bookings/${checkoutReq.id}/confirm-checkout`);
               try { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); } catch {}
               dismissCheckout();
+              // Another car may also be waiting.
+              setTimeout(loadPendingCheckout, 600);
             } catch (e: any) {
               Alert.alert('Could not confirm', e?.response?.data?.message || 'Please try again.');
+              // Already confirmed (for example by the 15-minute auto-confirm): clear it.
+              if (e?.response?.status === 400) dismissCheckout();
             } finally {
               setConfirming(false);
             }
