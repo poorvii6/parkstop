@@ -27,3 +27,8 @@ PAN-*
 # Personal reference docs (contain PAN / Udyam / address) — keep local, never commit
 ParkStop-Payments-Setup-Guide.md
 ParkStop_Assessment_Report*.md
+
+# Local rollback copies and scratch files: keep on the laptop, never commit
+*.backup
+_to_delete/
+*.pptx
