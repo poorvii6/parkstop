@@ -27,10 +27,7 @@ export type AppStep =
   | 'vehicle_select'
   | 'home'
   | 'spot_booking'
-  | 'booking_confirm'
-  | 'navigating'
-  | 'en_route'
-  | 'arriving'
+  | 'booking_confirm' // booked: PIN + Google Maps, waiting for check-in
   | 'active_parking'
   | 'checkout_verification'
   | 'awaiting_owner'

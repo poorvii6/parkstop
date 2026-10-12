@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { View, Text, StyleSheet, Platform, TouchableOpacity, TextInput, Dimensions, Modal, Alert, ScrollView, Linking, Keyboard, ActivityIndicator, BackHandler, AppState, Image, Animated, KeyboardAvoidingView, DeviceEventEmitter } from 'react-native';
+import { View, Text, StyleSheet, Platform, TouchableOpacity, TextInput, Dimensions, Modal, Alert, ScrollView, Linking, Keyboard, ActivityIndicator, BackHandler, AppState, Image, DeviceEventEmitter } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -10,10 +10,8 @@ import razorpayService from '../../services/razorpayService';
 import { registerForPushNotificationsAsync, getCurrentPushToken } from '../../services/notifications';
 import { onRealtime } from '../../services/realtime';
 
-import { io, Socket } from 'socket.io-client';
 import * as Location from 'expo-location';
 import * as Haptics from 'expo-haptics';
-import * as Speech from 'expo-speech';
 import { Ionicons } from '@expo/vector-icons';
 import { isNetworkError, ONLINE_EVENT } from '../../utils/networkStatus';
 import { useOnlineRefresh } from '../../hooks/useOnlineRefresh';
@@ -21,66 +19,13 @@ import NotificationBell from '../../components/NotificationBell';
 import { getDistanceKm } from '../../utils/geo';
 import { BlueprintTheme, BlueprintColors } from '../../constants/BlueprintTheme';
 import apiClient from '../../api/client';
-import { startBackgroundLocation, stopBackgroundLocation, onBackgroundLocation } from '../../services/backgroundLocation';
-import { cacheRouteCorridor, clearOfflinePack } from '../../services/offlineTileCache';
 import { saveLastLocation, loadLastLocation } from '../../services/lastLocation';
-import { pickBestRoute, otherRoutes } from '../../utils/routeSelection';
 import { Spot, PricingBreakdown, AppStep } from '../../types/finder';
 import SkeletonCard from '../../components/SkeletonCard';
+import { openDirections } from '../../utils/directions';
+import { BookedPanel, PaymentPanel, ReceiptPanel } from '../../components/finder/SessionPanels';
 
 const { width } = Dimensions.get('window');
-
-// Safe import — expo-pip only works on Android native builds
-let ExpoPip: any = { useIsInPip: () => ({ isInPipMode: false }), isAvailable: () => false, enterPipMode: () => { } };
-try { ExpoPip = require('expo-pip').default || require('expo-pip'); } catch (e) { /* Web/iOS fallback */ }
-
-// Use the base URL from apiClient but strip the /api/v1 suffix for socket
-const getSocketUrl = () => {
-  const baseUrl = apiClient.defaults.baseURL || '';
-  return baseUrl.replace('/api/v1', '');
-};
-
-const SOCKET_URL = getSocketUrl();
-
-/**
- * Turn a routing step into a human action + icon.
- *
- * Module scope so BOTH the live navigation watcher and the reroute handler
- * can use it — the reroute needs it to show the first turn of the new route
- * immediately instead of leaving a "Calculating..." placeholder on screen.
- */
-const parseManeuver = (s: any) => {
-  if (!s?.maneuver) return { action: 'Head straight', icon: '⬆️' };
-  const type = s.maneuver.type;
-  const modifier = s.maneuver.modifier || '';
-  const sName = s.name || '';
-  let action = 'Head straight';
-  let icon = '⬆️';
-  if (type === 'turn' || type === 'end of road' || type === 'fork') {
-    if (modifier.includes('sharp right')) { action = 'Sharp right'; icon = '↪️'; }
-    else if (modifier.includes('slight right')) { action = 'Bear right'; icon = '↗️'; }
-    else if (modifier.includes('right')) { action = 'Turn right'; icon = '➡️'; }
-    else if (modifier.includes('sharp left')) { action = 'Sharp left'; icon = '↩️'; }
-    else if (modifier.includes('slight left')) { action = 'Bear left'; icon = '↖️'; }
-    else if (modifier.includes('left')) { action = 'Turn left'; icon = '⬅️'; }
-    else if (modifier.includes('uturn')) { action = 'Make a U-turn'; icon = '↩️'; }
-    else { action = 'Continue'; icon = '⬆️'; }
-  } else if (type === 'roundabout' || type === 'rotary') {
-    action = 'Enter roundabout'; icon = '🔄';
-  } else if (type === 'merge') {
-    if (modifier.includes('left')) { action = 'Merge left'; icon = '↖️'; }
-    else if (modifier.includes('right')) { action = 'Merge right'; icon = '↗️'; }
-    else { action = 'Merge'; icon = '↗️'; }
-  } else if (type === 'depart') {
-    action = 'Head ' + (modifier || 'straight'); icon = '⬆️';
-  } else if (type === 'arrive') {
-    action = 'Arriving at destination'; icon = '📍';
-  } else if (type === 'new name' || type === 'continue') {
-    action = sName ? `Continue on ${sName}` : 'Continue straight';
-    icon = '⬆️';
-  }
-  return { action, icon };
-};
 
 export default function FinderDashboard() {
   const router = useRouter();
@@ -100,7 +45,6 @@ export default function FinderDashboard() {
   // can widen its threshold when the fix is poor instead of rerouting falsely.
   const [locationAccuracy, setLocationAccuracy] = useState<number>(0);
   const [step, setStep] = useState<AppStep>('home');
-  const [navCountdown, setNavCountdown] = useState<number | null>(null);
   const [vehicleType, setVehicleType] = useState<string>('');
   const [vehicleSubType, setVehicleSubType] = useState<string>('');
   const [selectedSlot, setSelectedSlot] = useState<string>('');
@@ -112,36 +56,11 @@ export default function FinderDashboard() {
   const [calculatedPrice, setCalculatedPrice] = useState<number | null>(null);
   const [isCalculatingPrice, setIsCalculatingPrice] = useState(false);
   const [slotData, setSlotData] = useState<Array<{ name: string; status: string }>>([]);
-  const [arrivalDetected, setArrivalDetected] = useState(false);
-  const [simulatedLocation, setSimulatedLocation] = useState<{ lat: number, lng: number } | null>(null);
-  const [routeCoords, setRouteCoords] = useState<{ latitude: number, longitude: number }[]>([]);
-  const [altRoutes, setAltRoutes] = useState<Array<{ coords: Array<{ latitude: number; longitude: number }>; duration: number; distance: number; steps?: any[] }>>([]);
-
-  // Set when the rider taps an alternative route. While it holds, background
-  // refreshes must not replace their choice with the algorithm's preference.
-  // Cleared whenever we legitimately pick a new route: new destination, or a
-  // reroute after going off-route.
-  const userSelectedRoute = useRef(false);
-  const [currentRouteIndex, setCurrentRouteIndex] = useState(0);
-  const [distanceInfo, setDistanceInfo] = useState({ km: '0', mins: '0' });
-  const [currentInstruction, setCurrentInstruction] = useState({ turn: '', street: '', icon: '' });
-  const [nextTurnPreview, setNextTurnPreview] = useState({ turn: '', icon: '' });
-  const [trafficSegments, setTrafficSegments] = useState<Array<{ coords: Array<[number, number]>; congestion: 'low' | 'moderate' | 'heavy' | 'severe' }>>([]);
-  const [speedLimit, setSpeedLimit] = useState<number | null>(null);
-  const [laneGuidance, setLaneGuidance] = useState<Array<{ indications: string[]; valid: boolean }>>([]);
-  const lastSpeedLimitFetch = useRef(0);
   const [mapStyleConfig, setMapStyleConfig] = useState<{ styleUrl?: string; apiKey?: string; provider?: string }>({});
-  const [navLanguage, setNavLanguage] = useState<string>('en-IN');
-  const lastSnapFetch = useRef(0);
-  const lastLandmarkFetch = useRef(0);
-  const landmarkCache = useRef<Map<string, string>>(new Map());
-  const lastHapticTurn = useRef('');
-  const routeStepsRef = useRef<any[]>([]);
   const ignoreNextQueryChange = useRef(false);
 
 
 
-  const { isInPipMode: isInPip } = ExpoPip.useIsInPip();
 
   // Ensure the backend's active role matches this dashboard so Finder actions
   // (price calculation, booking, cancel, etc.) are authorized. Finding requires
@@ -210,55 +129,21 @@ export default function FinderDashboard() {
     if (b.status === 'checkout_pending') { setStep('awaiting_owner'); return; }
     if (b.status === 'completed') { setStep('payment'); return; }
 
-    // Straight into navigation — NOT via 'booking_confirm'.
-    //
-    // booking_confirm exists to confirm a booking you are about to make, and it
-    // runs the "navigation starts in 3…" countdown. Resuming is neither: the
-    // booking already exists and the user has just explicitly asked to carry on
-    // to it. Sending resume through that screen made them watch a confirmation
-    // and a countdown for a decision they made minutes ago.
-    setIsFollowing(true);
-    setStep('en_route');
-    startBackgroundLocation().catch(() => {});
+    // Reserved: back to the "you're booked" screen with the PIN and the
+    // Google Maps button.
+    if (b.slot_name) setSelectedSlot(b.slot_name);
+    setStep('booking_confirm');
   };
 
-  useEffect(() => {
-    const subscription = AppState.addEventListener('change', nextAppState => {
-      if (nextAppState === 'background' && ['en_route', 'navigating', 'arriving'].includes(step)) {
-        if (ExpoPip.isAvailable()) {
-          try { ExpoPip.enterPipMode({}); } catch (e) { console.log('PIP not supported'); }
-        }
-      }
-    });
-    return () => subscription.remove();
-  }, [step]);
   const [priceModalOpen, setPriceModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
-  const [navigationData, setNavigationData] = useState({ speed: 0, heading: 0 });
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [searchedPlace, setSearchedPlace] = useState<{ lat: number, lng: number, title: string } | null>(null);
   const [isFollowing, setIsFollowing] = useState(true);
-  const [isMuted, setIsMuted] = useState(false);
-  useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
   const [deviceHeading, setDeviceHeading] = useState(0);
-  // Refs for GPS tracking logic
-  const lastAnimatedHeading = useRef(0);
-  // Reference point for deriving heading from displacement when the GPS
-  // heading is unusable (slow speeds, where Android often omits it).
-  const lastHeadingPos = useRef<{ lat: number; lng: number } | null>(null);
-  const lastRouteFetch = useRef(0);
-  const lastRouteDest = useRef<string | null>(null);
-  const lastRouteFetchPos = useRef<{ lat: number; lng: number } | null>(null);
-  // Backoff after a failed route fetch, so retrying cannot become a 1/sec
-  // hammer while the server is unhappy.
-  const routeRetryAfter = useRef(0);
-  const lastUpdateCoords = useRef({ lat: 0, lng: 0 });
-  const lastRerouteTime = useRef(0);
-  const lastVoiceInstruction = useRef('');
-  const lastVoiceDistance = useRef(0);
-  const isMutedRef = useRef(false);
-
+  // Last position used to load nearby spots; null until the first fix.
+  const lastUpdateCoords = useRef<{ lat: number; lng: number } | null>(null);
 
   const [selectedSpotId, setSelectedSpotId] = useState<string | null>(null);
   const [bookingDetails, setBookingDetails] = useState<{ 
@@ -287,15 +172,6 @@ export default function FinderDashboard() {
   const [resumableBooking, setResumableBooking] = useState<any>(null);
   // Quality of the most recent GPS fix — used to reject wandering low-accuracy readings.
   const lastFixQuality = useRef<{ acc: number; t: number } | null>(null);
-  // Consecutive in-geofence GPS fixes required before declaring arrival.
-  const arrivalHits = useRef(0);
-
-  // Alert the spotter once per booking when the driver gets close to the spot.
-  const bookingIdRef = useRef<number | null>(null);
-  const notifiedNearbyRef = useRef<number | null>(null);
-  useEffect(() => {
-    bookingIdRef.current = (bookingDetails as any)?.id ?? null;
-  }, [bookingDetails]);
   const [extendModalOpen, setExtendModalOpen] = useState(false);
   // Extension duration in MINUTES. Presets cover quick top-ups (5/10/20/30 min)
   // and hour blocks (60/120/180); customExtendText holds a manual entry.
@@ -368,49 +244,6 @@ export default function FinderDashboard() {
     return () => clearTimeout(delayDebounceFn);
   }, [step, selectedSpotId, parkingHours, parkingMinutes, isLongParking, parkingEndDate]);
 
-  // Auto-start navigation countdown
-  useEffect(() => {
-    if (step === 'booking_confirm') {
-      setNavCountdown(3);
-    } else {
-      setNavCountdown(null);
-    }
-  }, [step]);
-
-  useEffect(() => {
-    if (navCountdown === null || navCountdown <= 0) {
-      if (navCountdown === 0 && step === 'booking_confirm') {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        // The map owns the navigation camera. Setting isFollowing + the
-        // navigating step makes GoogleMapNative animate to its own NAV_ZOOM /
-        // NAV_PITCH / heading, which is the single definition of that camera.
-        //
-        // This used to fire TWO camera moves of its own here. The first went to
-        // the user at zoom 17 pitch 60; then centerRoute() immediately
-        // overrode it with the MIDPOINT between user and spot at zoom 15, flat.
-        // On a 30km trip that midpoint is 15km away, so navigation opened on a
-        // flat, zoomed-out view of empty countryside with the rider off-screen
-        // entirely — and the follow camera then had to drag it all the way back.
-        // Neither move belonged here: a route overview is a preview, not the
-        // camera you drive with.
-        if (routeCoords.length > 0) {
-          setSimulatedLocation({ lat: routeCoords[0].latitude, lng: routeCoords[0].longitude });
-        }
-        setIsFollowing(true);
-        setStep('en_route');
-        // Phase 3: Start background location + cache tiles
-        startBackgroundLocation().catch(() => {});
-        if (routeCoords.length > 2) {
-          const styleUrl = mapStyleConfig.provider === 'ola' ? mapStyleConfig.styleUrl : undefined;
-          cacheRouteCorridor(routeCoords, styleUrl).catch(() => {});
-        }
-      }
-      return;
-    }
-    const timer = setTimeout(() => setNavCountdown(prev => prev !== null ? prev - 1 : null), 1000);
-    return () => clearTimeout(timer);
-  }, [navCountdown]);
-
   const [isRazorpayVisible, setIsRazorpayVisible] = useState(false);
   const [razorpayOrder, setRazorpayOrder] = useState<{
     orderId: string;
@@ -429,7 +262,6 @@ export default function FinderDashboard() {
   // produces a real, verifiable payment against the order.
 
   const [spots, setSpots] = useState<Spot[]>([]);
-  const [socket, setSocket] = useState<Socket | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSlotLoading, setIsSlotLoading] = useState(false);
   const [slotLoadError, setSlotLoadError] = useState(false); // true when slots couldn't load due to being offline
@@ -437,30 +269,6 @@ export default function FinderDashboard() {
 
   useEffect(() => {
     const backAction = () => {
-      // 1. Navigation Steps: Prompt for exit, return to home on confirm
-      if (['en_route', 'navigating', 'arriving'].includes(step)) {
-        Alert.alert(
-          'Exit Navigation',
-          'Are you sure you want to exit navigation?',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            {
-              text: 'Yes',
-              onPress: () => {
-                setStep('home');
-                setSelectedSpotId(null);
-                setRouteCoords([]);
-                setSimulatedLocation(null);
-                setArrivalDetected(false);
-                setIsFollowing(false);
-                if (userLocation) fetchNearbySpots(userLocation.lat, userLocation.lng);
-              }
-            }
-          ]
-        );
-        return true;
-      }
-
       // 2. Spot Booking: Return to home
       if (step === 'spot_booking') {
         setStep('home');
@@ -470,10 +278,12 @@ export default function FinderDashboard() {
         return true;
       }
 
-      // 3. Booking Confirm: Return to home
+      // 3. Booked, not yet checked in: back to the map. The booking stays;
+      //    the Resume card brings it back.
       if (step === 'booking_confirm') {
         setStep('home');
-        setNavCountdown(null);
+        setSelectedSpotId(null);
+        checkResumable();
         return true;
       }
 
@@ -515,663 +325,6 @@ export default function FinderDashboard() {
     const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
     return () => backHandler.remove();
   }, [step, searchQuery]);
-
-  useEffect(() => {
-    let locationSub: Location.LocationSubscription | null = null;
-
-    // Run for EVERY navigating state, not just 'en_route'.
-    //
-    // This watcher is what feeds navigationData.heading — and the map rotates
-    // to that heading whenever isActiveNavigation is true, which the finder
-    // defines as en_route OR navigating OR arriving. Gating the watcher on
-    // en_route alone meant that in the other two states the heading froze at
-    // its last value, so the map stopped turning with the rider and sat
-    // north-up while they travelled south. Speed froze the same way, which
-    // also pinned the speed-adaptive zoom.
-    if (['en_route', 'navigating', 'arriving'].includes(step) && selectedSpotId) {
-      const spot = spots.find(s => s.id === selectedSpotId);
-      if (!spot) return;
-
-      if (userLocation) {
-        setSimulatedLocation(userLocation);
-      }
-
-      // Haversine distance in km (now defined outside useEffect)
-      // Smooth heading with low-pass filter
-      const smoothHeading = (newH: number, oldH: number, alpha: number = 0.3) => {
-        let diff = ((newH - oldH + 540) % 360) - 180;
-        return (oldH + diff * alpha + 360) % 360;
-      };
-
-      // Simple Kalman filter for GPS smoothing
-      let kalmanLat = { estimate: 0, error: 1, initialized: false };
-      let kalmanLng = { estimate: 0, error: 1, initialized: false };
-      const kalmanUpdate = (state: typeof kalmanLat, measurement: number, accuracy: number) => {
-        const measureNoise = Math.max(accuracy * 0.00001, 0.000005); // convert ~meters to ~degrees
-        const processNoise = 0.000003; // process noise (movement uncertainty)
-        if (!state.initialized) {
-          state.estimate = measurement;
-          state.error = measureNoise;
-          state.initialized = true;
-          return measurement;
-        }
-        state.error += processNoise;
-        const gain = state.error / (state.error + measureNoise);
-        state.estimate += gain * (measurement - state.estimate);
-        state.error *= (1 - gain);
-        return state.estimate;
-      };
-
-      const startRealTracking = async () => {
-        try {
-          locationSub = await Location.watchPositionAsync({
-            accuracy: Location.Accuracy.BestForNavigation,
-            timeInterval: 1000,
-            distanceInterval: 5,
-          }, (loc) => {
-            const gpsAccuracy = loc.coords.accuracy || 10;
-            // Apply Kalman filter to smooth GPS jitter
-            const smoothLat = kalmanUpdate(kalmanLat, loc.coords.latitude, gpsAccuracy);
-            const smoothLng = kalmanUpdate(kalmanLng, loc.coords.longitude, gpsAccuracy);
-            const coords = { lat: smoothLat, lng: smoothLng };
-            setSimulatedLocation(coords);
-            setUserLocation(coords);
-
-            const rawSpeed = loc.coords.speed || 0;
-            const speedKmh = rawSpeed * 3.6;
-            // Idle GPS jitter reports phantom speeds of 2-6 km/h; require a
-            // clearly-moving speed AND a reasonable GPS fix before showing it.
-            const gpsOk = (loc.coords.accuracy || 99) < 30;
-            const isMoving = gpsOk && speedKmh > 6;
-
-            // Heading, best source first.
-            //
-            // GPS heading only when genuinely moving — below ~6 km/h Android
-            // either omits it or reports noise. But keeping the LAST heading
-            // whenever that test failed left the arrow pointing the wrong way
-            // through every slow crawl, queue and junction, which on a bike in
-            // town is most of the ride.
-            //
-            // So when GPS heading is unusable, derive the bearing from actual
-            // displacement between fixes. Requires >8m of movement, comfortably
-            // above the Kalman-smoothed jitter floor, so a stationary rider
-            // does not spin the arrow.
-            const gpsHeading =
-              isMoving && loc.coords.heading != null && loc.coords.heading >= 0
-                ? loc.coords.heading
-                : null;
-
-            if (gpsHeading != null) {
-              lastAnimatedHeading.current = smoothHeading(gpsHeading, lastAnimatedHeading.current, 0.35);
-            } else if (lastHeadingPos.current) {
-              const p = lastHeadingPos.current;
-              const dyM = (coords.lat - p.lat) * 110540;
-              const dxM = (coords.lng - p.lng) * 111320 * Math.cos((coords.lat * Math.PI) / 180);
-              const movedM = Math.sqrt(dxM * dxM + dyM * dyM);
-              if (movedM > 8) {
-                // atan2(east, north) -> compass bearing, 0 = north.
-                const bearing = (Math.atan2(dxM, dyM) * 180) / Math.PI;
-                lastAnimatedHeading.current = smoothHeading(
-                  (bearing + 360) % 360,
-                  lastAnimatedHeading.current,
-                  0.35
-                );
-              }
-            }
-
-            // Only advance the reference once we have moved far enough to have
-            // learned something; otherwise jitter would keep resetting it and
-            // the 8m gate could never be met.
-            if (
-              !lastHeadingPos.current ||
-              Math.abs(coords.lat - lastHeadingPos.current.lat) > 0.00007 ||
-              Math.abs(coords.lng - lastHeadingPos.current.lng) > 0.00007
-            ) {
-              lastHeadingPos.current = { lat: coords.lat, lng: coords.lng };
-            }
-
-            setNavigationData({
-              speed: isMoving ? rawSpeed : 0,
-              heading: lastAnimatedHeading.current
-            });
-
-            // Calculate remaining distance along actual route
-            const straightKm = getDistanceKm(coords.lat, coords.lng, spot.lat, spot.lng);
-
-            // When the driver gets within ~300m, alert the spotter once so they
-            // can prepare for arrival. Fires a single time per booking.
-            if (straightKm < 0.3 && bookingIdRef.current && notifiedNearbyRef.current !== bookingIdRef.current) {
-              notifiedNearbyRef.current = bookingIdRef.current;
-              apiClient.post(`/bookings/${bookingIdRef.current}/notify-nearby`, { distance_km: Number(straightKm.toFixed(2)) }).catch(() => {});
-            }
-
-            const currentRoute = routeCoords;
-            let remainingKm = straightKm * 1.3; // fallback
-            let closestIdx = 0;
-            if (currentRoute.length >= 2) {
-              let closestDist = Infinity;
-              for (let ri = 0; ri < currentRoute.length; ri++) {
-                const d = getDistanceKm(coords.lat, coords.lng, currentRoute[ri].latitude, currentRoute[ri].longitude);
-                if (d < closestDist) { closestDist = d; closestIdx = ri; }
-              }
-              let segDist = 0;
-              for (let ri = closestIdx; ri < currentRoute.length - 1; ri++) {
-                segDist += getDistanceKm(
-                  currentRoute[ri].latitude, currentRoute[ri].longitude,
-                  currentRoute[ri + 1].latitude, currentRoute[ri + 1].longitude
-                );
-              }
-              if (segDist > 0.01) remainingKm = segDist;
-            }
-
-            // Traffic-adjusted ETA: sum remaining step durations instead of speed guessing
-            let etaMins = 0;
-            const stepsForEta = routeStepsRef.current;
-            if (stepsForEta.length > 0) {
-              // Sum duration from all remaining steps (already traffic-aware from Ola Maps)
-              let sumDurationSec = 0;
-              let foundCurrent = false;
-              for (const st of stepsForEta) {
-                // Count all remaining steps (they've been trimmed by the step-consumption logic)
-                sumDurationSec += (st.duration || 0);
-              }
-              etaMins = Math.max(1, Math.ceil(sumDurationSec / 60));
-            } else {
-              // Fallback to speed-based estimate
-              const avgSpeedKmh = speedKmh > 8 ? speedKmh : 25;
-              etaMins = Math.max(1, Math.ceil((remainingKm / avgSpeedKmh) * 60));
-            }
-
-            setDistanceInfo({
-              km: remainingKm.toFixed(1),
-              mins: etaMins.toString()
-            });
-
-            // Periodic traffic re-fetch: every 60s, re-request route for updated traffic ETA
-            const now = Date.now();
-            if (now - lastRouteFetch.current > 60000 && remainingKm > 0.3) {
-              lastRouteFetch.current = now;
-              apiClient.get(`/maps/route?start=${coords.lng},${coords.lat}&end=${spot.lng},${spot.lat}&alternatives=true`)
-                .then((rRes: any) => {
-                  if (rRes.data.success) {
-                    // Same selection rule as everywhere else — this used to
-                    // take routes[0] blindly and could disagree with the route
-                    // drawn by the main fetch.
-                    const rRoute = pickBestRoute(rRes.data.data.routes || [], { trustProviderOrder: rRes.data.provider === 'google' });
-                    if (rRoute?.legs?.[0]?.steps) {
-                      routeStepsRef.current = rRoute.legs[0].steps;
-                      // Free-flow for every segment, exactly as the main fetch
-                      // reports it.
-                      //
-                      // This block used to derive congestion from
-                      // step.distance / step.duration and paint anything under
-                      // 25 km/h orange. But the field mask asks Google for
-                      // staticDuration — the time with NO traffic — so that
-                      // figure is free-flow speed, not congestion. Short steps
-                      // (junction slip roads, roundabout arms) always come out
-                      // slow, which is why orange blobs appeared at junctions
-                      // on a completely clear road. The main fetch was fixed
-                      // for this; this copy was missed, so the orange came
-                      // back 60 seconds into every trip.
-                      setTrafficSegments(
-                        rRoute.legs[0].steps
-                          .filter((s: any) => s.geometry?.coordinates?.length >= 2)
-                          .map((s: any) => ({
-                            coords: s.geometry.coordinates,
-                            congestion: 'low' as const,
-                          }))
-                      );
-                    }
-                    // Never silently replace a route the rider chose.
-                    //
-                    // This refresh exists to keep the ETA honest, but it also
-                    // overwrote routeCoords with whatever pickBestRoute
-                    // returned. So after tapping an alternative, roughly a
-                    // minute later the map snapped back to the route they had
-                    // just rejected. Their choice stands until the destination
-                    // changes or they go off-route and we genuinely reroute.
-                    if (rRoute && !userSelectedRoute.current) {
-                      setRouteCoords(rRoute.geometry.coordinates.map((p: any) => ({ latitude: p[1], longitude: p[0] })));
-                    }
-                  }
-                })
-                .catch(() => {});
-            }
-
-            // Speed limit fetch: every 30s
-            if (now - lastSpeedLimitFetch.current > 30000) {
-              lastSpeedLimitFetch.current = now;
-              apiClient.get(`/maps/speed-limit?lat=${coords.lat}&lng=${coords.lng}`)
-                .then((slRes: any) => {
-                  if (slRes.data.success && slRes.data.data.speedLimit) {
-                    setSpeedLimit(slRes.data.data.speedLimit);
-                  }
-                })
-                .catch(() => {});
-            }
-
-            // ── Phase 4: Server-side snap-to-road (every 5s) ──
-            if (now - lastSnapFetch.current > 5000) {
-              lastSnapFetch.current = now;
-              apiClient.post('/maps/snap-to-road', {
-                points: [{ lat: coords.lat, lng: coords.lng }]
-              }).then((snapRes: any) => {
-                const snapped = snapRes.data?.data?.snapped;
-                if (snapped?.length > 0 && snapped[0].lat && snapped[0].lng) {
-                  setSimulatedLocation({ lat: snapped[0].lat, lng: snapped[0].lng });
-                }
-              }).catch(() => {});
-            }
-
-            // Turn-by-turn: consume steps and find the next meaningful maneuver
-            const stepsArr = [...routeStepsRef.current];
-
-            // Pop all steps whose maneuver point we've already passed (within 30m)
-            while (stepsArr.length > 1) {
-              const loc = stepsArr[0]?.maneuver?.location;
-              if (!loc) break;
-              const d = getDistanceKm(coords.lat, coords.lng, loc[1], loc[0]) * 1000;
-              if (d < 30) { stepsArr.shift(); } else { break; }
-            }
-            routeStepsRef.current = stepsArr;
-
-            // Helper: parse a maneuver step into action + icon
-
-            // Find next meaningful turn (skip 'continue' / 'depart' / 'new name' steps)
-            let displayStep = stepsArr[0];
-            let displayDist = Infinity;
-            let displayIdx = 0;
-            for (let si = 0; si < stepsArr.length; si++) {
-              const s = stepsArr[si];
-              const t = s?.maneuver?.type || '';
-              if (['turn', 'end of road', 'fork', 'roundabout', 'rotary', 'merge', 'arrive'].includes(t)) {
-                displayStep = s;
-                displayIdx = si;
-                if (s.maneuver?.location) {
-                  displayDist = getDistanceKm(coords.lat, coords.lng, s.maneuver.location[1], s.maneuver.location[0]) * 1000;
-                }
-                break;
-              }
-              if (si === 0 && s?.maneuver?.location) {
-                displayDist = getDistanceKm(coords.lat, coords.lng, s.maneuver.location[1], s.maneuver.location[0]) * 1000;
-              }
-            }
-
-            // Fallback: if no turn found, use first step
-            if (displayStep?.maneuver?.location && displayDist === Infinity) {
-              displayDist = getDistanceKm(coords.lat, coords.lng, displayStep.maneuver.location[1], displayStep.maneuver.location[0]) * 1000;
-            }
-
-            // Find the NEXT meaningful turn after the current one (for "then" preview)
-            let nextStep: any = null;
-            for (let si = displayIdx + 1; si < stepsArr.length; si++) {
-              const t = stepsArr[si]?.maneuver?.type || '';
-              if (['turn', 'end of road', 'fork', 'roundabout', 'rotary', 'merge', 'arrive'].includes(t)) {
-                nextStep = stepsArr[si];
-                break;
-              }
-            }
-
-            if (displayStep?.maneuver) {
-              const { action, icon } = parseManeuver(displayStep);
-              const name = displayStep.name || '';
-
-              // Distance text
-              let distText = '';
-              if (displayDist < 50) { distText = 'Now'; }
-              else if (displayDist < 1000) { distText = `${Math.round(displayDist / 10) * 10} m`; }
-              else { distText = `${(displayDist / 1000).toFixed(1)} km`; }
-
-              const streetText = name
-                ? (distText === 'Now' ? name : `${distText} · ${name}`)
-                : distText;
-
-              setCurrentInstruction({ turn: action, street: streetText, icon });
-
-              // ── Phase 4: Landmark fetch for next turn ──
-              if (now - lastLandmarkFetch.current > 15000 && displayStep?.maneuver?.location) {
-                const turnLoc = displayStep.maneuver.location;
-                const cacheKey = `${turnLoc[1].toFixed(4)},${turnLoc[0].toFixed(4)}`;
-                if (!landmarkCache.current.has(cacheKey)) {
-                  lastLandmarkFetch.current = now;
-                  apiClient.get(`/maps/nearby-pois?lat=${turnLoc[1]}&lng=${turnLoc[0]}&radius=80`)
-                    .then((poiRes: any) => {
-                      const pois = poiRes.data?.data?.pois || [];
-                      if (pois.length > 0) {
-                        landmarkCache.current.set(cacheKey, pois[0].name);
-                      }
-                    }).catch(() => {});
-                }
-              }
-
-              // Lane guidance: show lanes for the current/upcoming step
-              if (displayStep?.lanes && displayStep.lanes.length > 0 && displayDist < 500) {
-                setLaneGuidance(displayStep.lanes);
-              } else {
-                setLaneGuidance([]);
-              }
-
-              // Next-turn preview ("then turn left")
-              if (nextStep && displayDist < 800) {
-                const next = parseManeuver(nextStep);
-                setNextTurnPreview({ turn: `Then ${next.action.toLowerCase()}`, icon: next.icon });
-              } else {
-                setNextTurnPreview({ turn: '', icon: '' });
-              }
-
-              // ── Voice navigation + haptics ──
-              if (displayDist < Infinity) {
-                // Voice at 500m, 200m, and 50m thresholds (don't repeat same tier)
-                let voiceTier = 0;
-                if (displayDist <= 50) voiceTier = 50;
-                else if (displayDist <= 200) voiceTier = 200;
-                else if (displayDist <= 500) voiceTier = 500;
-
-                const voiceKey = `${action}@${voiceTier}`;
-                if (voiceTier > 0 && voiceKey !== lastVoiceInstruction.current) {
-                  lastVoiceInstruction.current = voiceKey;
-
-                  // ── Phase 4: Haptic turn alert ──
-                  const hapticKey = `${action}@${voiceTier}`;
-                  if (hapticKey !== lastHapticTurn.current) {
-                    lastHapticTurn.current = hapticKey;
-                    if (voiceTier === 50) {
-                      // Imminent turn: strong double-pulse
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-                      setTimeout(() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy), 150);
-                    } else if (voiceTier === 200) {
-                      // Approaching: medium pulse
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                    } else {
-                      // 500m warning: light pulse
-                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                    }
-                  }
-
-                  if (!isMutedRef.current) {
-                    // Build voice text
-                    let voiceText = '';
-                    if (voiceTier === 500) {
-                      voiceText = `In ${Math.round(displayDist / 100) * 100} meters, ${action.toLowerCase()}`;
-                    } else if (voiceTier === 200) {
-                      voiceText = `In ${Math.round(displayDist / 50) * 50} meters, ${action.toLowerCase()}`;
-                    } else {
-                      voiceText = action;
-                    }
-                    if (name && voiceTier >= 200) voiceText += `, on ${name}`;
-
-                    // Phase 4: Landmark enrichment ("turn left after the petrol pump")
-                    if (displayStep?.maneuver?.location && voiceTier >= 200) {
-                      const turnLoc = displayStep.maneuver.location;
-                      const cacheKey = `${turnLoc[1].toFixed(4)},${turnLoc[0].toFixed(4)}`;
-                      const landmark = landmarkCache.current.get(cacheKey);
-                      if (landmark) {
-                        voiceText += `, after ${landmark}`;
-                      }
-                    }
-
-                    // Phase 4: Hindi/regional TTS — translate common instructions
-                    const ttsLang = navLanguage;
-                    if (ttsLang === 'hi-IN') {
-                      // Hindi translations for common nav instructions
-                      voiceText = voiceText
-                        .replace(/Turn right/gi, 'Daayein mudhein')
-                        .replace(/Turn left/gi, 'Baayein mudhein')
-                        .replace(/Sharp right/gi, 'Tez daayein')
-                        .replace(/Sharp left/gi, 'Tez baayein')
-                        .replace(/Bear right/gi, 'Halka daayein')
-                        .replace(/Bear left/gi, 'Halka baayein')
-                        .replace(/Continue straight/gi, 'Seedha chalein')
-                        .replace(/Head straight/gi, 'Seedha chalein')
-                        .replace(/Make a U-turn/gi, 'U-turn lein')
-                        .replace(/Enter roundabout/gi, 'Gol chakkar mein jaayein')
-                        .replace(/In (\d+) meters/gi, '$1 meter mein')
-                        .replace(/Arriving at destination/gi, 'Aap apni manzil par pahunch gaye hain')
-                        .replace(/Rerouting/gi, 'Naya raasta dhundh rahe hain')
-                        .replace(/You have arrived/gi, 'Aap pahunch gaye hain');
-                    } else if (ttsLang === 'ta-IN') {
-                      voiceText = voiceText
-                        .replace(/Turn right/gi, 'Valathupuram thirumbavum')
-                        .replace(/Turn left/gi, 'Idathupuram thirumbavum')
-                        .replace(/Continue straight/gi, 'Neraaga sellavum')
-                        .replace(/Head straight/gi, 'Neraaga sellavum');
-                    } else if (ttsLang === 'te-IN') {
-                      voiceText = voiceText
-                        .replace(/Turn right/gi, 'Kudi vaipunaku thirugandi')
-                        .replace(/Turn left/gi, 'Edama vaipunaku thirugandi')
-                        .replace(/Continue straight/gi, 'Thinnaga vellandi');
-                    } else if (ttsLang === 'kn-IN') {
-                      voiceText = voiceText
-                        .replace(/Turn right/gi, 'Balagade thirugiri')
-                        .replace(/Turn left/gi, 'Edagade thirugiri')
-                        .replace(/Continue straight/gi, 'Neravagi hogiri');
-                    }
-
-                    Speech.speak(voiceText, { rate: 1.0, pitch: 1.0, language: ttsLang });
-                  }
-                }
-              }
-            }
-
-            // Arrival detection — must be genuinely AT the spot:
-            //  • within 25m straight-line of the spot (a real geofence, not a
-            //    block away), AND
-            //  • the GPS fix is trustworthy (accuracy better than 30m), AND
-            //  • confirmed on 2 consecutive fixes so a single stray reading
-            //    can't announce arrival early.
-            // `remainingKm` is deliberately NOT used: it starts life as a
-            // straight-line estimate (×1.3) and could trip arrival on its own.
-            const gpsAcc = loc.coords.accuracy || 99;
-            const withinGeofence = straightKm <= 0.025 && gpsAcc <= 30;
-            arrivalHits.current = withinGeofence ? arrivalHits.current + 1 : 0;
-
-            if (arrivalHits.current >= 2 && !arrivalDetected) {
-              setArrivalDetected(true);
-              setIsFollowing(false);
-              if (!isMutedRef.current) {
-                const arrText = navLanguage === 'hi-IN' ? 'Aap apni manzil par pahunch gaye hain'
-                  : 'You have arrived at your destination';
-                Speech.speak(arrText, { rate: 1.0, pitch: 1.0, language: navLanguage });
-                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-              }
-              if (locationSub) {
-                try { locationSub.remove(); } catch (e) {}
-                locationSub = null;
-              }
-            }
-          });
-        } catch (e) {
-          console.log("GPS Watch Error:", e); // background watcher; not user-facing
-        }
-      };
-
-      startRealTracking();
-
-      // Background location listener — merges BG updates when app is backgrounded
-      const removeBgListener = onBackgroundLocation((bgCoords) => {
-        setUserLocation({ lat: bgCoords.latitude, lng: bgCoords.longitude });
-        setSimulatedLocation({ lat: bgCoords.latitude, lng: bgCoords.longitude });
-        if (bgCoords.heading != null) {
-          setNavigationData(prev => ({ ...prev, heading: bgCoords.heading || prev.heading }));
-        }
-      });
-
-      return () => {
-        if (locationSub) {
-          try { locationSub.remove(); } catch (e) {}
-        }
-        removeBgListener();
-        stopBackgroundLocation().catch(() => {});
-        clearOfflinePack().catch(() => {});
-        Speech.stop();
-      };
-    } else if (!['arriving'].includes(step)) {
-      // Don't reset arrivalDetected when transitioning to 'arriving' (check-in flow)
-      setArrivalDetected(false);
-      arrivalHits.current = 0; // fresh geofence count for the next trip
-      setSimulatedLocation(null);
-      setDistanceInfo({ km: '0', mins: '0' });
-      setTrafficSegments([]);
-      setSpeedLimit(null);
-      setLaneGuidance([]);
-      Speech.stop();
-      lastVoiceInstruction.current = '';
-    }
-  }, [step, selectedSpotId]);
-
-  // Navigation Simulation disabled in favor of real-time GPS tracking
-  useEffect(() => {
-    if (['en_route', 'navigating', 'arriving'].includes(step) && routeCoords.length > 0) {
-      console.log("[NAV] Navigation mode active. Waiting for GPS signal...");
-    }
-  }, [step, routeCoords]);
-  // Only fetch route when a spot is selected (tapped or booked) — NOT on search alone.
-  // Search just shows the pin + nearby spots; directions appear after selecting a spot.
-  useEffect(() => {
-    const now = Date.now();
-    const destination = selectedSpotId
-      ? spots.find(s => s.id === selectedSpotId)
-      : null; // No fallback to searchedPlace — routes only for selected spots
-
-    const isActiveNav = ['en_route', 'navigating', 'arriving'].includes(step);
-    const destId = destination ? String(('id' in destination ? (destination as any).id : '') || `${destination.lat},${destination.lng}`) : null;
-    const isNewDest = destId !== lastRouteDest.current;
-
-    // During navigation, only refetch when the user has actually MOVED —
-    // GPS jitter at rest (±2-5m) must not trigger a refetch loop that thrashes
-    // the map and the server every few seconds.
-    let movedEnough = true;
-    if (isActiveNav && !isNewDest && userLocation && lastRouteFetchPos.current) {
-      const dLat = (userLocation.lat - lastRouteFetchPos.current.lat) * 110540;
-      const dLng = (userLocation.lng - lastRouteFetchPos.current.lng) * 111320;
-      movedEnough = Math.sqrt(dLat * dLat + dLng * dLng) > 30; // meters
-    }
-
-    if (destination && userLocation && (isActiveNav || isNewDest) && (now - lastRouteFetch.current > 4000 || isNewDest) && movedEnough && now >= routeRetryAfter.current) {
-      lastRouteFetch.current = now;
-      lastRouteDest.current = destId;
-      lastRouteFetchPos.current = { lat: userLocation.lat, lng: userLocation.lng };
-      // A new destination means the rider's earlier route choice was about a
-      // different journey; it must not carry over and block this one.
-      if (isNewDest) userSelectedRoute.current = false;
-      (async () => {
-        try {
-          console.log(`[API] Fetching route from ${userLocation.lat},${userLocation.lng} to ${destination.lat},${destination.lng}`);
-          const isNav = ['en_route', 'navigating', 'arriving'].includes(step);
-          // Alternatives are requested even while navigating. Previously this
-          // was `alternatives=${!isNav}`, so during navigation the provider
-          // returned exactly ONE route and there was nothing to choose from —
-          // whatever detour it picked was what you drove. Responses are cached
-          // server-side for 10 minutes and refetch is movement-gated, so the
-          // extra candidates cost little.
-          const res = await apiClient.get(`/maps/route?start=${userLocation.lng},${userLocation.lat}&end=${destination.lng},${destination.lat}&alternatives=true`);
-          if (res.data.success) {
-            const routes = res.data.data.routes || [];
-            // Shortest sensible route, not merely the fastest — see
-            // utils/routeSelection.ts for why those differ.
-            const route = pickBestRoute(routes, { trustProviderOrder: res.data.provider === 'google' });
-            if (!route) {
-              // The server answered but gave nothing usable. Treat it as a
-              // failure so the destination is un-marked and we try again,
-              // rather than silently leaving the map with no route forever.
-              throw new Error('no usable route in response');
-            }
-            console.log(`[API] Route found! ${route.geometry.coordinates.length} points. ${routes.length} alternatives. Best: ${(route.distance / 1000).toFixed(1)}km/${Math.ceil(route.duration / 60)}min`);
-
-            // While navigating this effect refires every 30m of movement. If
-            // the rider picked an alternative, that refire would quietly put
-            // them back on the algorithm's route — the choice would survive
-            // maybe half a minute of riding. Leave everything alone.
-            //
-            // Note the ETA is deliberately NOT refreshed here either: `route`
-            // is the algorithm's pick, so its distance and duration describe a
-            // road the rider is not on. Showing that under their chosen route
-            // would be worse than showing a slightly stale figure. The live
-            // ETA comes from the navigation watcher, which measures against
-            // the route actually drawn.
-            if (userSelectedRoute.current) return;
-
-            setRouteCoords(route.geometry.coordinates.map((p: any) => ({ latitude: p[1], longitude: p[0] })));
-            setDistanceInfo({ km: (route.distance / 1000).toFixed(1), mins: Math.ceil(route.duration / 60).toString() });
-            if (route.legs?.[0]?.steps) {
-              routeStepsRef.current = route.legs[0].steps;
-              // Compute traffic segments from step-level speed data
-              const steps = route.legs[0].steps;
-              const segments: Array<{ coords: Array<[number, number]>; congestion: 'low' | 'moderate' | 'heavy' | 'severe' }> = [];
-              for (const s of steps) {
-                if (s.geometry?.coordinates && s.geometry.coordinates.length >= 2 && s.duration > 0) {
-                  // NOT REAL TRAFFIC — every segment is reported as free-flowing.
-                  //
-                  // This used to derive congestion from step.distance /
-                  // step.duration, but the Google field mask requests
-                  // `staticDuration` — the time with NO traffic. So the figure
-                  // was free-flow speed being labelled as congestion. Short
-                  // manoeuvring steps (20m in 5s ~ 14 km/h) always scored as
-                  // heavy, which is why turns painted orange and, with the old
-                  // 45 km/h threshold, the entire route did.
-                  //
-                  // Inventing congestion is worse than showing none: it tells
-                  // the rider a clear road is jammed. Real traffic colouring
-                  // needs Google's travelAdvisory.speedReadingIntervals, which
-                  // classifies stretches as SLOW / TRAFFIC_JAM against normal
-                  // conditions. Until that is wired through, report free-flow
-                  // so the route renders as a clean blue line.
-                  const congestion: 'low' | 'moderate' | 'heavy' | 'severe' = 'low';
-                  segments.push({ coords: s.geometry.coordinates, congestion });
-                }
-              }
-              setTrafficSegments(segments);
-              // Extract lane guidance for first meaningful step
-              const firstLaneStep = steps.find((s: any) => s.lanes && s.lanes.length > 0);
-              if (firstLaneStep) setLaneGuidance(firstLaneStep.lanes);
-              else setLaneGuidance([]);
-            }
-            // Alternatives = everything EXCEPT the route we actually drew.
-            // The old `routes.slice(1)` assumed the primary was always
-            // routes[0]; once selection started choosing a different one, the
-            // primary was ALSO painted underneath as a grey alternative while
-            // the provider's first route disappeared from the list entirely.
-            if (!isNav) {
-              setAltRoutes(otherRoutes(routes, route).map((r: any) => ({
-                coords: r.geometry.coordinates.map((p: any) => ({ latitude: p[1], longitude: p[0] })),
-                duration: r.duration,
-                distance: r.distance,
-                // Carry the turn list with each alternative. Without it,
-                // tapping an alternative drew the new line but left the turn
-                // card reading from the old route's steps — so the app
-                // confidently announced turns for a road you were no longer on.
-                steps: r.legs?.[0]?.steps,
-              })));
-            } else {
-              setAltRoutes([]);
-            }
-          }
-        } catch (e) {
-          // Un-mark the destination so the effect will try again.
-          //
-          // Previously this only logged. Because `lastRouteDest` was set
-          // BEFORE the request, a single failed fetch (429, timeout, slow
-          // response, or a response with no usable route) left the spot
-          // permanently marked as "already routed" — so no route was ever
-          // drawn for it and nothing retried. That is the "sometimes there is
-          // no route" behaviour.
-          console.log('[Route] fetch failed — will retry', e);
-          lastRouteDest.current = null;
-          routeRetryAfter.current = Date.now() + 4000; // bounded backoff
-        }
-      })();
-    } else if (!destination) {
-      setRouteCoords([]);
-      setAltRoutes([]);
-      // Forget which destination we routed to. Without this, cancelling a spot
-      // and then re-selecting the SAME spot left isNewDest false, so no fetch
-      // ran and the map sat there with no route — another source of the
-      // "sometimes there's no route" behaviour.
-      lastRouteDest.current = null;
-      routeRetryAfter.current = 0;
-    }
-  }, [selectedSpotId, userLocation, spots, step]);
-
 
   // Fetch map style config (Ola Maps vector tiles or Carto fallback)
   useEffect(() => {
@@ -1266,16 +419,19 @@ export default function FinderDashboard() {
           })
           .catch(() => {});
 
-        // 2. Continuous watch: strongest GPS, 1s/2m — with ACCURACY GATING.
+        // 2. Continuous watch — with ACCURACY GATING. Navigation happens in
+        //    Google Maps, so this only keeps the blue dot and nearby spots
+        //    fresh: high accuracy every few seconds is plenty and far kinder
+        //    to the battery than navigation-grade 1-second fixes.
         //    A reading with high uncertainty must not drag the dot away from a
         //    recent precise fix (that wander was the "inaccurate" feeling).
         //    Wrapped so a watcher failure cannot take down the heading
         //    subscription or anything after it.
         try {
           watchSub = await Location.watchPositionAsync({
-            accuracy: Location.Accuracy.BestForNavigation,
-            timeInterval: 1000,
-            distanceInterval: 2,
+            accuracy: Location.Accuracy.High,
+            timeInterval: 4000,
+            distanceInterval: 10,
           }, (l) => {
             const acc = l.coords.accuracy || 99;
             const q = lastFixQuality.current;
@@ -1345,14 +501,7 @@ export default function FinderDashboard() {
       }
     })();
 
-    const newSocket = io(SOCKET_URL, { transports: ['websocket'] });
-    setSocket(newSocket);
-    newSocket.on('spot_update', (updatedSpot: Spot) => {
-      setSpots(current => current.map(s => s.id === updatedSpot.id ? updatedSpot : s));
-    });
-
     return () => {
-      newSocket.disconnect();
       try {
         if (watchSub && typeof watchSub.remove === 'function') watchSub.remove();
       } catch (e) { console.log('watchSub remove ignored'); }
@@ -1788,35 +937,12 @@ export default function FinderDashboard() {
     await fetchNearbySpots(lat, lon, 1000);
   };
 
-  // "Directions" from the place card: draw the route to the EXACT place the
-  // user searched (always accurate) — the nearby parking spots stay listed
-  // for booking. No more auto-jumping to a spot that may be far away.
-  const handleDirectionsToPlace = async () => {
-    if (!searchedPlace || !userLocation) {
-      Alert.alert('Location needed', 'We need your current location to show directions.');
-      return;
-    }
+  // "Directions" from the place card opens Google Maps to the searched place.
+  const handleDirectionsToPlace = () => {
+    if (!searchedPlace) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    // Directions to a searched place is a fresh journey — any route the rider
-    // chose for a previous trip is irrelevant and must not hold here.
-    userSelectedRoute.current = false;
-    try {
-      const res = await apiClient.get(`/maps/route?start=${userLocation.lng},${userLocation.lat}&end=${searchedPlace.lng},${searchedPlace.lat}&alternatives=true`);
-      if (res.data?.success) {
-        const route = pickBestRoute(res.data.data.routes || [], { trustProviderOrder: res.data.provider === 'google' });
-        if (route && route.geometry?.coordinates?.length) {
-          setRouteCoords(route.geometry.coordinates.map((p: any) => ({ latitude: p[1], longitude: p[0] })));
-          setDistanceInfo({ km: (route.distance / 1000).toFixed(1), mins: Math.ceil(route.duration / 60).toString() });
-          setIsFollowing(false);
-          return;
-        }
-      }
-      Alert.alert('No route', 'Could not find a route to that place right now.');
-    } catch (e) {
-      Alert.alert('Directions failed', 'Could not fetch directions right now. Please try again.');
-    }
+    openDirections(searchedPlace.lat, searchedPlace.lng);
   };
-
 
   const recenterCamera = () => {
     setIsFollowing(true); // The map component will fly to userLocation automatically when isFollowing=true
@@ -1824,14 +950,14 @@ export default function FinderDashboard() {
 
   useEffect(() => {
     let pollInterval: any;
-    if (['arriving', 'checkout_verification', 'awaiting_owner'].includes(step) && bookingDetails?.id) {
+    if (['booking_confirm', 'checkout_verification', 'awaiting_owner'].includes(step) && bookingDetails?.id) {
       pollInterval = setInterval(async () => {
         try {
           const res = await apiClient.get('/bookings/my-bookings');
           if (res.data?.success) {
             const currentBooking = res.data.data.find((b: any) => String(b.id) === String(bookingDetails?.id));
             if (currentBooking) {
-              if (step === 'arriving' && (currentBooking.status === 'active' || currentBooking.status === 'occupied')) {
+              if (step === 'booking_confirm' && (currentBooking.status === 'active' || currentBooking.status === 'occupied')) {
                 setBookingDetails({ ...bookingDetails, ...currentBooking });
                 Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
                 setStep('active_parking');
@@ -1847,7 +973,7 @@ export default function FinderDashboard() {
         } catch (e) {
           console.log("Error polling booking status", e);
         }
-      }, 3000);
+      }, 6000);
     }
     return () => {
       if (pollInterval) clearInterval(pollInterval);
@@ -1858,7 +984,7 @@ export default function FinderDashboard() {
   // spotter verifies the entry OTP, the backend emits booking:checkedin to this
   // finder — advance straight to the active session with no wait.
   useEffect(() => {
-    if (step !== 'arriving' || !bookingDetails?.id) return;
+    if (step !== 'booking_confirm' || !bookingDetails?.id) return;
     const off = onRealtime('booking:checkedin', (b: any) => {
       if (String(b?.id) === String(bookingDetails?.id)) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -1959,6 +1085,9 @@ export default function FinderDashboard() {
 
       if (verification.success) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        // Show the amount actually charged (the order is in paise).
+        const paid = razorpayOrder ? razorpayOrder.amount / 100 : null;
+        if (paid) setBookingDetails(prev => prev ? { ...prev, finalAmount: paid } : prev);
         setStep('receipt');
       } else {
         Alert.alert('Payment not confirmed', `${verification.message || 'We could not confirm this payment.'}\n\nIf money was deducted, do not pay again — it will be confirmed or refunded automatically. Payment ID: ${data.razorpay_payment_id}`);
@@ -2019,65 +1148,7 @@ export default function FinderDashboard() {
     }
   };
 
-  const isBottomPanelFull = ['arriving', 'active_parking', 'payment', 'receipt'].includes(step);
-  // Route is visible during spot preview (the "blue line" when a spot is
-  // selected), booking, and ALL navigation phases including final approach.
-  const showRoute = ['spot_booking', 'booking_confirm', 'home', 'navigating', 'en_route', 'arriving'].includes(step);
-
-  // The un-driven remainder of the route. Memoised because this slice copies
-  // the whole coordinate array, and it sat inline in JSX — so it reallocated on
-  // EVERY render of this (very large) screen, including the many renders that
-  // have nothing to do with the route. Now it only rebuilds when the route or
-  // the driver's progress along it actually changes.
-  const visibleRouteCoords = useMemo(
-    () => (showRoute
-      ? routeCoords.slice(Math.min(currentRouteIndex, Math.max(0, routeCoords.length - 2)))
-      : []),
-    [showRoute, routeCoords, currentRouteIndex]
-  );
-
-  // A brand new route starts un-driven. Without this, progress from the
-  // previous route would carry over and chop the head off the new one.
-  useEffect(() => {
-    setCurrentRouteIndex(0);
-  }, [routeCoords]);
-
-  // Consume the route behind the driver.
-  //
-  // `currentRouteIndex` existed and was read by visibleRouteCoords above, but
-  // NOTHING ever advanced it — setCurrentRouteIndex was declared and never
-  // called. So the index sat at 0 and the full line stayed drawn, including the
-  // stretch already driven, which is why the blue route trailed behind instead
-  // of being eaten up as you moved.
-  useEffect(() => {
-    if (!showRoute || !userLocation || routeCoords.length < 2) return;
-
-    // Only scan a window AHEAD of the current position. A route can be many
-    // thousands of points, this runs on every GPS tick, and a driver only ever
-    // moves forward along it — so a full scan would be wasted work and could
-    // also snap backwards where a route loops near itself.
-    const WINDOW = 150;
-    const start = Math.min(currentRouteIndex, routeCoords.length - 1);
-    const end = Math.min(routeCoords.length - 1, start + WINDOW);
-
-    // Metres per degree of longitude shrinks with latitude; without the cosine
-    // term the nearest-point search skews east-west and picks the wrong vertex.
-    const mPerLng = 111320 * Math.cos((userLocation.lat * Math.PI) / 180);
-
-    let bestIdx = start;
-    let bestSq = Infinity;
-    for (let i = start; i <= end; i++) {
-      const p = routeCoords[i];
-      const dy = (p.latitude - userLocation.lat) * 110540;
-      const dx = (p.longitude - userLocation.lng) * mPerLng;
-      const sq = dy * dy + dx * dx;
-      if (sq < bestSq) { bestSq = sq; bestIdx = i; }
-    }
-
-    // Monotonic: only ever move forward. GPS jitter must not un-consume road
-    // the driver has already covered.
-    if (bestIdx > currentRouteIndex) setCurrentRouteIndex(bestIdx);
-  }, [userLocation, routeCoords, showRoute, currentRouteIndex]);
+  const isBottomPanelFull = ['booking_confirm', 'active_parking', 'payment', 'receipt'].includes(step);
 
   // Removed welcome auto-transition
 
@@ -2554,146 +1625,26 @@ export default function FinderDashboard() {
             ref={mapRef}
             viewportHint={viewportHint}
             markers={spots}
-            routeCoords={visibleRouteCoords}
-            altRoutes={showRoute ? altRoutes : []}
-            onSelectAltRoute={(index: number) => {
-              const alt = altRoutes[index];
-              if (alt) {
-                setRouteCoords(alt.coords);
-                setDistanceInfo({ km: (alt.distance / 1000).toFixed(1), mins: Math.ceil(alt.duration / 60).toString() });
-                setAltRoutes([]);
-
-                // Everything derived from the OLD route has to go with it.
-                // Previously only the line was swapped, so the discarded
-                // route's traffic overlay stayed painted on the map (the
-                // leftover marks) and its turn list kept driving the
-                // instruction card.
-                routeStepsRef.current = alt.steps || [];
-                setTrafficSegments(
-                  (alt.steps || [])
-                    .filter((s: any) => s.geometry?.coordinates?.length >= 2)
-                    .map((s: any) => ({ coords: s.geometry.coordinates, congestion: 'low' as const }))
-                );
-                setLaneGuidance([]);
-
-                // This is a deliberate choice, not a suggestion — hold it.
-                userSelectedRoute.current = true;
-              }
-            }}
             destination={(() => {
               if (selectedSpotId) {
                 const s = spots.find(x => x.id === selectedSpotId);
                 if (s) return { lat: s.lat, lng: s.lng };
               }
-              if (showRoute && routeCoords && routeCoords.length > 0) {
-                const last = routeCoords[routeCoords.length - 1];
-                return { lat: last.latitude, lng: last.longitude };
-              }
               return null;
             })()}
-            distanceInfo={distanceInfo}
             searchedPlace={searchedPlace ?? null}
             onRecenter={recenterCamera}
             controlsBottomOffset={['spot_booking', 'booking_confirm'].includes(step) ? 470 : 260}
-            isMuted={isMuted}
             onMapPress={(coords: [number, number]) => {
               fetchNearbySpots(coords[1], coords[0]);
             }}
-            nextInstruction={currentInstruction.turn}
-            speed={navigationData.speed}
-            heading={['en_route', 'navigating', 'arriving'].includes(step) ? navigationData.heading : deviceHeading}
-            userLocation={(simulatedLocation || userLocation) || undefined}
+            heading={deviceHeading}
+            userLocation={userLocation || undefined}
             locationAccuracy={locationAccuracy}
             isFollowing={isFollowing}
             onMapInteraction={() => setIsFollowing(false)}
-            isActiveNavigation={['en_route', 'navigating', 'arriving'].includes(step)}
-            trafficSegments={['en_route', 'navigating'].includes(step) ? trafficSegments : []}
-            speedLimit={['en_route', 'navigating'].includes(step) ? speedLimit : null}
             mapStyleUrl={mapStyleConfig.provider === 'ola' ? mapStyleConfig.styleUrl : undefined}
             mapApiKey={mapStyleConfig.provider === 'ola' ? mapStyleConfig.apiKey : undefined}
-            onMuteToggle={() => setIsMuted(!isMuted)}
-            onOffRoute={(lat: number, lng: number) => {
-              const now = Date.now();
-              if (now - lastRerouteTime.current < 10000) return; // 10s cooldown
-              lastRerouteTime.current = now;
-              const dest = selectedSpotId ? spots.find(s => s.id === selectedSpotId) : null;
-              if (!dest) return;
-
-              // Claim the shared route-fetch state so the MAIN route effect
-              // stands down. Both paths hit /maps/route independently, and the
-              // server logs showed them firing a second apart from slightly
-              // different origins — two routes racing, each overwriting the
-              // other's geometry. That is what made the arrow jump around and
-              // the line redraw mid-turn.
-              lastRouteFetch.current = now;
-              lastRouteFetchPos.current = { lat, lng };
-
-              // The rider has left the route they picked, so that choice no
-              // longer applies — otherwise the hold would block the reroute
-              // and strand them on a line they are not driving.
-              userSelectedRoute.current = false;
-
-              console.log(`[NAV] Off-route detected at ${lat},${lng} — rerouting...`);
-              if (!isMuted) Speech.speak(navLanguage === 'hi-IN' ? 'Naya raasta dhundh rahe hain' : 'Rerouting', { rate: 1.1, pitch: 1.0, language: navLanguage });
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-              (async () => {
-                try {
-                  // Rerouting after going off-route: ask for candidates so the
-                  // recovery route is also the shortest sensible one, rather
-                  // than whatever the provider happens to return first.
-                  const res = await apiClient.get(`/maps/route?start=${lng},${lat}&end=${dest.lng},${dest.lat}&alternatives=true`);
-                  if (res.data.success) {
-                    const route = pickBestRoute(res.data.data.routes || [], { trustProviderOrder: res.data.provider === 'google' });
-                    if (route) {
-                      setRouteCoords(route.geometry.coordinates.map((p: any) => ({ latitude: p[1], longitude: p[0] })));
-                      setDistanceInfo({ km: (route.distance / 1000).toFixed(1), mins: Math.ceil(route.duration / 60).toString() });
-                      if (route.legs?.[0]?.steps) routeStepsRef.current = route.legs[0].steps;
-                      // Show the FIRST turn of the new route immediately rather
-                      // than a placeholder. The old code blanked the banner to
-                      // "Route updated" with an empty street, which the UI
-                      // renders as "Calculating..." — and if step-matching then
-                      // failed to produce anything, that placeholder stuck on
-                      // screen for the rest of the drive with no instruction.
-                      const firstStep = route.legs?.[0]?.steps?.[0];
-                      if (firstStep?.maneuver) {
-                        const { action, icon } = parseManeuver(firstStep);
-                        const d = firstStep.distance || 0;
-                        const distText = d < 50
-                          ? 'Now'
-                          : d < 1000
-                            ? `${Math.round(d / 10) * 10} m`
-                            : `${(d / 1000).toFixed(1)} km`;
-                        const nm = firstStep.name || '';
-                        setCurrentInstruction({
-                          turn: action,
-                          street: nm ? (distText === 'Now' ? nm : `${distText} · ${nm}`) : distText,
-                          icon,
-                        });
-                      } else {
-                        setCurrentInstruction({ turn: 'Route updated', street: '', icon: '🔄' });
-                      }
-                      setNextTurnPreview({ turn: '', icon: '' });
-                      setIsFollowing(true);
-                      console.log(`[NAV] Rerouted! ${route.geometry.coordinates.length} points`);
-                    } else {
-                      // Server answered but gave us nothing usable — treat it
-                      // as a failure so the cooldown is released and we retry.
-                      throw new Error('reroute returned no usable route');
-                    }
-                  } else {
-                    throw new Error('reroute request unsuccessful');
-                  }
-                } catch (e) {
-                  console.warn('[NAV] Reroute failed — will retry on next fix', e);
-                  // Release the cooldown. It was claimed BEFORE the request, so
-                  // leaving it set after a failure would strand the driver on a
-                  // stale route for a further 10s — and if the failures persist
-                  // (a network drop, or the 429 storm), they would never get a
-                  // new route at all. Back off briefly instead of fully.
-                  lastRerouteTime.current = Date.now() - 8000;
-                }
-              })();
-            }}
             onMarkerPress={(id: string) => {
               const spot = spots.find(s => s.id === id);
               if (spot && !spot.available) {
@@ -2717,12 +1668,6 @@ export default function FinderDashboard() {
               setStep('home');
               setSelectedSpotId(null);
               setSearchedPlace(null);
-              setRouteCoords([]);
-              setAltRoutes([]);
-              setDistanceInfo({ km: '0', mins: '0' });
-              setTrafficSegments([]);
-              setSpeedLimit(null);
-              setLaneGuidance([]);
               if (userLocation && mapRef.current) {
                 mapRef.current.animateCamera({
                   center: { latitude: userLocation.lat, longitude: userLocation.lng },
@@ -2733,14 +1678,11 @@ export default function FinderDashboard() {
             hideControls={['spot_booking'].includes(step)}
           />
 
-          {/* Floating OTP Badge — only on arrival, not during navigation */}
         </View>
       )}
 
-      {/* Google Maps Style Instruction Banner */}
-
       {/* FLOATING BACK/HOME BUTTON — rendered AFTER map so it sits on top of WebView */}
-      {['spot_booking', 'en_route', 'navigating', 'arriving', 'booking_confirm', 'active_parking', 'checkout_verification', 'awaiting_owner', 'payment'].includes(step) && (
+      {['spot_booking', 'booking_confirm', 'active_parking', 'checkout_verification', 'awaiting_owner', 'payment'].includes(step) && (
         <TouchableOpacity
           style={{
             position: 'absolute',
@@ -2765,33 +1707,12 @@ export default function FinderDashboard() {
             if (step === 'home' && searchedPlace !== null) {
               setSearchedPlace(null);
               setSearchQuery('');
-            } else if (['en_route', 'navigating', 'arriving'].includes(step)) {
-              Alert.alert('Exit Navigation', 'Are you sure you want to exit navigation?', [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                  text: 'Yes, Exit', onPress: () => {
-                    setStep('home');
-                    setSelectedSpotId(null);
-                    setRouteCoords([]);
-                    setSimulatedLocation(null);
-                    setArrivalDetected(false);
-                    setCurrentInstruction({ turn: '', street: '', icon: '' });
-                    setTrafficSegments([]);
-                    setSpeedLimit(null);
-                    setLaneGuidance([]);
-                    if (userLocation) {
-                      fetchNearbySpots(userLocation.lat, userLocation.lng);
-                      if (mapRef.current) {
-                        mapRef.current.animateCamera({
-                          center: { latitude: userLocation.lat, longitude: userLocation.lng },
-                          zoom: 15
-                        }, { duration: 1000 });
-                      }
-                    }
-                  }
-                }
-              ]);
-            } else if (['spot_booking', 'booking_confirm'].includes(step)) {
+            } else if (step === 'booking_confirm') {
+              // The booking stays; the Resume card brings it back.
+              setStep('home');
+              setSelectedSpotId(null);
+              checkResumable();
+            } else if (step === 'spot_booking') {
               setStep('home');
               setSelectedSpotId(null);
               setSlotData([]);
@@ -2809,100 +1730,6 @@ export default function FinderDashboard() {
           <Ionicons name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
       )}
-      {/* Directions Banner / Arrival Banner */}
-      {['navigating', 'en_route', 'arriving'].includes(step) && !isInPip && (
-        arrivalDetected ? (
-          /* ── Arrival banner with Check In button ── */
-          <View style={{ position: 'absolute', top: 50, left: 16, right: 16, backgroundColor: '#0f172a', borderRadius: 24, padding: 20, alignItems: 'center', shadowColor: '#10b981', shadowOpacity: 0.4, shadowRadius: 20, zIndex: 1000, borderWidth: 1.5, borderColor: 'rgba(16,185,129,0.4)' }}>
-            <Text style={{ fontSize: 28, marginBottom: 8 }}>🎉</Text>
-            <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900', marginBottom: 4 }}>You have arrived!</Text>
-            <Text style={{ color: '#94a3b8', fontSize: 13, fontWeight: '500', marginBottom: 16 }} numberOfLines={1}>{spots.find(s => s.id === selectedSpotId)?.title || 'Parking Spot'}</Text>
-            <TouchableOpacity
-              activeOpacity={0.8}
-              style={{ backgroundColor: '#10b981', paddingVertical: 16, borderRadius: 18, alignItems: 'center', width: '100%' }}
-              onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); setStep('arriving'); }}
-            >
-              <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Check In</Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          /* ── Turn-by-turn directions banner ── */
-          <View style={{ position: 'absolute', top: 50, left: 16, right: 16, backgroundColor: '#1E293B', borderRadius: 24, padding: 16, shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 20, zIndex: 1000, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <View style={{ width: 52, height: 52, backgroundColor: '#1a73e8', borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginRight: 14 }}>
-                <Text style={{ fontSize: 28 }}>{currentInstruction.icon || '⬆️'}</Text>
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900' }} numberOfLines={1}>{currentInstruction.turn || 'Head straight'}</Text>
-                <Text style={{ color: '#94a3b8', fontSize: 13, fontWeight: '600', marginTop: 3 }} numberOfLines={1}>{currentInstruction.street || 'Calculating...'}</Text>
-              </View>
-            </View>
-            {/* Lane guidance arrows */}
-            {laneGuidance.length > 0 ? (
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.06)', gap: 4 }}>
-                {laneGuidance.map((lane, li) => {
-                  const arrow = lane.indications?.includes('left') ? '←'
-                    : lane.indications?.includes('slight_left') ? '↖'
-                    : lane.indications?.includes('sharp_left') ? '↰'
-                    : lane.indications?.includes('right') ? '→'
-                    : lane.indications?.includes('slight_right') ? '↗'
-                    : lane.indications?.includes('sharp_right') ? '↱'
-                    : lane.indications?.includes('uturn') ? '↩'
-                    : '↑';
-                  return (
-                    <View key={li} style={{
-                      width: 28, height: 28, borderRadius: 6,
-                      backgroundColor: lane.valid ? 'rgba(66,133,244,0.25)' : 'rgba(255,255,255,0.06)',
-                      borderWidth: lane.valid ? 1.5 : 1,
-                      borderColor: lane.valid ? '#4285F4' : 'rgba(255,255,255,0.1)',
-                      alignItems: 'center', justifyContent: 'center'
-                    }}>
-                      <Text style={{ fontSize: 14, color: lane.valid ? '#4285F4' : '#64748b', fontWeight: '800' }}>{arrow}</Text>
-                    </View>
-                  );
-                })}
-              </View>
-            ) : null}
-            {/* Next-turn preview strip */}
-            {nextTurnPreview.turn ? (
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 10, paddingTop: 10, paddingBottom: 2, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.06)' }}>
-                <Text style={{ fontSize: 16, marginRight: 8 }}>{nextTurnPreview.icon}</Text>
-                <Text style={{ color: '#94a3b8', fontSize: 13, fontWeight: '700' }}>{nextTurnPreview.turn}</Text>
-              </View>
-            ) : null}
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: nextTurnPreview.turn ? 8 : 12, paddingTop: nextTurnPreview.turn ? 8 : 12, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.06)' }}>
-              <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 16 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 4 }}>
-                  <Text style={{ color: '#10b981', fontSize: 16, fontWeight: '900' }}>{distanceInfo.km}</Text>
-                  <Text style={{ color: '#64748b', fontSize: 11, fontWeight: '700' }}>km</Text>
-                </View>
-                <View style={{ width: 1, height: 16, backgroundColor: 'rgba(255,255,255,0.08)' }} />
-                <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 4 }}>
-                  <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>{distanceInfo.mins}</Text>
-                  <Text style={{ color: '#64748b', fontSize: 11, fontWeight: '700' }}>min</Text>
-                </View>
-              </View>
-              <TouchableOpacity
-                onPress={() => {
-                  const langs = ['en-IN', 'hi-IN', 'ta-IN', 'te-IN', 'kn-IN'];
-                  const idx = langs.indexOf(navLanguage);
-                  setNavLanguage(langs[(idx + 1) % langs.length]);
-                }}
-                style={{ width: 36, height: 36, backgroundColor: navLanguage !== 'en-IN' ? 'rgba(66,133,244,0.2)' : 'rgba(255,255,255,0.06)', borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginRight: 8, borderWidth: navLanguage !== 'en-IN' ? 1 : 0, borderColor: '#4285F4' }}
-              >
-                <Text style={{ color: navLanguage !== 'en-IN' ? '#4285F4' : '#94a3b8', fontSize: 10, fontWeight: '900' }}>
-                  {navLanguage === 'hi-IN' ? 'हि' : navLanguage === 'ta-IN' ? 'த' : navLanguage === 'te-IN' ? 'తె' : navLanguage === 'kn-IN' ? 'ಕ' : 'EN'}
-                </Text>
-              </TouchableOpacity>
-              <View style={{ width: 44, height: 44, backgroundColor: 'rgba(255,255,255,0.06)', borderRadius: 22, alignItems: 'center', justifyContent: 'center' }}>
-                <Text style={{ color: '#fff', fontSize: 15, fontWeight: '900' }}>{Math.round(navigationData.speed * 3.6)}</Text>
-                <Text style={{ color: '#64748b', fontSize: 7, fontWeight: '800' }}>km/h</Text>
-              </View>
-            </View>
-          </View>
-        )
-      )}
-
       {/* STEP 5: SPOT BOOKING BOTTOM SHEET */}
       {step === 'spot_booking' && (
         <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, maxHeight: '50%', backgroundColor: '#0f172a', borderTopLeftRadius: 28, borderTopRightRadius: 28, shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 30, elevation: 20, zIndex: 1000, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' }}>
@@ -3246,235 +2073,21 @@ export default function FinderDashboard() {
       {!['welcome', 'vehicle_select', 'home', 'spot_booking'].includes(step) && (
         <>
 
-          {step === 'en_route' && !isInPip && (
-            <>
-
-              <View style={{ position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#0f172a', borderTopLeftRadius: 32, borderTopRightRadius: 32, paddingBottom: 40, paddingTop: 20, shadowColor: '#000', shadowOpacity: 0.5, shadowRadius: 30, elevation: 30, borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' }}>
-                <View style={{ width: 48, height: 5, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 3, alignSelf: 'center', marginBottom: 20 }} />
-                
-                {arrivalDetected ? (
-                  <View style={{ paddingHorizontal: 24 }}>
-                    {/* Spot name */}
-                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-                      <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: 'rgba(16,185,129,0.12)', alignItems: 'center', justifyContent: 'center', marginRight: 10 }}>
-                        <Ionicons name="location" size={18} color="#10b981" />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }} numberOfLines={1}>{spots.find(s => s.id === selectedSpotId)?.title || 'Parking Spot'}</Text>
-                        <Text style={{ color: '#94a3b8', fontSize: 11, fontWeight: '500', marginTop: 2 }}>Slot {selectedSlot?.split('_').pop() || '—'} · Booking #{bookingDetails?.id}</Text>
-                      </View>
-                    </View>
-
-                    {/* PIN */}
-                    <View style={{ backgroundColor: 'rgba(16,185,129,0.06)', paddingVertical: 16, paddingHorizontal: 20, borderRadius: 20, borderWidth: 1, borderColor: 'rgba(16,185,129,0.15)', marginBottom: 16, alignItems: 'center' }}>
-                      <Text style={{ fontSize: 9, color: '#10b981', fontWeight: '800', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1.5 }}>Check-in PIN</Text>
-                      <Text selectable={true} style={{ fontSize: 32, fontWeight: '900', color: '#fff', letterSpacing: 6 }}>{bookingDetails?.otp}</Text>
-                    </View>
-
-                    {/* Check In + Close */}
-                    <View style={{ flexDirection: 'row', gap: 12, width: '100%' }}>
-                      <TouchableOpacity
-                        activeOpacity={0.8}
-                        style={{ flex: 1, backgroundColor: '#10b981', paddingVertical: 16, borderRadius: 18, alignItems: 'center', shadowColor: '#10b981', shadowOpacity: 0.3, shadowRadius: 10, elevation: 5 }}
-                        onPress={() => {
-                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                          setStep('arriving');
-                        }}
-                      >
-                        <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Check In</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        activeOpacity={0.8}
-                        style={{ backgroundColor: 'rgba(255,255,255,0.05)', paddingHorizontal: 20, borderRadius: 18, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' }}
-                        onPress={() => {
-                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                          setStep('home');
-                          setSelectedSpotId(null);
-                          setRouteCoords([]);
-                          setSimulatedLocation(null);
-                          setArrivalDetected(false);
-                          setCurrentInstruction({ turn: '', street: '', icon: '' });
-                          if (userLocation) {
-                            fetchNearbySpots(userLocation.lat, userLocation.lng);
-                            if (mapRef.current) {
-                              mapRef.current.animateCamera({
-                                center: { latitude: userLocation.lat, longitude: userLocation.lng },
-                                zoom: 15
-                              }, { duration: 1000 });
-                            }
-                          }
-                        }}
-                      >
-                        <Ionicons name="close" size={24} color="#fff" />
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                ) : (
-                  <>
-                    {/* Destination info */}
-                    <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, marginBottom: 16 }}>
-                      <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: 'rgba(99,102,241,0.12)', alignItems: 'center', justifyContent: 'center', marginRight: 10 }}>
-                        <Ionicons name="navigate" size={18} color="#818cf8" />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={{ color: '#fff', fontSize: 14, fontWeight: '800' }} numberOfLines={1}>{spots.find(s => s.id === selectedSpotId)?.title || 'Destination'}</Text>
-                        <Text style={{ color: '#64748b', fontSize: 11, fontWeight: '500', marginTop: 1 }}>Slot {selectedSlot?.split('_').pop() || '—'}</Text>
-                      </View>
-                    </View>
-
-                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-evenly', paddingHorizontal: 20 }}>
-                      <View style={{ alignItems: 'center' }}>
-                        <Text style={{ color: '#fff', fontSize: 28, fontWeight: '900' }}>{distanceInfo.km}</Text>
-                        <Text style={{ color: '#64748b', fontSize: 12, fontWeight: '800', textTransform: 'uppercase', marginTop: 2 }}>km</Text>
-                      </View>
-                      <View style={{ width: 1, height: 40, backgroundColor: 'rgba(255,255,255,0.05)' }} />
-                      <View style={{ alignItems: 'center' }}>
-                        <Text style={{ color: '#10b981', fontSize: 28, fontWeight: '900' }}>{distanceInfo.mins}</Text>
-                        <Text style={{ color: '#64748b', fontSize: 12, fontWeight: '800', textTransform: 'uppercase', marginTop: 2 }}>min</Text>
-                      </View>
-                      <View style={{ width: 1, height: 40, backgroundColor: 'rgba(255,255,255,0.05)' }} />
-                      <TouchableOpacity
-                        activeOpacity={0.8}
-                        style={{ backgroundColor: '#f43f5e', paddingHorizontal: 24, paddingVertical: 14, borderRadius: 16, shadowColor: '#f43f5e', shadowOpacity: 0.2, shadowRadius: 10 }}
-                        onPress={() => {
-                          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                          Alert.alert('Exit Navigation', 'Are you sure you want to stop navigating?', [
-                            { text: 'Cancel', style: 'cancel' },
-                            {
-                              text: 'Yes, Exit', onPress: () => {
-                                setStep('home');
-                                setSelectedSpotId(null);
-                                setRouteCoords([]);
-                                setSimulatedLocation(null);
-                                setArrivalDetected(false);
-                                setCurrentInstruction({ turn: '', street: '', icon: '' });
-                                if (userLocation) {
-                                  fetchNearbySpots(userLocation.lat, userLocation.lng);
-                                  if (mapRef.current) {
-                                    mapRef.current.animateCamera({
-                                      center: { latitude: userLocation.lat, longitude: userLocation.lng },
-                                      zoom: 15
-                                    }, { duration: 1000 });
-                                  }
-                                }
-                              }
-                            }
-                          ]);
-                        }}
-                      >
-                        <Ionicons name="close" size={24} color="#fff" />
-                      </TouchableOpacity>
-                    </View>
-                  </>
-                )}
-              </View>
-
-
-            </>
-          )}
-
-          {step !== 'en_route' && !isInPip && (
+          {(
             <View style={[styles.bottomPanelContainer, isBottomPanelFull && { bottom: 0, left: 0, right: 0 }]}>
               <View style={[BlueprintTheme.glassCard, isBottomPanelFull && { borderRadius: 0, borderTopLeftRadius: 32, borderTopRightRadius: 32, paddingBottom: 40 }]}>
-                {step === 'booking_confirm' && (
-                  <View style={{ alignItems: 'center', paddingVertical: 10 }}>
-                    <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: '#10b981', justifyContent: 'center', alignItems: 'center', marginBottom: 16 }}>
-                      <Ionicons name="checkmark" size={50} color="#fff" />
-                    </View>
-                    <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', marginBottom: 4, letterSpacing: -0.5 }}>Confirmed!</Text>
-                    <Text style={{ color: '#94a3b8', fontSize: 13, marginBottom: 20, textAlign: 'center' }}>Spot reserved and ready.</Text>
-
-                    <View style={{ backgroundColor: 'rgba(255,255,255,0.03)', padding: 18, borderRadius: 24, width: '100%', marginBottom: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' }}>
-                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16 }}>
-                        <View>
-                          <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 2 }}>ID</Text>
-                          <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>#{bookingDetails?.id}</Text>
-                        </View>
-                        <View style={{ alignItems: 'flex-end' }}>
-                          <Text style={{ color: '#64748b', fontSize: 10, fontWeight: '800', marginBottom: 2 }}>SLOT</Text>
-                          <Text style={{ color: '#6366f1', fontSize: 16, fontWeight: '900' }}>{selectedSlot?.split('_').pop()}</Text>
-                        </View>
-                      </View>
-
-                      <View style={{ backgroundColor: 'rgba(16,185,129,0.05)', padding: 14, borderRadius: 16, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(16,185,129,0.1)' }}>
-                        <Text style={{ color: '#94a3b8', fontSize: 10, fontWeight: '800', marginBottom: 6 }}>PIN ON ARRIVAL</Text>
-                        <Text style={{ color: '#64748b', fontSize: 13, fontWeight: '600' }}>Your check-in PIN will appear when you arrive</Text>
-                      </View>
-                    </View>
-                    {navCountdown !== null && (
-                      <View style={{ alignItems: 'center', marginBottom: 16 }}>
-                        <Text style={{ color: '#94a3b8', fontSize: 13, fontWeight: '600' }}>Starting navigation in</Text>
-                        <Text style={{ color: '#6366f1', fontSize: 36, fontWeight: '900', marginTop: 4 }}>{navCountdown}</Text>
-                        <TouchableOpacity onPress={() => setNavCountdown(null)} style={{ marginTop: 8 }}>
-                          <Text style={{ color: '#f43f5e', fontSize: 13, fontWeight: '700' }}>Cancel auto-start</Text>
-                        </TouchableOpacity>
-                      </View>
-                    )}
-
-                    <TouchableOpacity 
-                      activeOpacity={0.9}
-                      style={{ 
-                        backgroundColor: '#6366f1', 
-                        paddingVertical: 18, borderRadius: 20, 
-                        width: '100%', alignItems: 'center',
-                      }} 
-                      onPress={() => {
-                        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                        // No camera work here — the map owns the navigation
-                        // camera. See the countdown handler for why the two
-                        // moves that used to be here (user @ zoom 17, then the
-                        // route midpoint @ zoom 15 flat) fought each other and
-                        // opened navigation on empty countryside.
-                        if (routeCoords.length > 0) {
-                          setSimulatedLocation({ lat: routeCoords[0].latitude, lng: routeCoords[0].longitude });
-                        }
-                        setIsFollowing(true);
-                        setStep('en_route');
-                      }}
-                    >
-                      <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Start Navigation</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-
-                {step === 'arriving' && (
-                  <View style={{ paddingVertical: 10 }}>
-                    {/* Spot name header */}
-                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-                      <View style={{ width: 40, height: 40, borderRadius: 12, backgroundColor: 'rgba(16,185,129,0.12)', alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
-                        <Ionicons name="location" size={20} color="#10b981" />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={{ color: '#fff', fontSize: 18, fontWeight: '900', letterSpacing: -0.3 }} numberOfLines={1}>{spots.find(s => s.id === selectedSpotId)?.title || 'Parking Spot'}</Text>
-                        <Text style={{ color: '#94a3b8', fontSize: 12, fontWeight: '500', marginTop: 2 }}>Show PIN to the spot owner to check in</Text>
-                      </View>
-                    </View>
-
-                    {/* PIN display — large and prominent */}
-                    <View style={{ backgroundColor: 'rgba(16,185,129,0.06)', padding: 24, borderRadius: 24, alignItems: 'center', borderWidth: 1.5, borderColor: 'rgba(16,185,129,0.15)', marginBottom: 16 }}>
-                      <Text style={{ fontSize: 10, color: '#10b981', fontWeight: '800', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 2 }}>Check-in PIN</Text>
-                      <Text selectable={true} style={{ fontSize: 48, fontWeight: '900', color: '#fff', letterSpacing: 10 }}>{bookingDetails?.otp}</Text>
-                    </View>
-
-                    {/* Booking ID and Slot */}
-                    <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
-                      <View style={{ flex: 1, backgroundColor: 'rgba(255,255,255,0.04)', padding: 14, borderRadius: 16, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' }}>
-                        <Text style={{ fontSize: 9, color: '#64748b', fontWeight: '800', marginBottom: 4, textTransform: 'uppercase' }}>Booking ID</Text>
-                        <Text style={{ fontSize: 18, fontWeight: '900', color: '#fff' }}>#{bookingDetails?.id}</Text>
-                      </View>
-                      <View style={{ flex: 1, backgroundColor: 'rgba(255,255,255,0.04)', padding: 14, borderRadius: 16, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' }}>
-                        <Text style={{ fontSize: 9, color: '#64748b', fontWeight: '800', marginBottom: 4, textTransform: 'uppercase' }}>Slot</Text>
-                        <Text style={{ fontSize: 18, fontWeight: '900', color: '#6366f1' }}>{selectedSlot?.split('_').pop()}</Text>
-                      </View>
-                    </View>
-
-                    {/* Waiting for host */}
-                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingVertical: 14, backgroundColor: 'rgba(99,102,241,0.06)', borderRadius: 16, borderWidth: 1, borderColor: 'rgba(99,102,241,0.12)' }}>
-                      <ActivityIndicator size="small" color="#818cf8" />
-                      <Text style={{ color: '#818cf8', fontWeight: '700', fontSize: 13 }}>Waiting for host to verify...</Text>
-                    </View>
-                  </View>
-                )}
+                {step === 'booking_confirm' && (() => {
+                  const spot = spots.find(s => s.id === selectedSpotId);
+                  return (
+                    <BookedPanel
+                      spotTitle={spot?.title}
+                      slot={(selectedSlot || (bookingDetails as any)?.slot_name || '').split('_').pop() || '—'}
+                      bookingId={bookingDetails?.id}
+                      otp={bookingDetails?.otp}
+                      onNavigate={spot ? () => openDirections(spot.lat, spot.lng) : undefined}
+                    />
+                  );
+                })()}
 
                 {step === 'active_parking' && (
                   <View style={{ paddingVertical: 10 }}>
@@ -3552,12 +2165,12 @@ export default function FinderDashboard() {
                         onPress={async () => {
                           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
                           const spot = spots.find(s => s.id === selectedSpotId);
-                          const currentLoc = simulatedLocation || userLocation;
+                          const currentLoc = userLocation;
                           
                           if (spot && currentLoc) {
                             const dist = getDistanceKm(spot.lat, spot.lng, currentLoc.lat, currentLoc.lng) * 1000;
                             if (dist > 250) { 
-                               Alert.alert("Geofence Warning", "Too far from spot. Return to verify checkout.");
+                               Alert.alert("Too far from the spot", "Go back to the spot to end your session.");
                                return;
                             }
                           }
@@ -3715,117 +2328,29 @@ export default function FinderDashboard() {
                 )}
 
                 {step === 'payment' && (
-                  <View style={{ paddingVertical: 10 }}>
-                    <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', marginBottom: 16, letterSpacing: -0.5 }}>Review & Pay</Text>
-                    
-                    <View style={{ backgroundColor: 'rgba(255,255,255,0.03)', padding: 18, borderRadius: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', marginBottom: 20 }}>
-                      <View style={{ gap: 12 }}>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                          <Text style={{ color: '#94a3b8', fontWeight: '600', fontSize: 13 }}>Stay</Text>
-                          <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>{isLongParking ? 'Long' : `${parkingHours}h ${parkingMinutes}m`}</Text>
-                        </View>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                          <Text style={{ color: '#94a3b8', fontWeight: '600', fontSize: 13 }}>Rate</Text>
-                          <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>₹{spots.find(s => s.id === selectedSpotId)?.price}/hr</Text>
-                        </View>
-                        <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.05)', marginVertical: 4 }} />
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Base Price</Text>
-                          <Text style={{ color: '#6366f1', fontSize: 18, fontWeight: '900' }}>₹{Number(bookingDetails?.basePrice || bookingDetails?.totalPrice || 0).toFixed(2)}</Text>
-                        </View>
-                        {(bookingDetails?.arrears || 0) > 0 && (
-                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
-                            <Text style={{ color: '#f43f5e', fontSize: 14, fontWeight: '800' }}>Previous Arrears</Text>
-                            <Text style={{ color: '#f43f5e', fontSize: 16, fontWeight: '900' }}>₹{Number(bookingDetails?.arrears || 0).toFixed(2)}</Text>
-                          </View>
-                        )}
-                        <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.05)', marginVertical: 8 }} />
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <Text style={{ color: '#fff', fontSize: 20, fontWeight: '900' }}>Total Due</Text>
-                          <Text style={{ color: '#6366f1', fontSize: 28, fontWeight: '900' }}>₹{Number(bookingDetails?.finalAmount || bookingDetails?.totalPrice || 0).toFixed(2)}</Text>
-                        </View>
-                      </View>
-                    </View>
-
-                    <TouchableOpacity 
-                      activeOpacity={0.9}
-                      style={{ 
-                        backgroundColor: '#6366f1', 
-                        paddingVertical: 18, borderRadius: 20, 
-                        alignItems: 'center',
-                      }} 
-                      disabled={isLoading || isRazorpayVisible}
-                      onPress={() => {
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                        handleRazorpayPay();
-                      }}
-                    >
-                      <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>
-                        {isLoading ? 'Processing...' : 'Pay now'}
-                      </Text>
-                    </TouchableOpacity>
-                    <Text style={{ color: '#94a3b8', fontSize: 11, textAlign: 'center', marginTop: 10 }}>
-                      UPI, cards and netbanking via Razorpay
-                    </Text>
-
-                  </View>
+                  <PaymentPanel
+                    bookingId={bookingDetails?.id}
+                    ratePerHour={spots.find(s => s.id === selectedSpotId)?.price}
+                    fallbackTotal={Number(bookingDetails?.finalAmount || bookingDetails?.totalPrice || 0)}
+                    busy={isLoading || isRazorpayVisible}
+                    onPay={handleRazorpayPay}
+                  />
                 )}
 
                 {step === 'receipt' && (
-                  <View style={{ paddingVertical: 10 }}>
-                    <View style={{ alignItems: 'center', marginBottom: 20 }}>
-                      <View style={{ width: 64, height: 64, borderRadius: 32, backgroundColor: '#10b981', justifyContent: 'center', alignItems: 'center', marginBottom: 12 }}>
-                        <Ionicons name="checkmark" size={36} color="#fff" />
-                      </View>
-                      <Text style={{ color: '#fff', fontSize: 22, fontWeight: '900', letterSpacing: -0.5 }}>Payment Complete</Text>
-                    </View>
-
-                    <View style={{ backgroundColor: 'rgba(255,255,255,0.03)', padding: 18, borderRadius: 24, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', marginBottom: 20 }}>
-                      <View style={{ gap: 10 }}>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                          <Text style={{ color: '#94a3b8', fontSize: 12, fontWeight: '600' }}>Booking ID</Text>
-                          <Text style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>#{bookingDetails?.id}</Text>
-                        </View>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                          <Text style={{ color: '#94a3b8', fontSize: 12, fontWeight: '600' }}>Spot</Text>
-                          <Text style={{ color: '#fff', fontSize: 12, fontWeight: '800' }} numberOfLines={1}>{spots.find(s => s.id === selectedSpotId)?.title || '—'}</Text>
-                        </View>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                          <Text style={{ color: '#94a3b8', fontSize: 12, fontWeight: '600' }}>Slot</Text>
-                          <Text style={{ color: '#6366f1', fontSize: 12, fontWeight: '800' }}>{selectedSlot?.split('_').pop() || '—'}</Text>
-                        </View>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                          <Text style={{ color: '#94a3b8', fontSize: 12, fontWeight: '600' }}>Duration</Text>
-                          <Text style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>{isLongParking ? 'Long Term' : `${parkingHours}h ${parkingMinutes > 0 ? `${parkingMinutes}m` : ''}`}</Text>
-                        </View>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                          <Text style={{ color: '#94a3b8', fontSize: 12, fontWeight: '600' }}>Payment</Text>
-                          <Text style={{ color: '#fff', fontSize: 12, fontWeight: '800' }}>{bookingDetails?.payment_mode === 'cash' ? 'Cash' : 'Online'}</Text>
-                        </View>
-                        <View style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.05)', marginVertical: 4 }} />
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Amount Paid</Text>
-                          <Text style={{ color: '#10b981', fontSize: 22, fontWeight: '900' }}>₹{Number(bookingDetails?.finalAmount || bookingDetails?.totalPrice || bookingDetails?.total_price || 0).toFixed(2)}</Text>
-                        </View>
-                      </View>
-                    </View>
-
-                    <TouchableOpacity
-                      activeOpacity={0.9}
-                      style={{ backgroundColor: '#6366f1', paddingVertical: 18, borderRadius: 20, width: '100%', alignItems: 'center' }}
-                      onPress={() => {
-                        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                        setStep('home');
-                        setSelectedSpotId(null);
-                        setBookingDetails(null);
-                        setSelectedSlot('');
-                        setParkingHours(1);
-                        setArrivalDetected(false);
-                      }}
-                    >
-                      <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Back to Home</Text>
-                    </TouchableOpacity>
-                  </View>
+                  <ReceiptPanel
+                    bookingId={bookingDetails?.id}
+                    spotTitle={spots.find(s => s.id === selectedSpotId)?.title}
+                    slot={(selectedSlot || (bookingDetails as any)?.slot_name || '').split('_').pop() || '—'}
+                    amount={Number(bookingDetails?.finalAmount || bookingDetails?.totalPrice || bookingDetails?.total_price || 0)}
+                    onDone={() => {
+                      setStep('home');
+                      setSelectedSpotId(null);
+                      setBookingDetails(null);
+                      setSelectedSlot('');
+                      setParkingHours(1);
+                    }}
+                  />
                 )}
 
               </View>

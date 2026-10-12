@@ -7,31 +7,6 @@ const prisma = require('../config/prisma');
 class PaymentController {
 
   /**
-   * 💳 ADD PAYMENT METHOD
-   */
-  static async addPaymentMethod(req, res) {
-    try {
-      const { provider, token, type, last4, brand } = req.body;
-      if (!provider || !token || !type) {
-        return res.status(400).json({ success: false, message: 'Provider, token, and type are required' });
-      }
-
-      const method = await PaymentService.addPaymentMethod(req.user.id, {
-        provider, token, type, last4, brand
-      });
-
-      res.status(201).json({
-        success: true,
-        message: 'Payment method saved securely',
-        data: method
-      });
-    } catch (error) {
-      logger.error('Add Payment Method error:', error);
-      res.status(500).json({ success: false, message: 'Failed to save payment method' });
-    }
-  }
-
-  /**
    * 🏦 GET SAVED PAYMENT METHODS
    */
   static async getPaymentMethods(req, res) {
@@ -50,32 +25,6 @@ class PaymentController {
       res.status(500).json({ success: false, message: 'Failed to retrieve payment methods' });
     }
   }
-  /**
-   * 🏦 SET DEFAULT METHOD
-   */
-  static async setDefaultMethod(req, res) {
-    try {
-      const { id } = req.params;
-      
-      // Transaction to ensure atomicity
-      await prisma.$transaction([
-        prisma.payment_methods.updateMany({
-          where: { user_id: req.user.id },
-          data: { is_default: false }
-        }),
-        prisma.payment_methods.update({
-          where: { id: parseInt(id), user_id: req.user.id },
-          data: { is_default: true }
-        })
-      ]);
-
-      res.json({ success: true, message: 'Primary payment method updated' });
-    } catch (error) {
-      logger.error('Set Default Method error:', error);
-      res.status(500).json({ success: false, message: 'Failed to update primary method' });
-    }
-  }
-
   /**
    * 📜 GET TRANSACTION HISTORY
    */

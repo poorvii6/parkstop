@@ -17,12 +17,6 @@ router.post('/booking-qr', authenticate, authorize('FINDER', 'SPOTTER'), Payment
 /**
  * 💳 MANAGE PAYMENT METHODS
  */
-router.post(
-  '/methods',
-  authenticate,
-  authorize('FINDER', 'SPOTTER'),
-  PaymentController.addPaymentMethod
-);
 
 router.get(
   '/methods',
@@ -36,13 +30,6 @@ router.get(
   authenticate,
   authorize('FINDER', 'SPOTTER'),
   PaymentController.getPaymentHistory
-);
-
-router.put(
-  '/methods/:id/default',
-  authenticate,
-  authorize('FINDER', 'SPOTTER'),
-  PaymentController.setDefaultMethod
 );
 
 router.post(

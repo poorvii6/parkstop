@@ -302,36 +302,6 @@ class PaymentService {
   }
 
   /**
-   * 💳 ADD PAYMENT METHOD (Secure Tokenization)
-   */
-  static async addPaymentMethod(userId, { provider, token, type, last4, brand }) {
-    try {
-      const paymentMethod = await prisma.payment_methods.create({
-        data: {
-          user_id: parseInt(userId),
-          provider,
-          provider_method_id: token,
-          method_type: type,
-          last4,
-          brand,
-          is_default: true
-        }
-      });
-
-      // Unset other default methods
-      await prisma.payment_methods.updateMany({
-        where: { user_id: parseInt(userId), id: { not: paymentMethod.id } },
-        data: { is_default: false }
-      });
-
-      return paymentMethod;
-    } catch (error) {
-      logger.error('Error adding payment method:', error);
-      throw error;
-    }
-  }
-
-  /**
    * 💸 PROCESS REFUND
    */
   static async processRefund(bookingId, amount) {

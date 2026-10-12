@@ -34,7 +34,6 @@ export default function RootLayout() {
         <Stack.Screen name="admin/verification/[userId]" options={{ headerShown: false, animation: 'slide_from_right' }} />
 
         {/* 7. Overlays */}
-        <Stack.Screen name="payments" options={{ headerShown: false, animation: 'slide_from_right' }} />
         <Stack.Screen name="notifications" options={{ headerShown: false, animation: 'slide_from_right' }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', headerShown: false }} />
       </Stack>

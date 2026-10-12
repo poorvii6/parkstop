@@ -286,27 +286,6 @@ class NotificationService {
   }
 
   /**
-   * Notify spotter that finder is nearby
-   */
-  static async notifyFinderNearby(spotterId, booking, distance) {
-    const finderName = booking.finder_name || 'A driver';
-    const formattedDist = Number(distance).toFixed(1);
-
-    await this.sendNotification(spotterId, {
-      title: 'Finder Nearby',
-      message: `${finderName} is ${formattedDist}km away`,
-      type: 'finder_nearby',
-      data: { bookingId: booking.id },
-    });
-
-    await this.sendPushNotification(spotterId, {
-      title: 'Driver is Nearby! 📍',
-      body: `${finderName} is ${formattedDist}km away. Prepare for arrival.`,
-      data: { bookingId: booking.id, type: 'finder_nearby' },
-    });
-  }
-
-  /**
    * Warn the finder that their reservation is about to lapse.
    *
    * Until now a hold simply vanished: the sweep flipped it to 'expired' and

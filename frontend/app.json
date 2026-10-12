@@ -22,11 +22,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.smartparking.app",
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "Allow Smart Parking to access your location to find nearby parking spots.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "Allow Smart Parking to use your location for navigating to available spots in the background.",
-        "UIBackgroundModes": [
-          "location"
-        ]
+        "NSLocationWhenInUseUsageDescription": "ParkStop uses your location to show parking spots near you."
       }
     },
     "android": {
@@ -38,10 +34,10 @@
       "googleServicesFile": "./google-services.json",
       "permissions": [
         "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION",
-        "ACCESS_BACKGROUND_LOCATION",
-        "FOREGROUND_SERVICE",
-        "FOREGROUND_SERVICE_LOCATION"
+        "ACCESS_COARSE_LOCATION"
+      ],
+      "blockedPermissions": [
+        "android.permission.ACCESS_BACKGROUND_LOCATION"
       ],
       "config": {
         "googleMaps": {
@@ -59,15 +55,14 @@
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "Allow Smart Parking to use your location for navigating to available spots in the background.",
-          "isAndroidForegroundServiceEnabled": true
+          "locationWhenInUsePermission": "ParkStop uses your location to show parking spots near you."
         }
       ],
       [
         "expo-image-picker",
         {
-          "cameraPermission": "Allow Smart Parking to access your camera to take spot photos.",
-          "photosPermission": "Allow Smart Parking to access your photos to upload spot pictures."
+          "cameraPermission": "ParkStop uses your camera to take photos of your parking spot and for owner verification.",
+          "photosPermission": "ParkStop uses your photos so you can upload pictures of your parking spot."
         }
       ],
       "expo-font",

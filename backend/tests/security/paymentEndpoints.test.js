@@ -22,6 +22,8 @@ test('removed payment handlers no longer exist', () => {
   for (const name of [
     'confirmWalletTopUp', 'topUpWallet', 'createClearDuesOrder', 'verifyClearDuesPayment',
     'verifyStripePayment', 'createCheckoutSession',
+    // Took raw card numbers and CVVs: ParkStop must never handle card data.
+    'addPaymentMethod', 'setDefaultMethod',
   ]) {
     expect(PaymentController[name]).toBeUndefined();
   }
@@ -32,7 +34,7 @@ test('removed payment handlers no longer exist', () => {
 
 test('removed payment routes are not mounted', () => {
   const p = paths(paymentRoutes).join('\n');
-  for (const gone of ['/wallet/', '/create-dues-order', '/verify-dues', '/stripe/', '/cashfree/', 'post /checkout']) {
+  for (const gone of ['/wallet/', '/create-dues-order', '/verify-dues', '/stripe/', '/cashfree/', 'post /checkout', 'post /methods', 'put /methods']) {
     expect(p).not.toContain(gone);
   }
   expect(p).toContain('post /razorpay/create-order');
