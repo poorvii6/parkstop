@@ -1,25 +1,8 @@
-const stripeAdapter = require('./payments/StripeAdapter');
 const razorpayAdapter = require('./payments/RazorpayAdapter');
 const prisma = require('../config/prisma');
 const logger = require('../utils/logger');
 
 class PaymentService {
-
-  /**
-   * 🛒 CREATE PAYMENT INTENT (Stripe)
-   */
-  static async createPaymentIntent(amount, userId, bookingId) {
-    try {
-      const { transactionId, client_secret } = await stripeAdapter.createPaymentIntent(amount, {
-        user_id: userId.toString(),
-        booking_id: bookingId ? bookingId.toString() : 'N/A'
-      });
-      return { client_secret, id: transactionId };
-    } catch (error) {
-      logger.error('Error creating Stripe PaymentIntent:', error);
-      throw new Error('Failed to process payment intent.');
-    }
-  }
 
   /**
    * 🛒 CREATE RAZORPAY ORDER
@@ -349,71 +332,6 @@ class PaymentService {
   }
 
   /**
-   * ⚡ SEAMLESS CHARGE (The Uber Experience)
-   */
-  static async chargeUserForBooking(userId, bookingId, amount) {
-    try {
-      const defaultMethod = await prisma.payment_methods.findFirst({
-        where: { user_id: parseInt(userId), is_default: true }
-      });
-
-      if (!defaultMethod) {
-        throw new Error('No default payment method found for user.');
-      }
-
-      let result;
-      const metadata = { booking_id: bookingId.toString(), user_id: userId.toString() };
-
-      if (defaultMethod.provider === 'stripe') {
-        result = await stripeAdapter.charge(amount, 'cus_placeholder', defaultMethod.provider_method_id, metadata);
-      } else if (defaultMethod.provider === 'razorpay') {
-        // For Razorpay, automated charges require subscriptions or emandate.
-        // For this flow, we create an order and return it for frontend completion.
-        const order = await razorpayAdapter.createOrder(amount, `auto_${bookingId}`, metadata);
-        result = { success: true, transactionId: order.orderId, provider: 'razorpay', requiresAction: true, order };
-      }
-
-      if (result.success && !result.requiresAction) {
-        await prisma.bookings.update({
-          where: { id: parseInt(bookingId) },
-          data: {
-            payment_id: result.transactionId,
-            payment_status: 'paid',
-            payment_method_id: defaultMethod.id
-          }
-        });
-      }
-
-      return result;
-    } catch (error) {
-      logger.error('Charge Error:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * 🏦 AUTOMATED PAYOUT
-   */
-  static async splitAndPayout(bookingId, totalAmount, spotterEarning, spotterAccountId, provider = 'stripe') {
-    try {
-      if (!spotterAccountId) return null;
-
-      let payoutId;
-      if (provider === 'stripe') {
-        payoutId = await stripeAdapter.payout(spotterEarning, spotterAccountId, { booking_id: bookingId.toString() });
-      } else {
-        const transfer = await razorpayAdapter.splitAndTransfer(bookingId, spotterEarning, spotterAccountId);
-        payoutId = transfer.id;
-      }
-
-      return payoutId;
-    } catch (error) {
-      logger.error('Payout Error:', error);
-      return null;
-    }
-  }
-
-  /**
    * 💸 PROCESS REFUND
    */
   static async processRefund(bookingId, amount) {
@@ -426,15 +344,8 @@ class PaymentService {
         throw new Error('Booking not found or has no successful payment.');
       }
 
-      let refundId;
-      // Determine provider by payment ID prefix
-      if (booking.payment_id.startsWith('pay_')) {
-        // Razorpay payment IDs start with pay_
-        refundId = await razorpayAdapter.refund(booking.payment_id, amount);
-      } else {
-        // Stripe payment IDs start with pi_
-        refundId = await stripeAdapter.refund(booking.payment_id, amount);
-      }
+      // Razorpay is the only gateway.
+      const refundId = await razorpayAdapter.refund(booking.payment_id, amount);
 
       await prisma.bookings.update({
         where: { id: parseInt(bookingId) },
@@ -444,7 +355,8 @@ class PaymentService {
         }
       });
 
-      return { success: true, refundId };
+      // The refund id itself: BookingRefundService stores it on the booking.
+      return refundId;
     } catch (error) {
       logger.error('Refund Error:', error);
       throw error;

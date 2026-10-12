@@ -200,42 +200,6 @@ export default function VerifyScreen() {
     }
   };
 
-  const handleCheckoutUnpaid = async () => {
-    if (!bookingId) return;
-    setLoading(true);
-    try {
-      const res = await apiClient.put(`/bookings/${bookingId}/checkout-unpaid`);
-      if (res.data?.success) {
-        showToast('Marked unpaid — your earnings were credited to your wallet', 'success');
-        setCheckoutData(null);
-        setBookingId('');
-        fetchActiveBookings();
-      }
-    } catch (e: any) {
-      Alert.alert('Error', e.response?.data?.message || 'Could not process unpaid checkout');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleCollectCash = async () => {
-    if (!bookingId) return;
-    setLoading(true);
-    try {
-      const res = await apiClient.put(`/bookings/${bookingId}/checkout-cash`);
-      if (res.data?.success) {
-        showToast('Cash collected — platform fee deducted from your wallet', 'success');
-        setCheckoutData(null);
-        setBookingId('');
-        fetchActiveBookings();
-      }
-    } catch (e: any) {
-      Alert.alert('Error', e.response?.data?.message || 'Could not process cash checkout');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const quickVerify = async (booking: any) => {
     setBookingId(booking.id.toString());
     setOtp('');
@@ -364,23 +328,10 @@ export default function VerifyScreen() {
                 Payment goes securely to ParkStop; your share is settled to you automatically.
               </Text>
 
-              <View style={{ flexDirection: 'column', gap: 12, width: '100%' }}>
-                <TouchableOpacity
-                  style={[SS.primaryBtn, { backgroundColor: SC.success, width: '100%' }, loading && { opacity: 0.7 }]}
-                  onPress={handleCollectCash}
-                  disabled={loading}
-                >
-                  {loading ? <ActivityIndicator color="#FFF" size="small" /> : <Text style={SS.primaryBtnText}>Collected Cash & Complete</Text>}
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[SS.primaryBtn, { backgroundColor: SC.error, width: '100%' }, loading && { opacity: 0.7 }]}
-                  onPress={handleCheckoutUnpaid}
-                  disabled={loading}
-                >
-                  {loading ? <ActivityIndicator color="#FFF" size="small" /> : <Text style={SS.primaryBtnText}>Mark as Unpaid (Arrears)</Text>}
-                </TouchableOpacity>
-              </View>
+              <Text style={{ color: SC.textMuted, fontSize: 12, textAlign: 'center' }}>
+                The driver can also pay inside their app. ParkStop does not take cash, and a
+                driver cannot book again until this parking is paid.
+              </Text>
               
               <TouchableOpacity
                 style={{ marginTop: SP.md, padding: 8 }}

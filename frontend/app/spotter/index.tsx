@@ -12,7 +12,6 @@ import Toast from '../../components/Toast';
 import RevenueChart from '../../components/spotter/RevenueChart';
 import { useSpotterDashboard } from '../../hooks/useSpotterDashboard';
 import { SC, TF, SP, RAD, SS } from '../../constants/SpotterTheme';
-import RazorpayCheckout from '../../components/RazorpayCheckout';
 import OwnerVerificationBanner from '../../components/spotter/OwnerVerificationBanner';
 import { Alert } from 'react-native';
 
@@ -73,32 +72,7 @@ export default function SpotterDashboard() {
     }
   };
 
-  const [isRazorpayVisible, setIsRazorpayVisible] = useState(false);
-  const [razorpayOrder, setRazorpayOrder] = useState<any>(null);
-  const [isClearingDues, setIsClearingDues] = useState(false);
   const [isWithdrawing, setIsWithdrawing] = useState(false);
-
-  const handleClearDues = async () => {
-    try {
-      setIsClearingDues(true);
-      const res = await apiClient.post('/payments/create-dues-order');
-      if (res.data.success) {
-        setRazorpayOrder({
-          orderId: res.data.order_id,
-          amount: res.data.amount,
-          currency: res.data.currency,
-          keyId: res.data.key_id
-        });
-        setIsRazorpayVisible(true);
-      } else {
-        Alert.alert('Error', res.data.message || 'Failed to create dues order');
-      }
-    } catch (e: any) {
-      Alert.alert('Error', e.response?.data?.message || 'Failed to process dues payment');
-    } finally {
-      setIsClearingDues(false);
-    }
-  };
 
   // #4 WITHDRAW: cash out the available (positive) wallet balance to the
   // spotter's linked payout method. Routes to payout-setup if none is linked.
@@ -137,37 +111,6 @@ export default function SpotterDashboard() {
         }
       }},
     ]);
-  };
-
-  const handleRazorpaySuccess = async (data: any) => {
-    setIsRazorpayVisible(false);
-    try {
-      // Keep the dues button in its spinner state until verification returns.
-      // (This previously flipped the whole dashboard into its loading screen,
-      // which read as "the app restarted" right after paying.)
-      setIsClearingDues(true);
-      const res = await apiClient.post('/payments/verify-dues', {
-        razorpay_order_id: data.razorpay_order_id,
-        razorpay_payment_id: data.razorpay_payment_id,
-        razorpay_signature: data.razorpay_signature,
-      });
-      if (res.data.success) {
-        setToast({ msg: 'Dues cleared — your wallet is settled', kind: 'success' });
-        fetchDashboardData();
-      } else {
-        Alert.alert('Error', 'Payment verification failed');
-      }
-    } catch (e) {
-      Alert.alert('Error', 'Payment verification failed');
-    } finally {
-      setIsClearingDues(false);
-    }
-  };
-
-  const handleRazorpayFailure = (data: any) => {
-    setIsRazorpayVisible(false);
-    const errorMessage = data && data.error ? data.error.description : 'Your payment could not be processed or was cancelled.';
-    Alert.alert('Payment Failed', errorMessage);
   };
 
   if (loading) {
@@ -363,19 +306,16 @@ export default function SpotterDashboard() {
           {dashboardData.balance < 0 ? (
             <TouchableOpacity 
               style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(239,68,68,0.15)', padding: 12, borderRadius: RAD.md, borderWidth: 1, borderColor: 'rgba(239,68,68,0.3)' }}
-              onPress={handleClearDues}
-              disabled={isClearingDues}
+              onPress={() => router.push('/spotter/support')}
               accessibilityRole="button"
-              accessibilityState={{ disabled: isClearingDues, busy: isClearingDues }}
-              accessibilityLabel={`Pay outstanding dues of ${Math.abs(dashboardData.balance).toFixed(2)} rupees`}
-              accessibilityHint="Opens payment to settle your platform fees"
+              accessibilityLabel={`You owe ParkStop ${Math.abs(dashboardData.balance).toFixed(2)} rupees. Contact support.`}
             >
               <Ionicons name="warning" size={20} color="#ef4444" style={{ marginRight: 8 }} />
               <View style={{ flex: 1 }}>
-                <Text style={{ color: '#ef4444', fontWeight: '800', fontSize: 14 }}>Dues: ₹{Math.abs(dashboardData.balance).toFixed(2)}</Text>
-                <Text style={{ color: '#f87171', fontSize: 12 }}>{dashboardData.balance <= -500 ? "Spots hidden! Clear to reactivate." : "Clear pending fees."}</Text>
+                <Text style={{ color: '#ef4444', fontWeight: '800', fontSize: 14 }}>Owed to ParkStop: ₹{Math.abs(dashboardData.balance).toFixed(2)}</Text>
+                <Text style={{ color: '#f87171', fontSize: 12 }}>From earlier cash bookings. Tap to contact support.</Text>
               </View>
-              {isClearingDues ? <ActivityIndicator color="#ef4444" /> : <Text style={{ color: '#ef4444', fontWeight: 'bold' }}>PAY</Text>}
+              <Ionicons name="chevron-forward" size={18} color="#ef4444" />
             </TouchableOpacity>
           ) : null}
 
@@ -683,19 +623,6 @@ export default function SpotterDashboard() {
         </View>
       </ScrollView>
 
-      {/* 💳 RAZORPAY CHECKOUT MODAL */}
-      {razorpayOrder && (
-        <RazorpayCheckout
-          visible={isRazorpayVisible}
-          orderId={razorpayOrder.orderId}
-          amount={razorpayOrder.amount}
-          currency={razorpayOrder.currency}
-          keyId={razorpayOrder.keyId}
-          onSuccess={handleRazorpaySuccess}
-          onCancel={() => handleRazorpayFailure(null)}
-          onFailure={handleRazorpayFailure}
-        />
-      )}
     </View>
   );
 }

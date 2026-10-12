@@ -32,9 +32,14 @@ try {
     logger.info('🔥 Firebase Admin SDK initialized successfully');
   }
 
-  // Setup E2E/Development mock fallback if firebase is unavailable or running tests
-  if (!auth || process.env.NODE_ENV === 'test' || process.env.IGNORE_RATE_LIMITS === 'true') {
-    logger.info('🛠️ Using mock Firebase Auth SDK for E2E tests / local development');
+  // Fake sign-in for the automated tests and local development ONLY. It
+  // accepts any token, so it must never be reachable in production: the
+  // production branch above already throws without real Firebase keys, and
+  // NODE_ENV=production can never select it here.
+  const allowMock = process.env.NODE_ENV === 'test' ||
+    (!auth && process.env.NODE_ENV !== 'production');
+  if (allowMock) {
+    logger.info('🛠️ Using mock Firebase Auth SDK for tests / local development');
     auth = {
       verifyIdToken: async (token) => {
         try {

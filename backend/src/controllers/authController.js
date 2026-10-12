@@ -2,6 +2,14 @@ const User = require('../models/User');
 const logger = require('../utils/logger');
 const prisma = require('../config/prisma');
 const admin = require('../config/firebase');
+const { recordOtpSession } = require('../services/otpSession');
+
+// Internal sign-in list; never sent to the app.
+const withoutSessions = (u) => {
+  if (!u) return u;
+  const { otp_auth_times, ...rest } = u;
+  return rest;
+};
 
 class AuthController {
 
@@ -88,7 +96,8 @@ class AuthController {
       const { email, name, phone, role, firebase_token, otp_token } = req.body;
 
       // Verify Gmail OTP Token (unless running automated test suites)
-      const isTest = process.env.NODE_ENV === 'test' || process.env.IGNORE_RATE_LIMITS === 'true';
+      const isTest = process.env.NODE_ENV !== 'production' &&
+        (process.env.NODE_ENV === 'test' || process.env.IGNORE_RATE_LIMITS === 'true');
       if (!isTest) {
         const { validateOTPToken } = require('../services/otpService');
         if (!otp_token || !validateOTPToken(email, otp_token)) {
@@ -108,6 +117,7 @@ class AuthController {
       }
 
       let firebaseUid;
+      let decodedReg = null;
       let regEmail = email;
       let regName = name || (email ? email.split('@')[0] : '');
 
@@ -133,6 +143,7 @@ class AuthController {
         }
 
         firebaseUid = decoded.uid;
+        decodedReg = decoded;
         regEmail = decoded.email || email;
         regName = decoded.name || name || regEmail.split('@')[0];
       }
@@ -189,6 +200,11 @@ class AuthController {
           });
         }
 
+        // Registration needed the email code, so this sign-in is verified.
+        if (decodedReg && finalUser.firebase_uid === firebaseUid) {
+          await recordOtpSession(finalUser.id, decodedReg);
+        }
+
         return res.status(200).json({
           success: true,
           message: 'User registered successfully',
@@ -221,6 +237,8 @@ class AuthController {
           is_spotter_registered: true
         }
       });
+
+      if (decodedReg) await recordOtpSession(user.id, decodedReg);
 
       res.status(201).json({
         success: true,
@@ -345,6 +363,25 @@ class AuthController {
         });
       }
 
+      // The code unlocks one Firebase sign-in: the one making this request.
+      // Its auth_time is stored so the API accepts that sign-in from now on.
+      const { otpEnforced } = require('../services/otpSession');
+      const authHeader = req.headers.authorization || '';
+      let firebaseSession = null;
+      if (authHeader.startsWith('Bearer ')) {
+        try {
+          firebaseSession = await admin.auth.verifyIdToken(authHeader.substring(7));
+        } catch (e) {
+          firebaseSession = null;
+        }
+      }
+      if (otpEnforced() && !firebaseSession) {
+        return res.status(401).json({
+          success: false,
+          message: 'Your sign-in expired. Please sign in again.'
+        });
+      }
+
       const { verifyOTP } = require('../services/otpService');
       const result = await verifyOTP(normalizedEmail, code);
       if (!result.ok) {
@@ -368,25 +405,24 @@ class AuthController {
         });
       }
 
-      const token = jwt.sign(
-        {
-          id: user.id,
-          email: user.email,
-          role: user.role,
-          name: user.full_name || user.name,
-          firebase_uid: user.firebase_uid || `mock_uid_${user.email.replace(/[@.]/g, '_')}`
-        },
-        process.env.JWT_SECRET || 'jwt_default_secret_key',
-        { expiresIn: '24h' }
-      );
+      if (firebaseSession) {
+        if (firebaseSession.uid !== user.firebase_uid) {
+          logger.warn(`Login code for user ${user.id} presented with a different Firebase account`);
+          return res.status(401).json({
+            success: false,
+            message: 'This code belongs to a different account. Please sign in again.'
+          });
+        }
+        await recordOtpSession(user.id, firebaseSession);
+      }
 
+      // The app's session is the Firebase sign-in recorded above, so no extra
+      // token is issued here.
       return res.status(200).json({
         success: true,
         message: 'Login successful',
         data: {
-          user: { ...user, name: user.full_name },
-          access_token: token,
-          refresh_token: 'mock_refresh_token'
+          user: { ...withoutSessions(user), name: user.full_name }
         }
       });
     } catch (error) {
@@ -540,7 +576,7 @@ class AuthController {
         message: 'Profile synchronized. OTP sent to your email - verify to complete login.',
         pending_login_token: socialPendingToken,
         data: {
-          user: { ...user, name: user.full_name },
+          user: { ...withoutSessions(user), name: user.full_name },
           stats
         }
       });

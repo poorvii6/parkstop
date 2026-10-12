@@ -58,64 +58,6 @@ const makeTx = () => {
 
 beforeEach(() => jest.clearAllMocks());
 
-describe('slot accounting on the cash and arrears checkout paths', () => {
-  test('cash checkout returns the slot to the spot', async () => {
-    const tx = makeTx();
-    prisma.$transaction.mockImplementation(async (fn) => fn(tx.client));
-    Booking.findById = jest.fn().mockResolvedValue({
-      id: 1, user_id: 5, spot_id: 9, status: 'active', total_price: 100, vehicle_type: 'car',
-    });
-    ParkingSpot.findById.mockResolvedValue({
-      id: 9, spotter_id: 7, location_type: 'urban', available_slots: 0, total_slots: 4,
-    });
-
-    const req = { user: { id: 7, role: 'spotter' }, params: { id: '1' }, body: {} };
-    await BookingController.checkoutCash(req, makeRes());
-
-    // The car has left. If the spot's count is not restored here, that slot is
-    // gone for good — nothing downstream ever reconciles it.
-    expect(tx.calls.parking_spots.length).toBeGreaterThan(0);
-    expect(tx.calls.parking_spots[0].data.available_slots).toEqual({ increment: 1 });
-  });
-
-  test('arrears checkout returns the slot to the spot', async () => {
-    const tx = makeTx();
-    prisma.$transaction.mockImplementation(async (fn) => fn(tx.client));
-    Booking.findById = jest.fn().mockResolvedValue({
-      id: 2, user_id: 5, spot_id: 9, status: 'active', total_price: 100, vehicle_type: 'bike',
-    });
-    ParkingSpot.findById.mockResolvedValue({
-      id: 9, spotter_id: 7, location_type: 'urban', available_slots: 0, total_slots: 4,
-    });
-
-    const req = { user: { id: 7, role: 'spotter' }, params: { id: '2' }, body: {} };
-    await BookingController.checkoutUnpaid(req, makeRes());
-
-    expect(tx.calls.parking_spots.length).toBeGreaterThan(0);
-    expect(tx.calls.parking_spots[0].data.available_slots).toEqual({ increment: 1 });
-  });
-});
-
-describe('cash checkout is not repeatable', () => {
-  test('a second call on an already-completed booking is rejected', async () => {
-    const tx = makeTx();
-    prisma.$transaction.mockImplementation(async (fn) => fn(tx.client));
-    Booking.findById = jest.fn().mockResolvedValue({
-      id: 3, user_id: 5, spot_id: 9, status: 'completed', payment_status: 'paid',
-      total_price: 100, vehicle_type: 'car',
-    });
-    ParkingSpot.findById.mockResolvedValue({ id: 9, spotter_id: 7, location_type: 'urban' });
-
-    const req = { user: { id: 7, role: 'spotter' }, params: { id: '3' }, body: {} };
-    const res = makeRes();
-    await BookingController.checkoutCash(req, res);
-
-    // Otherwise a double-tap debits the platform fee from the spotter twice.
-    expect(res.statusCode).toBe(400);
-    expect(tx.calls.users.length).toBe(0);
-  });
-});
-
 describe('checkout OTP cannot be attacked by an unrelated spotter', () => {
   test('a spotter who does not own the spot is refused before any attempt is burned', async () => {
     Booking.findById = jest.fn().mockResolvedValue({ id: 4, user_id: 5, spot_id: 9, status: 'active' });
@@ -160,7 +102,7 @@ describe('the reservation hold is anchored to arrival, not to tapping Book', () 
     id: 9, is_active: true, price_per_hour: 50, location_type: 'urban',
     car_slots: 2, bike_slots: 2, available_slots: 3, total_slots: 4,
   };
-  const runCreate = (start, end, payment_mode = 'online') => {
+  const runCreate = (start, end, payment_mode = 'online', openBooking = null) => {
     let captured = null;
     prisma.$transaction.mockImplementation(async (fn) => fn({
       $executeRaw: jest.fn(),
@@ -171,6 +113,8 @@ describe('the reservation hold is anchored to arrival, not to tapping Book', () 
         // Availability is counted from live bookings now, not read from the
         // available_slots column. Nothing is holding a bay in these fixtures.
         count: jest.fn().mockResolvedValue(0),
+        // The driver's own unfinished / unpaid booking, if any.
+        findFirst: jest.fn().mockResolvedValue(openBooking),
       },
     }));
     return Booking.create({
@@ -205,11 +149,25 @@ describe('the reservation hold is anchored to arrival, not to tapping Book', () 
       .toBe(later.getTime() + 30 * 60000);
   });
 
-  test('the same booking in cash is refused, and says why', async () => {
-    const later = new Date(Date.now() + 4 * 3600000);
+  test('an old app asking for cash still gets an online booking', async () => {
+    const now = new Date();
+    const data = await runCreate(now, new Date(now.getTime() + 3600000), 'cash');
+    expect(data.payment_mode).toBe('online');
+    expect(data.payment_status).toBe('pending');
+  });
+
+  test('a driver with a parking in progress cannot book another', async () => {
+    const now = new Date();
     await expect(
-      runCreate(later, new Date(later.getTime() + 3600000), 'cash')
-    ).rejects.toThrow(/online/i);
+      runCreate(now, new Date(now.getTime() + 3600000), 'online', { id: 3, status: 'active' })
+    ).rejects.toThrow(/in progress/i);
+  });
+
+  test('a driver who has not paid for the last parking cannot book again', async () => {
+    const now = new Date();
+    await expect(
+      runCreate(now, new Date(now.getTime() + 3600000), 'online', { id: 3, status: 'completed' })
+    ).rejects.toThrow(/pay for your last parking/i);
   });
 
   test('a book-now booking carries no advance fee', async () => {

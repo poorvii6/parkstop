@@ -24,18 +24,22 @@ export async function getSocket(): Promise<Socket | null> {
   try {
     const user = auth?.currentUser;
     if (!user) return null;
-    const token = await user.getIdToken();
 
     if (socket?.connected) return socket;
     if (socket) {
-      socket.auth = { token };
       socket.connect();
       return socket;
     }
 
     socket = io(socketUrl(), {
       transports: ['websocket'],
-      auth: { token },
+      // Called on every connect AND reconnect, so a reconnect after the
+      // one-hour token lifetime still sends a valid token.
+      auth: (cb: (data: object) => void) => {
+        const current = auth?.currentUser;
+        if (!current) return cb({});
+        current.getIdToken().then((token: string) => cb({ token })).catch(() => cb({}));
+      },
       reconnection: true,
       reconnectionAttempts: 10,
       reconnectionDelay: 2000,

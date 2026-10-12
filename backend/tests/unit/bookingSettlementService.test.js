@@ -8,11 +8,10 @@
  *
  * CommissionService is left real (pure, already tested) to verify the wiring.
  *
- * The behavior under test is the "safest" unified policy:
- *   - cash            -> mark paid, deduct platform fee from spotter wallet.
- *   - online + paid   -> queue a payout.
- *   - online + unpaid -> do nothing (never pay before collection).
- *   - on failure      -> record failed payout, credit wallet, notify spotter.
+ * The policy under test:
+ *   - paid            -> queue the owner credit (idempotent downstream).
+ *   - not paid        -> do nothing (never pay before collection).
+ *   - on failure      -> change nothing; the recovery sweep retries.
  */
 
 jest.mock('../../src/config/prisma', () => ({
@@ -67,19 +66,12 @@ describe('online payment', () => {
   });
 });
 
-describe('cash payment', () => {
-  test('marks paid and deducts the platform fee from the spotter wallet', async () => {
+describe('legacy cash booking', () => {
+  test('an unpaid cash booking is never settled (ParkStop is online-only)', async () => {
     const booking = { id: 3, total_price: 1000, payment_mode: 'cash', payment_status: 'pending_cash' };
-
     const result = await BookingSettlementService.settleCompletedBooking(booking, spot);
-
-    expect(result).toEqual({ spotterEarning: 800, platformFee: 200, settled: true });
-    expect(prisma.bookings.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ payment_status: 'paid' }) })
-    );
-    expect(prisma.users.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { balance: { decrement: 200 } } })
-    );
+    expect(result.settled).toBe(false);
+    expect(prisma.users.update).not.toHaveBeenCalled();
     expect(payoutQueue.add).not.toHaveBeenCalled();
   });
 });
@@ -99,23 +91,16 @@ describe('guards', () => {
   });
 });
 
-describe('failure fallback', () => {
-  test('records a failed payout, credits the wallet, and notifies the spotter', async () => {
+describe('failure', () => {
+  test('nothing is credited by hand; the recovery sweep retries later', async () => {
     prisma.bookings.update.mockRejectedValueOnce(new Error('db exploded'));
     const booking = { id: 6, total_price: 1000, payment_mode: 'online', payment_status: 'paid' };
 
     const result = await BookingSettlementService.settleCompletedBooking(booking, spot);
 
     expect(result.settled).toBe(false);
-    expect(prisma.payouts.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ status: 'failed_needs_retry', amount: 800 }),
-      })
-    );
-    // Earnings are never lost: wallet credited as fallback.
-    expect(prisma.users.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { balance: { increment: 800 } } })
-    );
-    expect(emitToUser).toHaveBeenCalledWith(7, 'payout:pending', expect.any(Object));
+    // A hand-made credit here used to be paid AGAIN on retry. Not any more.
+    expect(prisma.users.update).not.toHaveBeenCalled();
+    expect(prisma.payouts.create).not.toHaveBeenCalled();
   });
 });

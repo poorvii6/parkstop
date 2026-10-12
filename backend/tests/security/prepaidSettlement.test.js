@@ -15,8 +15,8 @@ jest.mock('../../src/services/payments/PayoutService', () => ({ processBookingPa
 jest.mock('../../src/services/payments/RazorpayAdapter', () => ({
   verifyPaymentSignature: jest.fn(() => true), fetchPayment: jest.fn(), fetchOrder: jest.fn(),
 }));
-jest.mock('../../src/services/payments/StripeAdapter', () => ({ retrievePaymentIntent: jest.fn() }));
-jest.mock('../../src/services/payments/CashfreeAdapter', () => ({}));
+jest.mock('../../src/services/payments/StripeAdapter', () => ({}), { virtual: true });
+jest.mock('../../src/services/payments/CashfreeAdapter', () => ({}), { virtual: true });
 jest.mock('../../src/utils/logger', () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }));
 
 const prisma = require('../../src/config/prisma');

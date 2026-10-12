@@ -1,11 +1,10 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { View, Text, StyleSheet, Platform, TouchableOpacity, TextInput, Dimensions, Modal, Alert, ScrollView, Linking, Keyboard, ActivityIndicator, BackHandler, AppState, Image, Animated, KeyboardAvoidingView, DeviceEventEmitter } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import MapLibreView from '../../components/MapLibreView';
-import { useStripe } from '../../components/StripeImports';
 import RazorpayCheckout from '../../components/RazorpayCheckout';
 import razorpayService from '../../services/razorpayService';
 import { registerForPushNotificationsAsync, getCurrentPushToken } from '../../services/notifications';
@@ -102,7 +101,6 @@ export default function FinderDashboard() {
   const [locationAccuracy, setLocationAccuracy] = useState<number>(0);
   const [step, setStep] = useState<AppStep>('home');
   const [navCountdown, setNavCountdown] = useState<number | null>(null);
-  const [showUPIInline, setShowUPIInline] = useState(false);
   const [vehicleType, setVehicleType] = useState<string>('');
   const [vehicleSubType, setVehicleSubType] = useState<string>('');
   const [selectedSlot, setSelectedSlot] = useState<string>('');
@@ -140,7 +138,6 @@ export default function FinderDashboard() {
   const lastHapticTurn = useRef('');
   const routeStepsRef = useRef<any[]>([]);
   const ignoreNextQueryChange = useRef(false);
-  const [chatOpen, setChatOpen] = useState(false);
 
 
 
@@ -153,33 +150,35 @@ export default function FinderDashboard() {
     apiClient.post('/auth/switch-role', { newRole: 'FINDER' }).catch(() => {});
   }, []);
 
-  // Restore an in-progress booking on mount: if the user has a reserved/active
-  // booking (their parking window is still running), keep guiding them to the
-  // spot — even after leaving the screen or restarting the app.
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await apiClient.get('/bookings/my-bookings');
-        if (!res.data?.success) return;
-        const nowTs = Date.now();
-        const activeBooking = (res.data.data || []).find((b: any) => {
-          if (b.status === 'active') return true; // checked in — always resume
-          // Reserved: only resume a CURRENT session (booked <2h ago, window
-          // still open) — stale test/abandoned reservations must not draw a
-          // route on a fresh app open.
-          if (b.status !== 'reserved') return false;
-          const created = b.created_at ? new Date(b.created_at).getTime() : 0;
-          const ends = b.end_time ? new Date(b.end_time).getTime() : 0;
-          return nowTs - created < 2 * 60 * 60 * 1000 && ends > nowTs;
-        });
-        if (!activeBooking?.parking_spots) return;
-        // Never auto-draw a route on open — offer to resume instead. The
-        // route/navigation only appears if the user taps "Resume".
-        setResumableBooking(activeBooking);
-        console.log(`[Booking] In-progress booking #${activeBooking.id} found — offering resume`);
-      } catch {}
-    })();
+  // Restore an unfinished booking on open, even after the app was closed:
+  //   reserved          -> keep guiding them to the spot
+  //   active            -> the parking session screen
+  //   checkout_pending  -> waiting for the owner to confirm
+  //   completed, unpaid -> the payment screen
+  // The server refuses a new booking until the last one is paid, so the
+  // driver must always be able to get back here.
+  const checkResumable = useCallback(async () => {
+    try {
+      const res = await apiClient.get('/bookings/my-bookings');
+      if (!res.data?.success) return;
+      const nowTs = Date.now();
+      const found = (res.data.data || []).find((b: any) => {
+        if (b.status === 'active' || b.status === 'checkout_pending') return true;
+        if (b.status === 'completed') return b.payment_mode !== 'cash' && b.payment_status !== 'paid';
+        // Reserved: only resume a CURRENT session (booked <2h ago, window
+        // still open) — stale reservations must not draw a route on open.
+        if (b.status !== 'reserved') return false;
+        const created = b.created_at ? new Date(b.created_at).getTime() : 0;
+        const ends = b.end_time ? new Date(b.end_time).getTime() : 0;
+        return nowTs - created < 2 * 60 * 60 * 1000 && ends > nowTs;
+      });
+      if (!found?.parking_spots) return;
+      // Never jump straight in on open — offer a "Resume" card instead.
+      setResumableBooking(found);
+    } catch {}
   }, []);
+
+  useEffect(() => { checkResumable(); }, [checkResumable]);
 
   const resumeBooking = () => {
     const b = resumableBooking;
@@ -197,8 +196,19 @@ export default function FinderDashboard() {
     };
     setSpots((prev) => (prev.some((s) => s.id === spotObj.id) ? prev : [...prev, spotObj]));
     setSelectedSpotId(spotObj.id);
-    setBookingDetails((prev: any) => prev || b);
+    setBookingDetails({
+      ...b,
+      id: String(b.id),
+      otp: b.otp_code != null ? String(b.otp_code) : '',
+      checkoutOtp: b.checkout_otp,
+      totalPrice: Number(b.total_price) || 0,
+      payment_mode: 'online',
+    });
     setResumableBooking(null);
+
+    if (b.status === 'active') { setStep('active_parking'); return; }
+    if (b.status === 'checkout_pending') { setStep('awaiting_owner'); return; }
+    if (b.status === 'completed') { setStep('payment'); return; }
 
     // Straight into navigation — NOT via 'booking_confirm'.
     //
@@ -223,10 +233,6 @@ export default function FinderDashboard() {
     return () => subscription.remove();
   }, [step]);
   const [priceModalOpen, setPriceModalOpen] = useState(false);
-  const [messages, setMessages] = useState<{ text: string, sender: 'bot' | 'user' }[]>([{
-    text: "How can I help you find parking today?", sender: 'bot'
-  }]);
-  const [chatInput, setChatInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   const [navigationData, setNavigationData] = useState({ speed: 0, heading: 0 });
@@ -296,15 +302,7 @@ export default function FinderDashboard() {
   const [selectedExtendMinutes, setSelectedExtendMinutes] = useState(60);
   const [customExtendText, setCustomExtendText] = useState('');
   const [isExtending, setIsExtending] = useState(false);
-  const [showPaymentMethodModal, setShowPaymentMethodModal] = useState(false);
-  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'online' | 'cash'>('online');
 
-  // Default payment method to what was chosen at booking time
-  useEffect(() => {
-    if (step === 'payment' && bookingDetails?.payment_mode) {
-      setSelectedPaymentMethod(bookingDetails.payment_mode === 'cash' ? 'cash' : 'online');
-    }
-  }, [step]);
 
   useEffect(() => {
     if (step !== 'active_parking') {
@@ -420,8 +418,6 @@ export default function FinderDashboard() {
     currency: string;
     keyId: string;
   } | null>(null);
-  const [isUPIModalVisible, setIsUPIModalVisible] = useState(false);
-  const [isUPIProcessing, setIsUPIProcessing] = useState(false);
   // Preselect UPI in Razorpay Checkout when the user tapped a UPI app.
   const [preferUpiCheckout, setPreferUpiCheckout] = useState(false);
 
@@ -1470,39 +1466,6 @@ export default function FinderDashboard() {
   //   }
   // }, [userLocation, searchQuery]);
 
-  const sendChat = async () => {
-    if (!chatInput.trim()) return;
-    const promptText = chatInput;
-    setMessages(m => [...m, { text: promptText, sender: 'user' }]);
-    setChatInput('');
-    try {
-      const res = await apiClient.post('/chatbot/ask', { prompt: promptText });
-      if (res.data.success) {
-        setMessages(m => [...m, { text: res.data.data.reply, sender: 'bot' }]);
-        if (res.data.data.action === 'ROUTE_TO_SPOT') {
-          setTimeout(() => {
-            setChatOpen(false);
-            setStep('spot_booking');
-            if (spots.length > 0) {
-              setSelectedSpotId(spots[0].id);
-              fetchSlots(spots[0].id);
-              if (Platform.OS !== 'web') {
-                mapRef.current?.animateCamera({
-                  center: { latitude: spots[0].lat, longitude: spots[0].lng },
-                  zoom: 15,
-                  pitch: 0,
-                  bearing: 0
-                });
-              }
-            }
-          }, 1500);
-        }
-      }
-    } catch (e: any) {
-      setMessages(m => [...m, { text: 'Chatbot currently offline. Please use the map to find a spot.', sender: 'bot' }]);
-    }
-  };
-
   const lastNearbyFetch = useRef({ t: 0, lat: 0, lng: 0 });
   const spotsLenRef = useRef(0);
   useEffect(() => { spotsLenRef.current = spots.length; }, [spots]);
@@ -1909,8 +1872,10 @@ export default function FinderDashboard() {
   // Owner confirmed the checkout -> unlock the payment screen instantly. Until
   // this arrives (or the poll sees 'completed'), the finder waits — payment is
   // strictly gated on the spot owner's confirmation.
+  // Also on the parking screen: a session left running far past its booked
+  // time is closed by the server, which sends the same event.
   useEffect(() => {
-    if (step !== 'awaiting_owner' || !bookingDetails?.id) return;
+    if (!['awaiting_owner', 'active_parking'].includes(step) || !bookingDetails?.id) return;
     const off = onRealtime('booking:checkout_confirmed', (b: any) => {
       if (String(b?.id) === String(bookingDetails?.id)) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -1976,143 +1941,6 @@ export default function FinderDashboard() {
     }
   };
 
-  const handleUPIPayment = async (app: 'gpay' | 'phonepe' | 'paytm' | 'upi') => {
-    setIsUPIModalVisible(false);
-    setIsLoading(true);
-    try {
-      // First update the payment mode on the backend
-      const patchRes = await apiClient.patch(`/bookings/${bookingDetails?.id}/payment-mode`, {
-        payment_mode: 'online'
-      });
-
-      if (!patchRes.data.success) {
-        throw new Error('Failed to update payment mode');
-      }
-
-      setBookingDetails(prev => prev ? {
-        ...prev,
-        payment_mode: 'online'
-      } : null);
-
-      const res = await apiClient.post('/payments/checkout', { bookingId: Number(bookingDetails?.id) });
-      if (!res.data.success || !res.data.order_id) {
-        throw new Error('Failed to initiate secure checkout session');
-      }
-      
-      // Hand off to Razorpay Checkout with UPI preselected.
-      //
-      // This previously built a RAW peer-to-peer UPI deep link to a hardcoded
-      // VPA and then, 3.5s later, told the server the booking was paid using a
-      // fake `mock_upi_intent` signature — without checking anything. Money
-      // sent that way never touched the Razorpay ORDER, so Razorpay had no
-      // record of it and the signature could never be verified. (Confirmed: no
-      // UPI payment ever reached the Razorpay dashboard.)
-      //
-      // Checkout creates a real payment against the order and emits its own
-      // upi:// intent, which RazorpayCheckout forwards to GPay/PhonePe/Paytm —
-      // so the app-switch feel is preserved — and returns a genuine signature
-      // that the backend verifies against order, amount and captured status.
-      setRazorpayOrder({
-        orderId: res.data.order_id,
-        amount: res.data.amount,
-        currency: res.data.currency || 'INR',
-        keyId: res.data.key_id,
-      });
-      setPreferUpiCheckout(true);
-      setIsRazorpayVisible(true);
-
-    } catch (e: any) {
-      Alert.alert('UPI Payment Error', e.message || 'Failed to process UPI payment');
-      setIsLoading(false);
-      setIsUPIProcessing(false);
-    }
-  };
-
-  const { initPaymentSheet, presentPaymentSheet } = useStripe();
-
-  const processPayment = async () => {
-    if (!bookingDetails?.id) return;
-    setIsLoading(true);
-
-    try {
-      // First update the payment mode on the backend based on user's checkout selection
-      const patchRes = await apiClient.patch(`/bookings/${bookingDetails.id}/payment-mode`, {
-        payment_mode: selectedPaymentMethod
-      });
-
-      if (!patchRes.data.success) {
-        throw new Error('Failed to update payment mode');
-      }
-
-      setBookingDetails(prev => prev ? {
-        ...prev,
-        payment_mode: selectedPaymentMethod
-      } : null);
-
-      if (selectedPaymentMethod === 'cash') {
-        // For cash, just proceed to receipt
-        setStep('receipt');
-        setIsLoading(false);
-        return;
-      }
-
-      const res = await apiClient.post('/payments/checkout', { bookingId: Number(bookingDetails.id) });
-      if (res.data.success) {
-        if (res.data.provider === 'stripe' && res.data.clientSecret) {
-          // Stripe flow
-          const { error: initError } = await initPaymentSheet({
-            merchantDisplayName: 'ParkStop',
-            paymentIntentClientSecret: res.data.clientSecret,
-            allowsDelayedPaymentMethods: true,
-            defaultBillingDetails: {
-              name: 'Finder User',
-            }
-          });
-
-          if (initError) {
-            Alert.alert('Payment Setup Error', initError.message);
-            setIsLoading(false);
-            return;
-          }
-
-          const { error: presentError } = await presentPaymentSheet();
-          if (presentError) {
-            Alert.alert('Payment Cancelled', presentError.message);
-            setIsLoading(false);
-            return;
-          }
-
-          // Verify Stripe Payment
-          const paymentIntentId = res.data.clientSecret.split('_secret')[0];
-          await apiClient.post('/payments/stripe/verify', {
-            bookingId: Number(bookingDetails.id),
-            paymentIntentId
-          });
-
-          // Proceed to receipt on successful Stripe payment
-          setStep('receipt');
-          setIsLoading(false);
-        } else if (res.data.provider === 'razorpay' && res.data.order_id) {
-          // Razorpay flow
-          setRazorpayOrder({
-            orderId: res.data.order_id,
-            amount: res.data.amount, // backend returns amount in paise
-            currency: res.data.currency || 'INR',
-            keyId: res.data.key_id,
-          });
-          setIsRazorpayVisible(true);
-        } else {
-          throw new Error('Unsupported payment provider or missing credentials');
-        }
-      } else {
-        throw new Error('Failed to initiate secure checkout session');
-      }
-    } catch (e: any) {
-      Alert.alert('Payment Error', e.response?.data?.message || e.message || 'Failed to process payment');
-      setIsLoading(false);
-    }
-  };
-
   const handleRazorpaySuccess = async (data: {
     razorpay_payment_id: string;
     razorpay_order_id: string;
@@ -2171,9 +1999,6 @@ export default function FinderDashboard() {
     setIsLoading(true);
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      await apiClient.patch(`/bookings/${bookingDetails.id}/payment-mode`, { payment_mode: 'online' });
-      setBookingDetails(prev => prev ? { ...prev, payment_mode: 'online' } : null);
-
       const order = await razorpayService.createOrder(Number(bookingDetails.id));
       if (!order?.success || !order.order_id || !order.key_id) {
         throw new Error('Could not start the payment. Please try again.');
@@ -2277,12 +2102,11 @@ export default function FinderDashboard() {
 
   // If the slot picker failed while offline, auto-retry once connectivity returns.
   useOnlineRefresh(() => { if (selectedSpotId && slotLoadError) fetchSlots(selectedSpotId); });
-  const handleCreateBooking = async (method: 'online' | 'cash') => {
+  const handleCreateBooking = async () => {
     if (!selectedSpotId) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setIsLoading(true);
     setSearchedPlace(null);
-    setShowPaymentMethodModal(false);
     try {
       let hours = parkingHours + (parkingMinutes / 60);
       let end = new Date(Date.now() + hours * 3600000);
@@ -2310,8 +2134,7 @@ export default function FinderDashboard() {
         end_time: end.toISOString(),
         slot_name: selectedSlot,
         vehicle_type: vehicleType,
-        vehicle_subtype: vehicleSubType,
-        payment_mode: method
+        vehicle_subtype: vehicleSubType
       });
       if (res.data.success) {
         setSearchedPlace(null);
@@ -2322,7 +2145,7 @@ export default function FinderDashboard() {
           checkoutOtp: res.data.data.checkout_otp,
           created_at: res.data.data.created_at || new Date().toISOString(),
           start_time: res.data.data.start_time || new Date().toISOString(),
-          payment_mode: res.data.data.payment_mode || method
+          payment_mode: 'online'
         });
         setStep('booking_confirm');
       }
@@ -2330,8 +2153,10 @@ export default function FinderDashboard() {
       const errMsg = e.response?.data?.message || 'Error';
       if (errMsg.toLowerCase().includes('slots') || errMsg.toLowerCase().includes('full')) {
         Alert.alert('Booking Failed', 'This parking spot is currently full and cannot be booked right now.');
-      } else if (errMsg.toLowerCase().includes('balance') || errMsg.toLowerCase().includes('dues')) {
-        Alert.alert('Spot Unavailable', 'This spot is temporarily unavailable.');
+      } else if (errMsg.includes('before booking again')) {
+        // An unfinished or unpaid booking exists: bring back its Resume card.
+        Alert.alert('Finish your last parking', errMsg);
+        checkResumable();
       } else {
         Alert.alert('Booking Failed', errMsg);
       }
@@ -2671,7 +2496,9 @@ export default function FinderDashboard() {
             <View style={{ position: 'absolute', bottom: 300, left: 20, right: 20, zIndex: 100, padding: 14, backgroundColor: 'rgba(15,23,42,0.96)', borderRadius: 18, borderWidth: 1, borderColor: 'rgba(66,133,244,0.35)', flexDirection: 'row', alignItems: 'center', gap: 10 }}>
               <Ionicons name="time-outline" size={22} color="#4285F4" />
               <View style={{ flex: 1 }}>
-                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>Booking in progress</Text>
+                <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>
+                  {resumableBooking.status === 'completed' ? 'Payment pending' : 'Booking in progress'}
+                </Text>
                 <Text style={{ color: '#94a3b8', fontSize: 12 }} numberOfLines={1}>{resumableBooking.parking_spots?.title}</Text>
               </View>
               <TouchableOpacity onPress={resumeBooking} style={{ backgroundColor: '#4285F4', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10 }}>
@@ -3403,7 +3230,7 @@ export default function FinderDashboard() {
                   }
                   if (!selectedSpotId) return;
                   Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                  handleCreateBooking('online');
+                  handleCreateBooking();
                 }}
               >
                 <Text style={{ color: selectedSlot ? '#fff' : 'rgba(255,255,255,0.6)', fontSize: 16, fontWeight: '900' }}>
@@ -3920,118 +3747,27 @@ export default function FinderDashboard() {
                       </View>
                     </View>
 
-                    <Text style={{ color: '#94a3b8', fontSize: 11, fontWeight: '800', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>Select Payment Method</Text>
-                    <View style={{ flexDirection: 'row', gap: 12, marginBottom: 20 }}>
-                      <TouchableOpacity 
-                        style={{
-                          flex: 1,
-                          backgroundColor: selectedPaymentMethod === 'online' ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)',
-                          padding: 16,
-                          borderRadius: 16,
-                          borderWidth: 2,
-                          borderColor: selectedPaymentMethod === 'online' ? '#6366f1' : 'transparent',
-                          alignItems: 'center',
-                          gap: 6
-                        }}
-                        onPress={() => {
-                          Haptics.selectionAsync();
-                          setSelectedPaymentMethod('online');
-                        }}
-                      >
-                        <Text style={{ fontSize: 22 }}>💳</Text>
-                        <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>Online Payment</Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity 
-                        style={{
-                          flex: 1,
-                          backgroundColor: selectedPaymentMethod === 'cash' ? 'rgba(16,185,129,0.15)' : 'rgba(255,255,255,0.03)',
-                          padding: 16,
-                          borderRadius: 16,
-                          borderWidth: 2,
-                          borderColor: selectedPaymentMethod === 'cash' ? '#10b981' : 'transparent',
-                          alignItems: 'center',
-                          gap: 6
-                        }}
-                        onPress={() => {
-                          Haptics.selectionAsync();
-                          setSelectedPaymentMethod('cash');
-                        }}
-                      >
-                        <Text style={{ fontSize: 22 }}>💵</Text>
-                        <Text style={{ color: '#fff', fontWeight: '800', fontSize: 13 }}>Pay Cash</Text>
-                      </TouchableOpacity>
-                    </View>
-
-                    {selectedPaymentMethod === 'cash' && (
-                      <View style={{ backgroundColor: 'rgba(16,185,129,0.1)', padding: 12, borderRadius: 12, marginBottom: 16 }}>
-                        <Text style={{ color: '#10b981', fontSize: 13, fontWeight: '800', textAlign: 'center' }}>
-                          💵 Please hand over cash to the spot owner.
-                        </Text>
-                      </View>
-                    )}
-
                     <TouchableOpacity 
                       activeOpacity={0.9}
                       style={{ 
-                        backgroundColor: selectedPaymentMethod === 'cash' ? '#10b981' : '#6366f1', 
+                        backgroundColor: '#6366f1', 
                         paddingVertical: 18, borderRadius: 20, 
                         alignItems: 'center',
                       }} 
                       disabled={isLoading || isRazorpayVisible}
                       onPress={() => {
                         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                        if (selectedPaymentMethod === 'online') {
-                          handleRazorpayPay();
-                        } else {
-                          processPayment();
-                        }
+                        handleRazorpayPay();
                       }}
                     >
                       <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>
-                        {isLoading ? 'Processing...' : (selectedPaymentMethod === 'cash' ? 'Complete Checkout' : 'Pay with UPI')}
+                        {isLoading ? 'Processing...' : 'Pay now'}
                       </Text>
                     </TouchableOpacity>
+                    <Text style={{ color: '#94a3b8', fontSize: 11, textAlign: 'center', marginTop: 10 }}>
+                      UPI, cards and netbanking via Razorpay
+                    </Text>
 
-                    {showUPIInline && selectedPaymentMethod === 'online' && (
-                      <View style={{ marginTop: 16 }}>
-                        <Text style={{ color: '#94a3b8', fontSize: 11, fontWeight: '800', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 }}>Choose Payment Method</Text>
-                        {[
-                          { key: 'gpay', name: 'Google Pay', sub: 'Pay directly via GPay', color: '#1A73E8', icon: 'G' },
-                          { key: 'phonepe', name: 'PhonePe', sub: 'Instant UPI via PhonePe', color: '#5f259f', icon: 'पे' },
-                          { key: 'paytm', name: 'Paytm', sub: 'Pay using Paytm wallet/UPI', color: '#00baf2', icon: 'P' },
-                          { key: 'upi', name: 'Other UPI App', sub: 'Pay via any UPI app', color: '#16a34a', icon: 'U' },
-                        ].map(app => (
-                          <TouchableOpacity
-                            key={app.key}
-                            style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 16, padding: 14, marginBottom: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' }}
-                            onPress={() => handleUPIPayment(app.key as any)}
-                          >
-                            <View style={{ width: 40, height: 40, borderRadius: 12, backgroundColor: app.color, justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
-                              <Text style={{ color: '#fff', fontWeight: '900', fontSize: 14 }}>{app.icon}</Text>
-                            </View>
-                            <View style={{ flex: 1 }}>
-                              <Text style={{ color: '#fff', fontSize: 14, fontWeight: '800' }}>{app.name}</Text>
-                              <Text style={{ color: 'rgba(255,255,255,0.3)', fontSize: 11, marginTop: 1 }}>{app.sub}</Text>
-                            </View>
-                            <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.3)" />
-                          </TouchableOpacity>
-                        ))}
-                        <TouchableOpacity
-                          style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: 16, padding: 14, marginBottom: 8, borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)' }}
-                          onPress={() => { setShowUPIInline(false); processPayment(); }}
-                        >
-                          <View style={{ width: 40, height: 40, borderRadius: 12, backgroundColor: '#6366f1', justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
-                            <Ionicons name="card" size={20} color="#fff" />
-                          </View>
-                          <View style={{ flex: 1 }}>
-                            <Text style={{ color: '#fff', fontSize: 14, fontWeight: '800' }}>Debit / Credit Card</Text>
-                            <Text style={{ color: 'rgba(255,255,255,0.3)', fontSize: 11, marginTop: 1 }}>Cards, Netbanking & Wallets</Text>
-                          </View>
-                          <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.3)" />
-                        </TouchableOpacity>
-                      </View>
-                    )}
                   </View>
                 )}
 
@@ -4084,7 +3820,6 @@ export default function FinderDashboard() {
                         setBookingDetails(null);
                         setSelectedSlot('');
                         setParkingHours(1);
-                        setShowUPIInline(false);
                         setArrivalDetected(false);
                       }}
                     >
@@ -4099,28 +3834,11 @@ export default function FinderDashboard() {
         </>
       )}
 
-      {step !== 'home' && (
-        <TouchableOpacity style={styles.chatFab} onPress={() => setChatOpen(true)}>
-          <Text style={styles.chatFabText}>💬</Text>
-        </TouchableOpacity>
-      )}
-
-      {/* Upfront Payment Modal removed - Payment selection is now done at checkout */}
 
 
 
       {/* 📱 MOCK SIMULATOR MODAL */}
 
-      {/* 🔄 UPI PROCESSING OVERLAY */}
-      <Modal visible={isUPIProcessing} transparent animationType="fade">
-        <View style={[styles.chatModalBg, { justifyContent: 'center', alignItems: 'center' }]}>
-          <View style={[BlueprintTheme.glassCard, { padding: 30, borderRadius: 24, alignItems: 'center', gap: 16, width: width * 0.8 }]}>
-            <ActivityIndicator size="large" color={BlueprintColors.primaryAccent} />
-            <Text style={{ color: '#fff', fontSize: 16, fontWeight: '800', textAlign: 'center' }}>Opening Payment Application...</Text>
-            <Text style={{ color: 'rgba(255,255,255,0.5)', fontSize: 12, textAlign: 'center', lineHeight: 18 }}>Please complete the transaction in Google Pay/PhonePe and return to ParkStop.</Text>
-          </View>
-        </View>
-      </Modal>
 
       {/* 💳 RAZORPAY CHECKOUT MODAL */}
       {razorpayOrder && (
@@ -4159,36 +3877,6 @@ export default function FinderDashboard() {
             </TouchableOpacity>
           </View>
         </View>
-      </Modal>
-
-      <Modal visible={chatOpen} transparent animationType="slide" onRequestClose={() => setChatOpen(false)}>
-        <KeyboardAvoidingView 
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={styles.chatModalBg}
-        >
-          <TouchableOpacity 
-            style={StyleSheet.absoluteFill} 
-            activeOpacity={1} 
-            onPress={() => setChatOpen(false)} 
-          />
-          <View style={[styles.chatModal, BlueprintTheme.glassCard]}>
-            <View style={styles.chatHeader}>
-              <Text style={styles.chatTitle}>ParkStop AI</Text>
-              <TouchableOpacity onPress={() => setChatOpen(false)}><Text style={styles.chatClose}>Close</Text></TouchableOpacity>
-            </View>
-            <ScrollView style={styles.chatBody}>
-              {messages.map((m, i) => (
-                <View key={i} style={[styles.chatBubble, m.sender === 'user' ? styles.chatUser : styles.chatBot]}>
-                  <Text style={[styles.chatText, { color: '#FFFFFF' }]}>{m.text}</Text>
-                </View>
-              ))}
-            </ScrollView>
-            <View style={styles.chatInputRow}>
-              <TextInput style={styles.chatInput} placeholder="Ask something..." placeholderTextColor={BlueprintColors.textSecondary} value={chatInput} onChangeText={setChatInput} onSubmitEditing={sendChat} />
-              <TouchableOpacity style={styles.sendBtn} onPress={sendChat}><Text style={{ color: BlueprintColors.primaryAccent, fontWeight: '700' }}>Send</Text></TouchableOpacity>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
       </Modal>
 
       <Modal visible={extendModalOpen} transparent animationType="slide">

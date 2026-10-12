@@ -24,7 +24,8 @@ class BookingController {
         });
       }
 
-      const { spot_id, start_time, end_time, slot_name, vehicle_type, vehicle_subtype, payment_mode } = req.body;
+      // Payment is always online (Razorpay). Any payment_mode the app sends is ignored.
+      const { spot_id, start_time, end_time, slot_name, vehicle_type, vehicle_subtype } = req.body;
 
       const booking = await Booking.create({
         user_id: req.user.id,
@@ -33,8 +34,7 @@ class BookingController {
         end_time,
         slot_name: slot_name || null,
         vehicle_type: vehicle_type || 'car',
-        vehicle_subtype: vehicle_subtype || null,
-        payment_mode: payment_mode || 'online'
+        vehicle_subtype: vehicle_subtype || null
       });
 
       // Real-time notification to Spotter (and confirmation to the Finder)
@@ -148,7 +148,7 @@ class BookingController {
       res.json({
         success: true,
         message: 'Booking activated successfully',
-        data: updatedBooking
+        data: Booking.forOwner(updatedBooking)
       });
 
     } catch (error) {
@@ -216,7 +216,7 @@ class BookingController {
       res.json({
         success: true,
         message: 'Checkout verified and booking completed',
-        data: completedBooking
+        data: Booking.forOwner(completedBooking)
       });
 
     } catch (error) {
@@ -361,7 +361,7 @@ class BookingController {
       return res.json({
         success: true,
         message: 'Checkout confirmed',
-        data: completedBooking
+        data: Booking.forOwner(completedBooking)
       });
     } catch (error) {
       logger.error('Confirm checkout error:', error);
@@ -416,7 +416,7 @@ class BookingController {
       res.json({
         success: true,
         message: 'Booking completed successfully',
-        data: completedBooking
+        data: Booking.forOwner(completedBooking)
       });
 
     } catch (error) {
@@ -425,195 +425,6 @@ class BookingController {
         success: false,
         message: error.message || 'Failed to complete booking'
       });
-    }
-  }
-
-  /**
-   * CHECKOUT UNPAID (Arrears System)
-   * Called by Spotter if Finder drives away without paying.
-   * Closes booking, gives Spotter their earnings, and puts Finder in negative balance.
-   */
-  static async checkoutUnpaid(req, res) {
-    try {
-      if (!hasRole(req.user, 'SPOTTER')) {
-        return res.status(403).json({ success: false, message: 'Only spotters can perform this action' });
-      }
-
-      const bookingId = req.params.id;
-      const booking = await Booking.findById(bookingId);
-
-      if (!booking || booking.status === 'completed' || booking.payment_status === 'paid') {
-        return res.status(400).json({ success: false, message: 'Booking already completed or paid' });
-      }
-
-      const spot = await ParkingSpot.findById(booking.spot_id);
-      if (!spot || spot.spotter_id !== req.user.id) {
-        return res.status(403).json({ success: false, message: 'Unauthorized' });
-      }
-
-      const prisma = require('../config/prisma');
-
-      // Mark as completed but unpaid in a database transaction
-      const completedBooking = await prisma.$transaction(async (tx) => {
-        const updatedBooking = await tx.bookings.update({
-          where: { id: parseInt(bookingId) },
-          data: {
-            status: 'completed',
-            payment_status: 'unpaid_arrears',
-            actual_end_time: new Date(),
-            updated_at: new Date()
-          }
-        });
-
-        // Calculate commission based on what WAS owed
-        const { spotterEarning } = CommissionService.calculateCommission(
-          updatedBooking.total_price, spot.location_type
-        );
-
-        // 1. Credit the Spotter their 80% so they don't suffer
-        await tx.users.update({
-          where: { id: spot.spotter_id },
-          data: { balance: { increment: spotterEarning } }
-        });
-
-        // 2. Penalize the Finder by deducting the FULL amount from their balance
-        await tx.users.update({
-          where: { id: booking.user_id },
-          data: { balance: { decrement: updatedBooking.total_price } }
-        });
-
-        // 3. Give the slot back. The finder drove off without paying, but the
-        //    bay is empty — the spotter must not lose capacity as well as money.
-        const slotData = {
-          available_slots: { increment: 1 },
-          is_available: true,
-          updated_at: new Date()
-        };
-        if (booking.vehicle_type === 'car') slotData.car_slots = { increment: 1 };
-        else if (booking.vehicle_type === 'bike') slotData.bike_slots = { increment: 1 };
-
-        await tx.parking_spots.update({
-          where: { id: booking.spot_id },
-          data: slotData
-        });
-
-        return updatedBooking;
-      });
-
-      // Recalculate spotterEarning and platformFee for logging
-      const { spotterEarning } = CommissionService.calculateCommission(
-        completedBooking.total_price, spot.location_type
-      );
-
-      logger.info(`Arrears applied for Booking ${bookingId}: Spotter ${spot.spotter_id} credited ₹${spotterEarning}. Finder ${booking.user_id} deducted ₹${completedBooking.total_price}.`);
-
-      res.json({
-        success: true,
-        message: 'Finder marked as unpaid. Your wallet has been credited.',
-        data: completedBooking
-      });
-
-    } catch (error) {
-      logger.error('Checkout Unpaid error:', error);
-      res.status(500).json({ success: false, message: 'Failed to process unpaid checkout' });
-    }
-  }
-
-  /**
-   * CHECKOUT CASH (Spotter only)
-   * Completes the booking with cash payment and deducts platform fee from spotter
-   */
-  static async checkoutCash(req, res) {
-    try {
-      if (!hasRole(req.user, 'SPOTTER')) {
-        return res.status(403).json({ success: false, message: 'Only spotters can perform this action' });
-      }
-
-      const bookingId = req.params.id;
-      const booking = await Booking.findById(bookingId);
-
-      if (!booking) {
-        return res.status(404).json({ success: false, message: 'Booking not found' });
-      }
-
-      const spot = await ParkingSpot.findById(booking.spot_id);
-      if (!spot || spot.spotter_id !== req.user.id) {
-        return res.status(403).json({ success: false, message: 'Unauthorized to manage this booking' });
-      }
-
-      // Without this, a double-tap on the Confirm Cash button runs the whole
-      // block twice: the platform fee comes out of the spotter's wallet again,
-      // and the slot is released twice. Every other checkout path already
-      // refuses a second call; this one did not.
-      if (booking.status === 'completed' || booking.payment_status === 'paid') {
-        return res.status(400).json({ success: false, message: 'This booking is already closed' });
-      }
-
-      const { spotterEarning, platformFee } = CommissionService.calculateCommission(
-        booking.total_price, spot.location_type
-      );
-
-      const prisma = require('../config/prisma');
-
-      // Update booking and deduct platform fee from spotter in a transaction
-      const updatedBooking = await prisma.$transaction(async (tx) => {
-        // 1. Update Booking to paid with cash — guarded on status so two
-        //    concurrent calls cannot both proceed.
-        const claimed = await tx.bookings.updateMany({
-          where: { id: parseInt(bookingId), status: { notIn: ['completed', 'cancelled', 'expired'] } },
-          data: {
-            payment_status: 'paid',
-            payment_mode: 'cash',
-            status: 'completed',
-            platform_fee: platformFee,
-            spotter_earning: spotterEarning,
-            updated_at: new Date()
-          }
-        });
-
-        if (claimed.count === 0) {
-          throw new Error('This booking is already closed');
-        }
-
-        // 2. Deduct platform fee from spotter's wallet
-        if (platformFee > 0) {
-          await tx.users.update({
-            where: { id: spot.spotter_id },
-            data: { balance: { decrement: platformFee } }
-          });
-        }
-
-        // 3. Give the slot back. The car has left; without this the spot's
-        //    available_slots never recovers and the spotter quietly loses a
-        //    slot of real capacity on every cash checkout.
-        const slotData = {
-          available_slots: { increment: 1 },
-          is_available: true,
-          updated_at: new Date()
-        };
-        if (booking.vehicle_type === 'car') slotData.car_slots = { increment: 1 };
-        else if (booking.vehicle_type === 'bike') slotData.bike_slots = { increment: 1 };
-
-        await tx.parking_spots.update({
-          where: { id: booking.spot_id },
-          data: slotData
-        });
-
-        return tx.bookings.findUnique({ where: { id: parseInt(bookingId) } });
-      });
-
-      if (platformFee > 0) {
-        logger.info(`Cash checkout ${bookingId}: Deducted ₹${platformFee} from spotter ${spot.spotter_id}`);
-      }
-      res.json({
-        success: true,
-        message: 'Cash payment confirmed successfully',
-        data: updatedBooking
-      });
-
-    } catch (error) {
-      logger.error('Checkout Cash error:', error);
-      res.status(500).json({ success: false, message: 'Failed to process cash checkout' });
     }
   }
 
@@ -1001,45 +812,6 @@ class BookingController {
     } catch (error) {
       logger.error('Claim refund error:', error);
       return res.status(500).json({ success: false, message: 'Failed to claim refund' });
-    }
-  }
-
-  /**
-   * UPDATE PAYMENT MODE (Finder Only)
-   */
-  static async updatePaymentMode(req, res) {
-    try {
-      if (!hasRole(req.user, 'FINDER')) {
-        return res.status(403).json({
-          success: false,
-          message: 'Only finders can update payment mode'
-        });
-      }
-
-      const bookingId = req.params.id;
-      const { payment_mode } = req.body;
-
-      if (!payment_mode || !['online', 'cash'].includes(payment_mode)) {
-        return res.status(400).json({
-          success: false,
-          message: 'Valid payment_mode is required (online or cash)'
-        });
-      }
-
-      const updatedBooking = await Booking.updatePaymentMode(bookingId, req.user.id, payment_mode);
-
-      res.json({
-        success: true,
-        message: 'Payment mode updated successfully',
-        data: updatedBooking
-      });
-
-    } catch (error) {
-      logger.error('Update payment mode error:', error);
-      res.status(400).json({
-        success: false,
-        message: error.message || 'Error updating payment mode'
-      });
     }
   }
 

@@ -1,12 +1,11 @@
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { StripeProvider } from '../components/StripeImports';
 import OfflineBanner from '../components/OfflineBanner';
 import NotificationTapHandler from '../components/NotificationTapHandler';
 
 export default function RootLayout() {
   return (
-    <StripeProvider publishableKey={process.env.EXPO_PUBLIC_STRIPE_KEY || ''}>
+    <>
       <Stack screenOptions={{ freezeOnBlur: true }}>
         {/* 1. Entry point — splash / auth check */}
         <Stack.Screen name="index" options={{ headerShown: false }} />
@@ -42,6 +41,6 @@ export default function RootLayout() {
       <NotificationTapHandler />
       <OfflineBanner />
       <StatusBar style="light" />
-    </StripeProvider>
+    </>
   );
 }

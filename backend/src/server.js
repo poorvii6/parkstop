@@ -19,14 +19,12 @@ const bookingRoutes = require('./routes/bookings');
 const locationRoutes = require('./routes/locations');
 const startBookingExpiryJob = require('./services/bookingExpiryService');
 const analyticsRoutes = require('./routes/analytics'); 
-const chatbotRoutes = require('./routes/chatbot');
 const paymentRoutes = require('./routes/payments');
 const mapRoutes = require('./routes/maps');
 const savedRoutes = require('./routes/saved_spots');
 const payoutRoutes = require('./routes/payouts');
 const reviewRoutes = require('./routes/reviews');
 const disputeRoutes = require('./routes/disputes');
-const bookingsSimpleRoutes = require('./routes/bookingsSimple');
 const notificationRoutes = require('./routes/notifications');
 const ownerVerificationRoutes = require('./routes/ownerVerification');
 
@@ -71,7 +69,8 @@ const limiter = rateLimit({
   message: { success: false, message: 'Too many requests, please try again later.' },
   // Never rate limit the health check — it is how we diagnose the service, and
   // it must not fail because a user was busy.
-  skip: (req) => process.env.IGNORE_RATE_LIMITS === 'true' || req.path === '/health'
+  skip: (req) => req.path === '/health' ||
+    (process.env.NODE_ENV !== 'production' && process.env.IGNORE_RATE_LIMITS === 'true')
 });
 
 // Strict limiter for auth endpoints
@@ -79,7 +78,7 @@ const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,                   // 10 login attempts per 15 min
   message: { success: false, message: 'Too many login attempts, please try again later.' },
-  skip: () => process.env.IGNORE_RATE_LIMITS === 'true'
+  skip: () => process.env.NODE_ENV !== 'production' && process.env.IGNORE_RATE_LIMITS === 'true'
 });
 
 app.use(limiter);
@@ -158,14 +157,12 @@ app.use(`${API_PREFIX}/spots`, spotRoutes);
 app.use(`${API_PREFIX}/bookings`, bookingRoutes);
 app.use(`${API_PREFIX}/locations`, locationRoutes);
 app.use(`${API_PREFIX}/analytics`, analyticsRoutes);
-app.use(`${API_PREFIX}/chatbot`, chatbotRoutes);
 app.use(`${API_PREFIX}/payments`, paymentRoutes);
 app.use(`${API_PREFIX}/maps`, mapRoutes);
 app.use(`${API_PREFIX}/saved-spots`, savedRoutes);
 app.use(`${API_PREFIX}/payouts`, payoutRoutes);
 app.use(`${API_PREFIX}/reviews`, reviewRoutes);
 app.use(`${API_PREFIX}/disputes`, disputeRoutes);
-app.use(`${API_PREFIX}/bookings-simple`, bookingsSimpleRoutes);
 app.use(`${API_PREFIX}/notifications`, notificationRoutes);
 
 // Serve the ParkStop landing page at root URL

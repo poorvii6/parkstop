@@ -1,8 +1,6 @@
 const cron = require('node-cron');
 const prisma = require('../config/prisma');
 const logger = require('../utils/logger');
-const PricingService = require('../services/PricingService');
-const CommissionService = require('../services/CommissionService');
 const NotificationService = require('../services/notificationService');
 const BookingRefundService = require('../services/BookingRefundService');
 
@@ -46,34 +44,82 @@ const expireReservation = async (booking, now) => {
   return true;
 };
 
+// How long a driver may stay past their booked end before the session is
+// closed for them, and how long an owner has to confirm a checkout before
+// ParkStop confirms it on their behalf.
+const OVERSTAY_GRACE_MS = 2 * 60 * 60 * 1000;
+const OWNER_CONFIRM_TIMEOUT_MS = 15 * 60 * 1000;
+// Only bookings paid after this go through the recovery sweep. Older ones were
+// settled by code that sometimes credited the wallet without a payout row, and
+// must not be credited a second time.
+const RECOVERY_SWEEP_FROM = new Date('2026-10-12T00:00:00+05:30');
+
 /**
- * Auto-complete ONE active booking whose end_time has passed. Same claim-first
- * reasoning: if the finder checked out in the meantime, this must be a no-op
- * rather than a second slot release.
+ * Close ONE session through the normal checkout path (Booking.complete), so
+ * the bill, the slot and the commission are worked out exactly as when the
+ * owner confirms. Booking.complete locks the row, so if the owner or driver
+ * closed it in the meantime this throws 'Booking not active' and does nothing.
  *
- * @returns {Promise<boolean>} true if this call is the one that completed it.
+ * @returns {Promise<object|null>} the completed booking, or null if it was already closed
  */
-const autoCompleteBooking = async (booking, data, now) => {
-  const claimed = await prisma.bookings.updateMany({
-    where: { id: booking.id, status: 'active' },
-    data: { ...data, updated_at: now }
-  });
+const closeSession = async (bookingId) => {
+  const Booking = require('../models/Booking');
+  try {
+    return await Booking.complete(bookingId);
+  } catch (err) {
+    if (/not active/i.test(err.message)) return null;
+    throw err;
+  }
+};
 
-  if (claimed.count === 0) return false;
+/** Tell the driver to pay, and switch their app to the payment screen. */
+const askDriverToPay = async (completed, title, body) => {
+  try {
+    const { emitToUser } = require('../config/socket');
+    emitToUser(completed.user_id, 'booking:checkout_confirmed', completed);
+  } catch (e) {
+    logger.warn(`checkout_confirmed emit failed for booking ${completed.id}: ${e?.message}`);
+  }
+  try {
+    await NotificationService.sendPushNotification(completed.user_id, {
+      title,
+      body,
+      data: { bookingId: completed.id, type: 'payment_due' },
+    });
+  } catch (e) {
+    logger.warn(`Payment reminder failed for booking ${completed.id}: ${e?.message}`);
+  }
+};
 
-  const updateData = {
-    available_slots: { increment: 1 },
-    is_available: true
-  };
-  if (booking.vehicle_type === 'car') updateData.car_slots = { increment: 1 };
-  else if (booking.vehicle_type === 'bike') updateData.bike_slots = { increment: 1 };
-
-  await prisma.parking_spots.update({
-    where: { id: booking.spot_id },
-    data: updateData
-  });
-
-  return true;
+/**
+ * Paid bookings whose owner was never credited (a crash, a queue outage).
+ * processBookingPayout is idempotent, so retrying is always safe.
+ */
+const recoverUnsettledPayouts = async (now) => {
+  const rows = await prisma.$queryRaw`
+    SELECT b.id, b.spotter_earning, s.spotter_id
+    FROM bookings b
+    JOIN parking_spots s ON s.id = b.spot_id
+    LEFT JOIN payouts p ON p.booking_id = b.id
+    WHERE p.id IS NULL
+      AND b.status = 'completed'
+      AND b.payment_status = 'paid'
+      AND b.payment_mode = 'online'
+      AND b.spotter_earning > 0
+      AND b.updated_at >= ${RECOVERY_SWEEP_FROM}
+      AND b.updated_at < ${new Date(now.getTime() - 5 * 60 * 1000)}
+    LIMIT 50
+  `;
+  const PayoutService = require('./payments/PayoutService');
+  for (const r of rows) {
+    try {
+      await PayoutService.processBookingPayout(r.id, Number(r.spotter_earning), r.spotter_id);
+      logger.warn(`Recovered missing owner credit for booking ${r.id}`);
+    } catch (err) {
+      logger.error(`Recovery credit failed for booking ${r.id}:`, err);
+    }
+  }
+  return rows.length;
 };
 
 const startBookingExpiryJob = () => {
@@ -164,56 +210,89 @@ const startBookingExpiryJob = () => {
       }
 
       /**
-       * 2️⃣ AUTO-COMPLETE ACTIVE BOOKINGS
-       * Bookings that reached their end_time
+       * 2️⃣ BOOKED TIME IS UP
+       * One reminder when the booked window ends. The session is NOT closed
+       * then: the car is usually still there, and freeing the bay would let
+       * someone else book a space that is physically taken. Extra time is
+       * billed when the driver ends the session.
        */
-      const activeExpired = await prisma.bookings.findMany({
+      const endedNow = await prisma.bookings.findMany({
         where: {
           status: 'active',
-          end_time: { lte: now }
+          end_time: { gt: new Date(now.getTime() - 60 * 1000), lte: now }
         },
-        include: {
-          parking_spots: true
-        }
+        select: { id: true, user_id: true }
       });
-
-      if (activeExpired.length > 0) {
-        logger.info(`Auto-completing ${activeExpired.length} finished bookings...`);
-
-        for (let booking of activeExpired) {
-          const startTime = new Date(booking.start_time);
-          const minutes = Math.ceil((now - startTime) / (1000 * 60));
-          // Match Booking.complete(): a minimum of one HOUR, not one minute.
-          // The old `Math.max(1, minutes) / 60` floored at 0.0167h, so an
-          // identical session was billed a fraction of a rupee when the sweep
-          // closed it and a full hour when the owner did.
-          const hours = Math.max(1, minutes / 60);
-
-          const pricing = await PricingService.calculatePrice({
-            basePrice: Number(booking.parking_spots.price_per_hour),
-            locationType: booking.parking_spots.location_type || 'urban',
-            spotId: booking.spot_id
+      for (const b of endedNow) {
+        try {
+          await NotificationService.sendPushNotification(b.user_id, {
+            title: 'Your booked time is up',
+            body: 'Extend your stay or end the session in ParkStop. Extra time is charged by the hour.',
+            data: { bookingId: b.id, type: 'time_up' }
           });
-
-          const finalPrice = Number((hours * pricing.finalPrice).toFixed(2));
-          const commission = CommissionService.calculateCommission(
-            finalPrice,
-            booking.parking_spots.location_type || 'urban'
-          );
-
-          try {
-            await autoCompleteBooking(booking, {
-              status: 'completed',
-              actual_end_time: now,
-              total_price: finalPrice,
-              hours: hours,
-              platform_fee: commission.platformFee,
-              spotter_earning: commission.spotterEarning
-            }, now);
-          } catch (err) {
-            logger.error(`Failed to auto-complete booking ${booking.id}:`, err);
-          }
+        } catch (err) {
+          logger.warn(`Time-up reminder failed for booking ${b.id}: ${err?.message}`);
         }
+      }
+
+      /**
+       * 3️⃣ FORGOTTEN SESSIONS
+       * Still active long after the booked end: close it so the bay is freed,
+       * bill up to now, and ask the driver to pay.
+       */
+      const forgotten = await prisma.bookings.findMany({
+        where: {
+          status: 'active',
+          end_time: { lte: new Date(now.getTime() - OVERSTAY_GRACE_MS) }
+        },
+        select: { id: true }
+      });
+      for (const b of forgotten) {
+        try {
+          const completed = await closeSession(b.id);
+          if (completed) {
+            logger.info(`Closed forgotten session ${b.id}`);
+            await askDriverToPay(completed, 'Your parking was ended',
+              'Your session ran well past its booked time, so we ended it. Please pay in ParkStop.');
+          }
+        } catch (err) {
+          logger.error(`Failed to close forgotten session ${b.id}:`, err);
+        }
+      }
+
+      /**
+       * 4️⃣ OWNER DID NOT CONFIRM CHECKOUT
+       * The driver tapped "End session" and the owner has not responded. The
+       * bill was already fixed at that moment (actual_end_time), so confirming
+       * for them cannot overcharge anyone — it just lets the driver pay.
+       */
+      const unconfirmed = await prisma.bookings.findMany({
+        where: {
+          status: 'checkout_pending',
+          actual_end_time: { lte: new Date(now.getTime() - OWNER_CONFIRM_TIMEOUT_MS) }
+        },
+        select: { id: true }
+      });
+      for (const b of unconfirmed) {
+        try {
+          const completed = await closeSession(b.id);
+          if (completed) {
+            logger.info(`Auto-confirmed checkout for booking ${b.id} (owner did not respond)`);
+            await askDriverToPay(completed, 'Checkout confirmed',
+              'The spot owner did not respond, so we confirmed your checkout. Please pay in ParkStop.');
+          }
+        } catch (err) {
+          logger.error(`Failed to auto-confirm checkout ${b.id}:`, err);
+        }
+      }
+
+      /**
+       * 5️⃣ RECOVERY: paid bookings whose owner was never credited.
+       */
+      try {
+        await recoverUnsettledPayouts(now);
+      } catch (err) {
+        logger.error('Owner-credit recovery sweep failed:', err);
       }
 
     } catch (error) {
@@ -227,4 +306,5 @@ const startBookingExpiryJob = () => {
 module.exports = startBookingExpiryJob;
 // Named exports so the claim-first behaviour can be tested without a scheduler.
 module.exports.expireReservation = expireReservation;
-module.exports.autoCompleteBooking = autoCompleteBooking;
+module.exports.closeSession = closeSession;
+module.exports.recoverUnsettledPayouts = recoverUnsettledPayouts;

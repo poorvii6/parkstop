@@ -339,68 +339,56 @@ class PayoutService {
   }
 
   /**
-   * 💰 PROCESS BOOKING PAYOUT
-   * Called after a booking is completed.
-   * Calculates commission and pays the Spotter.
+   * 💰 CREDIT AN OWNER FOR ONE PAID BOOKING
    *
-   * @param {number} bookingId - The completed booking ID
-   * @param {number} spotterEarning - Amount the Spotter earns
-   * @param {number} spotterId - Spotter's user ID
+   * Owner earnings go into their ParkStop wallet (users.balance); ParkStop then
+   * pays wallets out to verified bank accounts. Automatic bank transfers
+   * (RazorpayX) are not approved for ParkStop, so this never calls them.
+   *
+   * Safe to call any number of times, from any path (payment webhook, checkout
+   * confirmation, queue retry, the recovery sweep):
+   *   - the booking row is locked first, so two callers cannot both pass the check;
+   *   - the payout row and the wallet credit are written in ONE transaction, so
+   *     there is never a credit without a record or a record without a credit;
+   *   - any existing payout row for the booking means it is already done.
+   * On failure it throws and changes nothing; the caller or the sweep retries.
+   *
+   * @returns the payout row (new or existing), or null when there is nothing to pay
    */
   async processBookingPayout(bookingId, spotterEarning, spotterId) {
-    try {
-      const spotter = await prisma.users.findUnique({ where: { id: spotterId } });
-      if (!spotter) {
-        logger.error(`Spotter ${spotterId} not found for payout`);
-        return null;
+    const id = parseInt(bookingId);
+    const ownerId = parseInt(spotterId);
+    const amount = Math.round(Number(spotterEarning) * 100) / 100;
+    if (!id || !ownerId || !(amount > 0)) return null;
+
+    return prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT id FROM bookings WHERE id = ${id} FOR UPDATE`;
+
+      const existing = await tx.payouts.findFirst({ where: { booking_id: id } });
+      if (existing) {
+        logger.info(`Booking ${id} already credited (payout ${existing.id}, ${existing.status}) — skipping`);
+        return existing;
       }
 
-      // Idempotency: never pay the same booking twice. Both the payment-capture
-      // path (PaymentService._finalizeClaimedBooking) and the checkout-settlement
-      // path (BookingSettlementService) can fire for one online booking; without
-      // this guard the spotter is paid twice. A DB unique index on
-      // payouts(booking_id) is the airtight backstop for concurrent callers.
-      const alreadyPaid = await prisma.payouts.findFirst({
-        where: {
-          booking_id: parseInt(bookingId),
-          status: { notIn: ['failed_needs_retry', 'failed_queued'] },
+      const payout = await tx.payouts.create({
+        data: {
+          user_id: ownerId,
+          booking_id: id,
+          amount,
+          status: 'balance_credited',
+          mode: 'balance',
+          purpose: 'payout',
+          narration: `ParkStop earnings - Booking #${id}`,
         },
       });
-      if (alreadyPaid) {
-        logger.info(`Payout already recorded for booking ${bookingId} (status ${alreadyPaid.status}) — skipping duplicate`);
-        return alreadyPaid;
-      }
+      await tx.users.update({
+        where: { id: ownerId },
+        data: { balance: { increment: amount } },
+      });
 
-      const narration = `ParkStop earnings - Booking #${bookingId}`;
-
-      // If Spotter has a fund account, do a real payout
-      if (spotter.razorpay_fund_account_id) {
-        return await this.createPayout({
-          fundAccountId: spotter.razorpay_fund_account_id,
-          amount: spotterEarning,
-          mode: spotter.payout_mode === 'bank' ? 'IMPS' : 'UPI',
-          narration,
-          userId: spotterId,
-          bookingId
-        });
-      }
-
-      // Otherwise, just credit their in-app balance
-      logger.info(`Spotter ${spotterId} has no payout account — crediting balance`);
-      return await this._createLocalPayout(spotterId, bookingId, spotterEarning, 'balance', narration);
-    } catch (error) {
-      logger.error(`processBookingPayout failed for booking ${bookingId}:`, error);
-      // Ensure balance is credited even if payout fails
-      try {
-        await prisma.users.update({
-          where: { id: spotterId },
-          data: { balance: { increment: parseFloat(spotterEarning) } }
-        });
-      } catch (balanceError) {
-        logger.error(`CRITICAL: Failed to credit balance for spotter ${spotterId}:`, balanceError);
-      }
-      return null;
-    }
+      logger.info(`Credited ₹${amount} to owner ${ownerId} for booking ${id}`);
+      return payout;
+    });
   }
 }
 

@@ -15,7 +15,7 @@ jest.mock('../../src/services/payments/PayoutService', () => ({
 jest.mock('../../src/services/payments/RazorpayAdapter', () => ({
   verifyPaymentSignature: jest.fn(() => true), fetchOrder: jest.fn(), fetchPayment: jest.fn(),
 }));
-jest.mock('../../src/services/payments/StripeAdapter', () => ({ retrievePaymentIntent: jest.fn() }));
+jest.mock('../../src/services/payments/StripeAdapter', () => ({}), { virtual: true });
 jest.mock('../../src/config/socket', () => ({ emitToUser: jest.fn() }));
 jest.mock('../../src/utils/logger', () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }));
 

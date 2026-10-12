@@ -3,13 +3,47 @@ const logger = require('../utils/logger');
 const PricingService = require('../services/PricingService');
 const CommissionService = require('../services/CommissionService');
 const ParkingSpot = require('./ParkingSpot');
-const PaymentService = require('../services/paymentService');
 const BookingRefundPolicy = require('../services/BookingRefundPolicy');
+
+// The entry and exit codes belong to the driver: they hand them over at the
+// gate to prove they are there. An owner who could read them could check a
+// driver in or out without them. Every response an owner sees goes through
+// this.
+const OWNER_HIDDEN_FIELDS = ['otp_code', 'checkout_otp'];
 
 class Booking {
 
-  static async create({ user_id, spot_id, start_time, end_time, vehicle_type = 'car', vehicle_subtype = null, slot_name = null, payment_mode = 'online' }) {
+  static forOwner(booking) {
+    if (!booking || typeof booking !== 'object') return booking;
+    const copy = { ...booking };
+    for (const f of OWNER_HIDDEN_FIELDS) delete copy[f];
+    return copy;
+  }
+
+  static async create({ user_id, spot_id, start_time, end_time, vehicle_type = 'car', vehicle_subtype = null, slot_name = null }) {
+    // ParkStop is online-only: the driver pays in the app (Razorpay) when the
+    // session ends. There is no cash option.
+    const payment_mode = 'online';
     return prisma.$transaction(async (tx) => {
+      // One parking at a time, and the last one must be paid for first.
+      // Payment happens after the owner confirms checkout, so without this a
+      // driver could leave without paying and simply book again.
+      const open = await tx.bookings.findFirst({
+        where: {
+          user_id: parseInt(user_id),
+          OR: [
+            { status: { in: ['reserved', 'active', 'checkout_pending'] } },
+            { status: 'completed', payment_mode: 'online', payment_status: { not: 'paid' } },
+          ],
+        },
+        select: { id: true, status: true },
+      });
+      if (open) {
+        throw new Error(open.status === 'completed'
+          ? 'Please pay for your last parking before booking again.'
+          : 'You already have a parking in progress. Finish it before booking again.');
+      }
+
       // 1. Get spot with lock
       await tx.$executeRaw`
         SELECT id FROM "parking_spots"
@@ -151,7 +185,7 @@ class Booking {
           platform_fee: commission.platformFee,
           spotter_earning: commission.spotterEarning,
           payment_mode,
-          payment_status: payment_mode === 'cash' ? 'pending_cash' : 'pending',
+          payment_status: 'pending',
           advance_fee,
           amount_paid
         }
@@ -262,6 +296,11 @@ class Booking {
 
   static async complete(bookingId, checkoutOtp = null) {
     return prisma.$transaction(async (tx) => {
+      // Lock the row: the owner's confirmation and the automatic sweep can
+      // both try to close the same booking. The second one must see
+      // 'completed' and stop, not hand the slot back a second time.
+      await tx.$executeRaw`SELECT id FROM bookings WHERE id = ${parseInt(bookingId)} FOR UPDATE`;
+
       const booking = await tx.bookings.findUnique({
         where: { id: parseInt(bookingId) },
         include: {
@@ -355,35 +394,8 @@ class Booking {
         data: updateData
       });
 
-      // 4. AUTOMATED BILLING (The Uber Experience)
-      // Attempt to charge the finder's default payment method immediately.
-      try {
-        const chargeResult = await PaymentService.chargeUserForBooking(
-          booking.user_id, 
-          booking.id, 
-          finalPrice
-        );
-
-        if (chargeResult.success) {
-          logger.info(`Automated charge successful for booking ${booking.id}: ${chargeResult.transactionId}`);
-          
-          // 5. AUTOMATED PAYOUT
-          // Split and send money to the spotter
-          if (booking.parking_spots.users?.stripe_account_id) {
-             await PaymentService.splitAndPayout(
-               booking.id, 
-               finalPrice, 
-               commission.spotterEarning, 
-               booking.parking_spots.users.stripe_account_id,
-               booking.parking_spots.users.payout_provider || 'stripe'
-             );
-          }
-        }
-      } catch (payError) {
-        logger.error(`Automated billing failed for booking ${booking.id}:`, payError);
-        // Note: We don't fail the completion if payment fails (user might pay manually),
-        // but we log it for retry/notification.
-      }
+      // Payment is collected afterwards in the app (Razorpay), once the owner
+      // has confirmed checkout. Nothing is charged here.
 
       return updated;
     });
@@ -498,52 +510,6 @@ class Booking {
     });
   }
 
-  static async updatePaymentMode(bookingId, userId, paymentMode) {
-    return prisma.$transaction(async (tx) => {
-      const booking = await tx.bookings.findFirst({
-        where: {
-          id: parseInt(bookingId),
-          user_id: parseInt(userId)
-        },
-        include: {
-          parking_spots: true
-        }
-      });
-
-      if (!booking) throw new Error('Booking not found or unauthorized');
-      if (booking.payment_status === 'paid') throw new Error('Booking is already paid');
-
-      const isCash = paymentMode === 'cash';
-
-      const updated = await tx.bookings.update({
-        where: { id: parseInt(bookingId) },
-        data: {
-          payment_mode: paymentMode,
-          payment_status: isCash ? 'paid' : 'pending',
-          updated_at: new Date()
-        }
-      });
-
-      if (isCash) {
-        // If cash, deduct the platform fee from the Spotter's balance
-        const spot = booking.parking_spots;
-        if (spot && spot.spotter_id) {
-          await tx.users.update({
-            where: { id: spot.spotter_id },
-            data: {
-              balance: {
-                decrement: booking.platform_fee || 0
-              }
-            }
-          });
-          logger.info(`Cash booking ${bookingId} (updated at checkout): Deducted ₹${booking.platform_fee} from spotter ${spot.spotter_id} wallet`);
-        }
-      }
-
-      return updated;
-    });
-  }
-
   static async findById(id) {
     return prisma.bookings.findUnique({
       where: { id: parseInt(id) },
@@ -572,7 +538,7 @@ class Booking {
   }
 
   static async findBySpotter(spotterId) {
-    return prisma.bookings.findMany({
+    const rows = await prisma.bookings.findMany({
       where: {
         parking_spots: {
           spotter_id: parseInt(spotterId)
@@ -590,6 +556,7 @@ class Booking {
         created_at: 'desc'
       }
     });
+    return rows.map((b) => Booking.forOwner(b));
   }
 }
 

@@ -163,6 +163,9 @@ model users {
   // Legacy column from the old spotter-verification work. Kept so prisma db push
   // does not try to drop it (it holds data). Values: draft/pending/approved/rejected.
   verification_status       String?
+  // Firebase sign-in times (auth_time, seconds) that passed the email code.
+  // The API only accepts tokens from one of these sign-ins. Newest last, max 5.
+  otp_auth_times            Int[]             @default([])
 
   bookings              bookings[]
   locations             locations[]

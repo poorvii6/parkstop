@@ -70,13 +70,6 @@
           "photosPermission": "Allow Smart Parking to access your photos to upload spot pictures."
         }
       ],
-      [
-        "@stripe/stripe-react-native",
-        {
-          "merchantIdentifier": "com.smartparking.app",
-          "enableGooglePay": true
-        }
-      ],
       "expo-font",
       "@react-native-google-signin/google-signin"
     ],
@@ -86,6 +79,7 @@
         "projectId": "ca58c2c3-fd5f-478d-9d2c-48d3caf65717"
       }
     },
-    "owner": "poo123"
+    "owner": "poo123",
+    "newArchEnabled": true
   }
 }

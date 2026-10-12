@@ -3,7 +3,8 @@ const rateLimit = require('express-rate-limit');
 // Tests and local load checks need to be able to opt out, matching the existing
 // convention in authValidator.js.
 const skip = () =>
-  process.env.NODE_ENV === 'test' || process.env.IGNORE_RATE_LIMITS === 'true';
+  process.env.NODE_ENV !== 'production' &&
+  (process.env.NODE_ENV === 'test' || process.env.IGNORE_RATE_LIMITS === 'true');
 
 /**
  * Limits how many verification emails one IP can trigger.

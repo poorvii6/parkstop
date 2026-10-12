@@ -41,11 +41,8 @@ jest.mock('../../src/services/PricingService', () => ({
   calculatePrice: jest.fn().mockResolvedValue({ finalPrice: 100 }),
 }));
 
-// Payment/notification side-effects are stubbed — we only test booking logic here.
-jest.mock('../../src/services/paymentService', () => ({
-  chargeUserForBooking: jest.fn().mockResolvedValue({ success: false }),
-  splitAndPayout: jest.fn().mockResolvedValue({}),
-}));
+// Payment side-effects are stubbed — we only test booking logic here.
+jest.mock('../../src/services/paymentService', () => ({}));
 
 jest.mock('../../src/utils/logger', () => ({
   info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn(),
@@ -63,6 +60,8 @@ beforeEach(() => {
   // rather than by setting the available_slots column — that column is no
   // longer what decides.
   mockTx.bookings.count.mockResolvedValue(0);
+  // Default: the driver has no unfinished or unpaid booking.
+  mockTx.bookings.findFirst.mockResolvedValue(null);
 });
 
 // ---- verifyOTP -----------------------------------------------------------
@@ -175,14 +174,16 @@ describe('Booking.create', () => {
     expect(booking.status).toBe('reserved');
   });
 
-  test('cash bookings are marked pending_cash', async () => {
+  test('every booking is online, whatever the app sends', async () => {
     mockTx.parking_spots.findUnique.mockResolvedValue(activeSpot());
     mockTx.bookings.create.mockImplementation(({ data }) => Promise.resolve({ id: 1, ...data }));
     mockTx.parking_spots.update.mockResolvedValue({});
 
     await Booking.create({ user_id: 1, spot_id: 10, payment_mode: 'cash', ...validWindow() });
 
-    expect(mockTx.bookings.create.mock.calls[0][0].data.payment_status).toBe('pending_cash');
+    const data = mockTx.bookings.create.mock.calls[0][0].data;
+    expect(data.payment_mode).toBe('online');
+    expect(data.payment_status).toBe('pending');
   });
 
   test('rejects when no slots are available', async () => {

@@ -244,7 +244,9 @@ class NotificationService {
    */
   static async notifyNewBooking(spotterId, booking) {
     // 1. Emit direct socket event that spotter expects
-    emitToUser(spotterId, 'booking:new', booking);
+    // Without the driver's entry/exit codes (see Booking.forOwner).
+    const { otp_code, checkout_otp, ...ownerView } = booking || {};
+    emitToUser(spotterId, 'booking:new', ownerView);
 
     // 2. Emit generic socket notification
     const finderName = booking.finder_name || 'A driver';

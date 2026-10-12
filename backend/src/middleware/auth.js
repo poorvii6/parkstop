@@ -3,6 +3,24 @@ const logger = require('../utils/logger');
 const admin = require('../config/firebase');
 const { resolveUserFromFirebase } = require('../services/authUserService');
 const { hasAnyRole } = require('../utils/roles');
+const { isOtpSessionVerified } = require('../services/otpSession');
+
+// Routes a signed-in user may call before entering the email code.
+// Logout must always work so a half-finished sign-in can be cleaned up.
+const OTP_EXEMPT_PATHS = ['/api/v1/auth/logout'];
+
+function toRequestUser(user) {
+  return {
+    id: user.id,
+    email: user.email,
+    role: user.role,
+    full_name: user.full_name || user.name,
+    firebase_uid: user.firebase_uid,
+    is_finder_registered: user.is_finder_registered,
+    is_spotter_registered: user.is_spotter_registered,
+    verification_status: user.verification_status || null
+  };
+}
 
 /**
  * 🔒 Authenticate user (Firebase ID Token Only)
@@ -49,16 +67,18 @@ const authenticate = async (req, res, next) => {
         });
       }
 
-      req.user = {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-        full_name: user.full_name || user.name,
-        firebase_uid: user.firebase_uid,
-        is_finder_registered: user.is_finder_registered,
-        is_spotter_registered: user.is_spotter_registered,
-        verification_status: user.verification_status || null
-      };
+      // The email code must have been entered for THIS sign-in. Checked on
+      // the server so the code cannot be skipped by calling the API directly.
+      const path = (req.originalUrl || '').split('?')[0];
+      if (!OTP_EXEMPT_PATHS.includes(path) && !isOtpSessionVerified(user, decodedFirebase)) {
+        return res.status(401).json({
+          success: false,
+          code: 'OTP_REQUIRED',
+          message: 'Please sign in again and enter the code we email you.'
+        });
+      }
+
+      req.user = toRequestUser(user);
     }
 
     next();
@@ -116,17 +136,8 @@ const optionalAuth = async (req, res, next) => {
 
       if (decodedFirebase) {
         const user = await resolveUserFromFirebase(decodedFirebase);
-        if (user) {
-          req.user = {
-            id: user.id,
-            email: user.email,
-            role: user.role,
-            full_name: user.full_name || user.name,
-            firebase_uid: user.firebase_uid,
-            is_finder_registered: user.is_finder_registered,
-            is_spotter_registered: user.is_spotter_registered,
-            verification_status: user.verification_status || null
-          };
+        if (user && isOtpSessionVerified(user, decodedFirebase)) {
+          req.user = toRequestUser(user);
         }
       }
     }
