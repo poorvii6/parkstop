@@ -18,7 +18,8 @@
     let out = { url: CARTO[theme], apiKey: null };
     try {
       const base = (window.PS_API_BASE || '/api/v1');
-      const r = await fetch(`${base}/maps/style?theme=${theme}`);
+      const t = window.PSApi ? await window.PSApi.auth.token().catch(() => null) : null;
+      const r = await fetch(`${base}/maps/style?theme=${theme}`, { headers: t ? { Authorization: 'Bearer ' + t } : {} });
       const j = await r.json();
       if (j && j.data && j.data.styleUrl) out = { url: j.data.styleUrl, apiKey: j.data.apiKey || null };
     } catch (e) {}
@@ -49,7 +50,7 @@
   const LAKES = [[12.983, 77.622, 9, 7], [12.938, 77.666, 22, 10], [13.045, 77.590, 10, 8], [12.958, 77.590, 6, 5]];
   const path = (pts) => pts.map((p, i) => { const [x, y] = P(p[0], p[1]); return (i ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1); }).join(' ');
 
-  function Fallback({ spots, selectedId, user, focus, onSelect, areas }) {
+  function Fallback({ spots, selectedId, user, focus, onSelect, areas, route }) {
     // Zoom to the focus point; the whole city when nothing is focused.
     const target = focus ? { c: px(focus), w: focus.zoom >= 15 ? 300 : 460 } : { c: [VW / 2, VH / 2], w: VW };
     const [vb, setVb] = useState(target);
@@ -77,6 +78,7 @@
         <path d=${path(ORR)} fill="none" stroke="var(--ink-3)" stroke-width=${4 * s} opacity="0.55" stroke-linejoin="round" />
         ${ROADS.map((r) => html`<path d=${path(r)} fill="none" stroke="var(--ink-3)" stroke-width=${2.4 * s} opacity="0.45" stroke-linejoin="round" />`)}
         ${areas.map((a) => { const [x, y] = px(a); return html`<text x=${x} y=${y + 26 * s} text-anchor="middle" font-size=${13 * s} font-weight="600" fill="var(--ink-3)" style="font-family:var(--body)">${a.name}</text>`; })}
+        ${route && route.length > 1 && html`<path d=${route.map((c, i) => { const [x, y] = px({ lat: c[1], lng: c[0] }); return (i ? 'L' : 'M') + x.toFixed(1) + ' ' + y.toFixed(1); }).join(' ')} fill="none" stroke="var(--sign)" stroke-width=${6 * s} stroke-linecap="round" stroke-linejoin="round" opacity="0.9" />`}
         ${user && (() => { const [x, y] = px(user); return html`<g><circle cx=${x} cy=${y} r=${16 * s} fill="var(--sign)" opacity="0.2" /><circle cx=${x} cy=${y} r=${6.5 * s} fill="var(--sign)" stroke="#fff" stroke-width=${2.5 * s} /></g>`; })()}
         ${spots.map((sp) => {
           const [x, y] = px(sp); if (x < -50 || x > VW + 50 || y < -50 || y > VH + 50) return null; const on = sp.id === selectedId; const w = (sp.rate >= 100 ? 58 : 50) * s, hh = 22 * s;
@@ -99,7 +101,8 @@
   }
 
   function MapView(props) {
-    const { spots, selectedId, user, focus, onSelect, onPick, pick } = props;
+    const { spots, selectedId, user, focus, onSelect, onPick, pick, route, follow } = props;
+    const routeRef = useRef(route); routeRef.current = route;
     const pickMarker = useRef(null);
     const onPickRef = useRef(onPick); onPickRef.current = onPick;
     const el = useRef(null);
@@ -145,6 +148,41 @@
       if (mode !== 'gl' || !map.current) return;
       styleFor(theme).then((st) => { try { map.current.setTransformRequest && map.current.setTransformRequest(withKey(st.apiKey)); map.current.setStyle(st.url); } catch (e) {} });
     }, [theme]);
+
+    // Route line (in-app navigation). Re-added after every style change.
+    const drawRoute = () => {
+      const m = map.current; if (!m || !m.isStyleLoaded()) return;
+      const coords = routeRef.current;
+      const data = { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords && coords.length > 1 ? coords : [] } };
+      try {
+        if (m.getSource('ps-route')) m.getSource('ps-route').setData(data);
+        else {
+          m.addSource('ps-route', { type: 'geojson', data });
+          m.addLayer({ id: 'ps-route-casing', type: 'line', source: 'ps-route', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#0b3a99', 'line-width': 11, 'line-opacity': 0.9 } });
+          m.addLayer({ id: 'ps-route-line', type: 'line', source: 'ps-route', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#3b82f6', 'line-width': 7 } });
+        }
+      } catch (e) {}
+    };
+    useEffect(() => {
+      if (mode !== 'gl' || !map.current) return;
+      const m = map.current;
+      drawRoute();
+      m.on('styledata', drawRoute);
+      return () => { m.off('styledata', drawRoute); };
+    }, [mode, route]);
+    // Fit the whole route once when it first appears, then follow the driver.
+    const fitted = useRef(null);
+    useEffect(() => {
+      if (mode !== 'gl' || !map.current || !route || route.length < 2) { if (!route) fitted.current = null; return; }
+      if (fitted.current) return;
+      fitted.current = true;
+      const b = route.reduce((bb, c) => bb.extend(c), new window.maplibregl.LngLatBounds(route[0], route[0]));
+      map.current.fitBounds(b, { padding: 70, duration: 900, maxZoom: 16 });
+    }, [mode, route]);
+    useEffect(() => {
+      if (mode !== 'gl' || !map.current || !follow) return;
+      map.current.easeTo({ center: [follow.lng, follow.lat], zoom: Math.max(map.current.getZoom(), 16), duration: 800 });
+    }, [mode, follow && follow.lat, follow && follow.lng]);
 
     // Picked location (adding a spot)
     useEffect(() => {

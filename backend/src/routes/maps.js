@@ -495,5 +495,138 @@ router.get('/style', async (req, res) => {
     }
 });
 
+// ── Driving route for in-app navigation (ParkStop website) ──────────────
+// GET /maps/route?from=lat,lng&to=lat,lng
+// Ola Maps Directions first (OLA_MAPS_API_KEY), then the public OSRM server
+// (open source, OpenStreetMap). Both answers are turned into the same shape:
+//   { provider, distance_m, duration_s, coordinates: [[lng,lat],...],
+//     steps: [{ instruction, distance_m, duration_s, location: [lng,lat], maneuver }] }
+// Added for the website; the mobile app does not call it.
+const routeCache = new LRUCache(300, 2 * 60 * 1000);
+
+function parseLatLng(v) {
+    const m = /^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/.exec(String(v || ''));
+    if (!m) return null;
+    const lat = Number(m[1]), lng = Number(m[2]);
+    if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+    return { lat, lng };
+}
+
+/** Google-style encoded polyline (precision 5) -> [[lng,lat],...] */
+function decodePolyline(str, precision = 5) {
+    const factor = Math.pow(10, precision);
+    const out = [];
+    let index = 0, lat = 0, lng = 0;
+    while (index < str.length) {
+        let b, shift = 0, result = 0;
+        do { b = str.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+        lat += (result & 1) ? ~(result >> 1) : (result >> 1);
+        shift = 0; result = 0;
+        do { b = str.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+        lng += (result & 1) ? ~(result >> 1) : (result >> 1);
+        out.push([lng / factor, lat / factor]);
+    }
+    return out;
+}
+
+const stripHtml = (s) => String(s || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+
+async function olaRoute(from, to, apiKey) {
+    const url = `https://api.olamaps.io/routing/v1/directions?origin=${from.lat},${from.lng}&destination=${to.lat},${to.lng}&mode=driving&alternatives=false&steps=true&overview=full&api_key=${apiKey}`;
+    const r = await fetch(url, { method: 'POST', headers: { 'X-Request-Id': `ps-web-${Date.now()}` } });
+    if (!r.ok) throw new Error(`Ola directions ${r.status}`);
+    const d = await r.json();
+    const route = d && d.routes && d.routes[0];
+    if (!route || !route.overview_polyline) throw new Error('Ola returned no route');
+    const legs = route.legs || [];
+    const steps = [];
+    let distance = 0, duration = 0;
+    legs.forEach((leg) => {
+        distance += Number(leg.distance) || 0;
+        duration += Number(leg.duration) || 0;
+        (leg.steps || []).forEach((st) => {
+            const loc = st.start_location || {};
+            steps.push({
+                instruction: stripHtml(st.instructions) || 'Continue',
+                distance_m: Number(st.distance) || 0,
+                duration_s: Number(st.duration) || 0,
+                location: [Number(loc.lng), Number(loc.lat)],
+                maneuver: st.maneuver || '',
+            });
+        });
+    });
+    return { provider: 'ola', distance_m: distance, duration_s: duration, coordinates: decodePolyline(route.overview_polyline), steps };
+}
+
+function osrmInstruction(st) {
+    const m = st.maneuver || {};
+    const road = st.name ? ` onto ${st.name}` : '';
+    const dir = m.modifier ? m.modifier.replace('uturn', 'U-turn') : '';
+    switch (m.type) {
+        case 'depart': return `Head ${m.bearing_after != null ? ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'][Math.round(m.bearing_after / 45) % 8] : 'out'}${st.name ? ` on ${st.name}` : ''}`;
+        case 'arrive': return 'You have arrived at the parking spot';
+        case 'turn': case 'end of road': return `Turn ${dir}${road}`;
+        case 'new name': case 'continue': return `Continue ${dir && dir !== 'straight' ? dir : 'straight'}${road}`;
+        case 'merge': return `Merge ${dir}${road}`;
+        case 'on ramp': return `Take the ramp ${dir}${road}`;
+        case 'off ramp': return `Take the exit ${dir}${road}`;
+        case 'fork': return `Keep ${dir} at the fork${road}`;
+        case 'roundabout': case 'rotary': return `At the roundabout, take exit ${m.exit || 1}${road}`;
+        case 'exit roundabout': case 'exit rotary': return `Exit the roundabout${road}`;
+        default: return `${dir ? 'Go ' + dir : 'Continue'}${road}`;
+    }
+}
+
+async function osrmRoute(from, to) {
+    const url = `https://router.project-osrm.org/route/v1/driving/${from.lng},${from.lat};${to.lng},${to.lat}?overview=full&geometries=geojson&steps=true`;
+    const r = await fetch(url, { headers: { 'User-Agent': 'ParkStop-Web' } });
+    if (!r.ok) throw new Error(`OSRM ${r.status}`);
+    const d = await r.json();
+    const route = d && d.routes && d.routes[0];
+    if (!route) throw new Error('OSRM returned no route');
+    const steps = [];
+    (route.legs || []).forEach((leg) => (leg.steps || []).forEach((st) => steps.push({
+        instruction: osrmInstruction(st),
+        distance_m: Number(st.distance) || 0,
+        duration_s: Number(st.duration) || 0,
+        location: (st.maneuver && st.maneuver.location) || null,
+        maneuver: [st.maneuver && st.maneuver.type, st.maneuver && st.maneuver.modifier].filter(Boolean).join('-'),
+    })));
+    return { provider: 'osrm', distance_m: route.distance, duration_s: route.duration, coordinates: route.geometry.coordinates, steps };
+}
+
+router.get('/route', async (req, res) => {
+    try {
+        const clientIp = req.ip || req.connection?.remoteAddress || 'unknown';
+        if (!checkRateLimit(clientIp, 'route')) {
+            return res.status(429).json({ success: false, message: 'Too many route requests. Please wait a moment.' });
+        }
+        const from = parseLatLng(req.query.from);
+        const to = parseLatLng(req.query.to);
+        if (!from || !to) return res.status(400).json({ success: false, message: 'from and to must be "lat,lng"' });
+        if (getDistance(from.lat, from.lng, to.lat, to.lng) > 300) {
+            return res.status(400).json({ success: false, message: 'This spot is too far away to navigate to from where you are.' });
+        }
+        const key = `${from.lat.toFixed(4)},${from.lng.toFixed(4)}|${to.lat.toFixed(5)},${to.lng.toFixed(5)}`;
+        const cached = routeCache.get(key);
+        if (cached) return res.json({ success: true, data: cached, cached: true });
+
+        let data = null;
+        const apiKey = process.env.OLA_MAPS_API_KEY;
+        if (apiKey) {
+            try { data = await olaRoute(from, to, apiKey); }
+            catch (e) { console.error('[ROUTE] Ola failed, trying OSRM:', e.message); }
+        }
+        if (!data) data = await osrmRoute(from, to);
+        if (!data.coordinates || data.coordinates.length < 2) throw new Error('Empty route');
+        routeCache.set(key, data);
+        return res.json({ success: true, data });
+    } catch (error) {
+        console.error('[ROUTE] failed:', error.message);
+        return res.status(502).json({ success: false, message: 'Could not get directions right now. Please try again.' });
+    }
+});
+
+
 module.exports = router;
 

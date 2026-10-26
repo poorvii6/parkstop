@@ -388,3 +388,19 @@ textarea.input { font: inherit; resize: vertical; min-height: 76px; }
 .gpsbar { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; background: var(--lane); border: 1px solid var(--line); font-size: 13.5px; flex-wrap: wrap; }
 .gpsbar .grow { flex: 1; min-width: 180px; color: var(--ink-2); }
 .gpsbar .grow b { color: var(--ink); }
+
+.navcard { display: flex; align-items: center; gap: 14px; padding: 16px; border-radius: 16px; background: var(--sign); color: #fff; }
+.navcard .turn { width: 54px; height: 54px; border-radius: 12px; background: rgba(255,255,255,0.16); display: grid; place-items: center; flex: none; }
+.navcard b { display: block; font-family: var(--display); font-stretch: 112%; font-size: 28px; font-weight: 800; line-height: 1.05; }
+.navcard span { display: block; font-size: 15px; font-weight: 600; opacity: 0.95; margin-top: 2px; }
+.navcard.arrived { background: var(--ok); }
+.navstats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.navstats div { padding: 10px 12px; border-radius: 12px; background: var(--lane); border: 1px solid var(--line); }
+.navstats b { display: block; font-size: 17px; font-weight: 700; }
+.navstats span { font-size: 12px; color: var(--ink-3); }
+.navsteps { gap: 0 !important; padding-block: 6px !important; }
+.navstep { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); font-size: 14px; color: var(--ink-2); }
+.navstep:first-child { border-top: 0; }
+.navstep.on { color: var(--ink); font-weight: 600; }
+.navstep svg { flex: none; color: var(--ink-3); }
+.navstep.on svg { color: var(--sign); }

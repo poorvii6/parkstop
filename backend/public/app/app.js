@@ -17,7 +17,6 @@
   const initials = (n) => String(n || '?').trim().split(/\s+/).map((x) => x[0]).slice(0, 2).join('').toUpperCase();
   const ts = (t) => (t ? new Date(t).getTime() : 0);
   const ls = { get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }, del(k) { try { localStorage.removeItem(k); } catch (e) {} } };
-  const navUrl = (lat, lng) => `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`;
   const firstName = (u) => String((u && (u.full_name || u.name)) || '').split(' ')[0] || 'there';
   const OPEN = ['reserved', 'active', 'checkout_pending'];
 
@@ -654,7 +653,7 @@
     return html`<button class="btn primary block" disabled=${busy} onClick=${pay}>${busy ? 'Opening secure payment…' : `Pay ${inr(amount)}`}</button>`;
   }
 
-  function BookingFlow({ b, user, reload, onPaid }) {
+  function BookingFlow({ b, user, reload, onPaid, onNavigate }) {
     const now = useNow(1000);
     const sp = b.parking_spots || {};
     const [confirm, setConfirm] = useState(null);
@@ -671,7 +670,7 @@
         <${Ticket} b=${b}>
           <div class="ticket-pin"><div><span class="eyebrow">Check-in PIN</span><div class="pin">${b.otp_code || '······'}</div></div><span class="chip warn">Show at the gate</span></div>
         <//>
-        <a class="btn blue block" href=${navUrl(lat, lng)} target="_blank" rel="noopener"><${Icon} n="nav" />Navigate with Google Maps</a>
+        <button class="btn blue block" onClick=${onNavigate}><${Icon} n="nav" />Navigate to the spot</button>
         <div class="status"><span class="pulse"></span>Waiting for the owner to check you in</div>
         ${confirm === 'cancel' ? html`<div class="panel"><b>Cancel this booking?</b><p class="muted" style="font-size:14px">Your bay will be released for other drivers.</p>
             <div class="inline"><button class="btn" onClick=${() => setConfirm(null)}>Keep booking</button><button class="btn primary" disabled=${busy} onClick=${() => act(() => api.put(`/bookings/${b.id}/cancel`), (r) => r.message || 'Booking cancelled')}>Cancel booking</button></div></div>`
@@ -730,6 +729,145 @@
     </div>`;
   }
 
+
+  // ---------------- in-app navigation ----------------
+  const R_EARTH = 6371000;
+  const meters = (a, b) => { const t = Math.PI / 180; const dLat = (b[1] - a[1]) * t, dLng = (b[0] - a[0]) * t; const x = Math.sin(dLat / 2) ** 2 + Math.cos(a[1] * t) * Math.cos(b[1] * t) * Math.sin(dLng / 2) ** 2; return 2 * R_EARTH * Math.asin(Math.sqrt(x)); };
+  const fmtDist = (m) => (m >= 1000 ? (m / 1000).toFixed(m >= 10000 ? 0 : 1) + ' km' : Math.max(10, Math.round(m / 10) * 10) + ' m');
+  const fmtMins = (s) => { const m = Math.max(1, Math.round(s / 60)); return m >= 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} min`; };
+  const TURN = {
+    left: 'M15 19V11a3 3 0 0 0-3-3H6M9 4 5 8l4 4', right: 'M9 19V11a3 3 0 0 1 3-3h6M15 4l4 4-4 4',
+    straight: 'M12 20V4M7 9l5-5 5 5', uturn: 'M8 20V9a4 4 0 0 1 8 0v4M12 9l4 4 4-4',
+    round: 'M12 20v-6M12 14a4 4 0 1 0-4-4M8 10V5M5 8l3-3 3 3', arrive: 'M12 21s-7-6.2-7-11a7 7 0 0 1 14 0c0 4.8-7 11-7 11zM12 8v4',
+  };
+  const turnOf = (st) => {
+    const m = String((st && (st.maneuver || st.instruction)) || '').toLowerCase();
+    if (/arriv/.test(m)) return 'arrive';
+    if (/u-?turn/.test(m)) return 'uturn';
+    if (/roundabout|rotary/.test(m)) return 'round';
+    if (/left/.test(m)) return 'left';
+    if (/right/.test(m)) return 'right';
+    return 'straight';
+  };
+  const TurnIcon = ({ kind, size }) => html`<svg width=${size || 34} height=${size || 34} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d=${TURN[kind] || TURN.straight} /></svg>`;
+
+  /** Where the driver is on the route: nearest point, distances, current step. */
+  function progressOn(route, here) {
+    const c = route.coordinates;
+    let best = 0, bestD = Infinity;
+    for (let i = 0; i < c.length; i++) { const d = meters(here, c[i]); if (d < bestD) { bestD = d; best = i; } }
+    const cum = route._cum;
+    const done = cum[best];
+    const total = cum[cum.length - 1] || 1;
+    const remaining = Math.max(0, total - done) + bestD;
+    let next = null;
+    for (const st of route.steps) { if (st._idx > best + 1 || (st._idx >= best && meters(here, st.location) > 25)) { next = st; break; } }
+    if (!next) next = route.steps[route.steps.length - 1] || null;
+    const toNext = next ? Math.max(0, (cum[next._idx] || total) - done) + bestD : remaining;
+    return { offBy: bestD, idx: best, remaining, toNext, next, eta: (route.duration_s || 0) * (remaining / total) };
+  }
+  function prepareRoute(r) {
+    const c = r.coordinates.map((p) => [Number(p[0]), Number(p[1])]);
+    const cum = [0];
+    for (let i = 1; i < c.length; i++) cum.push(cum[i - 1] + meters(c[i - 1], c[i]));
+    const steps = (r.steps || []).filter((st) => Array.isArray(st.location) && isFinite(st.location[0])).map((st) => {
+      let bi = 0, bd = Infinity; for (let i = 0; i < c.length; i++) { const d = meters(st.location, c[i]); if (d < bd) { bd = d; bi = i; } }
+      return { ...st, _idx: bi };
+    }).sort((a, b) => a._idx - b._idx);
+    return { ...r, coordinates: c, _cum: cum, steps };
+  }
+
+  function Navigation({ b, gps, gpsStatus, onRoute, onExit }) {
+    const sp = b.parking_spots || {};
+    const dest = [num(sp.longitude), num(sp.latitude)];
+    const [route, setRoute] = useState(null);
+    const [err, setErr] = useState('');
+    const [voice, setVoice] = useState(() => ls.get('ps-voice') !== 'off');
+    const fetching = useRef(false);
+    const lastFetch = useRef(0);
+    const spoken = useRef('');
+    const here = gps ? [gps.lng, gps.lat] : null;
+
+    const fetchRoute = async (why) => {
+      if (!here || fetching.current) return;
+      fetching.current = true; lastFetch.current = Date.now();
+      try {
+        const r = await api.get(`/maps/route?from=${here[1].toFixed(6)},${here[0].toFixed(6)}&to=${dest[1]},${dest[0]}`);
+        const pr = prepareRoute(r.data);
+        setRoute(pr); setErr('');
+        if (why === 'reroute') toast('New route found');
+      } catch (e) { setErr(e.message); }
+      fetching.current = false;
+    };
+    useEffect(() => { if (here && !route) fetchRoute(); }, [!!here]);
+
+    const prog = route && here ? progressOn(route, here) : null;
+    const arrived = here && meters(here, dest) < 45;
+    // Off the route for real (not GPS jitter): get a new one, at most every 15 s.
+    const offRef = useRef({ prog: null, arrived: false, acc: 0 });
+    offRef.current = { prog, arrived, acc: (gps && gps.accuracy) || 0 };
+    useEffect(() => {
+      const check = () => {
+        const { prog: pg, arrived: ar, acc } = offRef.current;
+        if (!pg || ar) return;
+        const limit = Math.max(70, Math.min(250, acc) * 1.2);
+        if (pg.offBy > limit && Date.now() - lastFetch.current > 10000) fetchRoute('reroute');
+      };
+      check();
+      const t = setInterval(check, 3000);
+      return () => clearInterval(t);
+    }, [prog && Math.round(prog.offBy / 10)]);
+    // Remaining route only (the part already driven disappears).
+    useEffect(() => { onRoute(route ? (prog ? [here].concat(route.coordinates.slice(prog.idx + 1)) : route.coordinates) : null); }, [route, prog && prog.idx]);
+    useEffect(() => () => onRoute(null), []);
+    // Voice
+    const say = (text) => { try { if (!voice || !window.speechSynthesis) return; window.speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text); u.lang = 'en-IN'; u.rate = 1; window.speechSynthesis.speak(u); } catch (e) {} };
+    useEffect(() => {
+      if (arrived) { if (spoken.current !== 'arrived') { spoken.current = 'arrived'; say('You have arrived. Show your PIN at the gate.'); } return; }
+      if (!prog || !prog.next) return;
+      const key = prog.next.instruction + prog.next._idx;
+      if (spoken.current !== key) { spoken.current = key; say(`In ${fmtDist(prog.toNext)}, ${prog.next.instruction}`); }
+    }, [arrived, prog && prog.next && prog.next._idx]);
+    useEffect(() => () => { try { window.speechSynthesis && window.speechSynthesis.cancel(); } catch (e) {} }, []);
+
+    if (!gps) return html`<div class="side-body">
+      <button class="back" onClick=${onExit}><${Icon} n="back" />Back to booking</button>
+      <div class="panel" style="text-align:center;align-items:center;padding:24px 16px">
+        ${gpsStatus === 'blocked' || gpsStatus === 'unsupported'
+          ? html`<h2 style="font-size:20px">Allow location to navigate</h2><p class="muted" style="font-size:14px">Click the lock icon in the address bar, set Location to Allow, then reload this page.</p>`
+          : html`<div class="spinner"></div><h2 style="font-size:20px">Finding your location…</h2><p class="muted" style="font-size:14px">Allow location when your browser asks.</p>`}
+      </div></div>`;
+
+    const arrival = prog ? new Date(Date.now() + prog.eta * 1000) : null;
+    return html`<div class="side-body nav">
+      <div class="inline" style="justify-content:space-between">
+        <button class="back" onClick=${onExit}><${Icon} n="back" />Back to booking</button>
+        <button class="btn sm ghost" aria-pressed=${voice} onClick=${() => { const v = !voice; setVoice(v); ls.set('ps-voice', v ? 'on' : 'off'); if (!v) try { window.speechSynthesis.cancel(); } catch (e) {} }}>${voice ? 'Voice on' : 'Voice off'}</button>
+      </div>
+      ${arrived ? html`<div class="navcard arrived">
+          <div class="turn"><${TurnIcon} kind="arrive" /></div>
+          <div><b>You have arrived</b><span>${sp.title}</span></div>
+        </div>
+        <div class="ticket"><div class="ticket-pin"><div><span class="eyebrow">Show this PIN at the gate</span><div class="pin">${b.otp_code}</div></div></div></div>
+        <button class="btn primary block" onClick=${onExit}>Done</button>`
+      : !route ? (err ? html`<div class="panel"><p class="error">${err}</p><button class="btn" onClick=${() => fetchRoute()}>Try again</button></div>` : html`<${Busy} label="Finding the best route…" />`)
+      : html`
+        <div class="navcard">
+          <div class="turn"><${TurnIcon} kind=${turnOf(prog.next)} /></div>
+          <div><b class="num">${fmtDist(prog.toNext)}</b><span>${prog.next ? prog.next.instruction : 'Continue to the spot'}</span></div>
+        </div>
+        <div class="navstats">
+          <div><b class="num">${fmtMins(prog.eta)}</b><span>to go</span></div>
+          <div><b class="num">${fmtDist(prog.remaining)}</b><span>left</span></div>
+          <div><b class="num">${arrival ? time(arrival) : '—'}</b><span>arrival</span></div>
+        </div>
+        ${err && html`<p class="note">${err}</p>`}
+        <div class="card"><div class="card-h"><h2 style="font-size:15px">Directions</h2><small class="faint">via ${route.provider === 'ola' ? 'Ola Maps' : 'OpenStreetMap'}</small></div>
+          <div class="card-b navsteps">${route.steps.filter((st) => st._idx >= prog.idx).slice(0, 8).map((st, i) => html`<div class=${'navstep' + (i === 0 ? ' on' : '')}><${TurnIcon} kind=${turnOf(st)} size=${20} /><span class="grow">${st.instruction}</span><small class="faint num">${st.distance_m ? fmtDist(st.distance_m) : ''}</small></div>`)}</div></div>
+        <div class="ticket"><div class="ticket-pin"><div><span class="eyebrow">Your PIN · ${String(b.slot_name || '').replace(/^Slot\s*/i, 'bay ')}</span><div class="pin" style="font-size:28px">${b.otp_code}</div></div></div></div>`}
+    </div>`;
+  }
+
   function Receipt({ b, onDone }) {
     const sp = b.parking_spots || {};
     return html`<div class="side-body">
@@ -751,6 +889,8 @@
 
   function Driver({ user }) {
     const [gps, gpsStatus] = useGps();
+    const [navOn, setNavOn] = useState(false);
+    const [navRoute, setNavRoute] = useState(null);
     const [center, setCenter] = useState(HOME);
     const followGps = useRef(true); // start the search at the real location until the user searches somewhere else
     const [focus, setFocus] = useState({ lat: center.lat, lng: center.lng, zoom: 13.4 });
@@ -785,7 +925,8 @@
     let body;
     if (!bookings && !bookErr) body = html`<div class="side-body"><${Busy} /></div>`;
     else if (receipt && !openBookingOf([receipt])) body = html`<${Receipt} b=${receipt} onDone=${() => { setReceiptId(null); setSel(null); setFocus({ lat: center.lat, lng: center.lng, zoom: 13.4 }); reloadSpots(); }} />`;
-    else if (open) body = html`<${BookingFlow} b=${open} user=${user} reload=${reloadBookings} onPaid=${(id) => { setReceiptId(id); reloadBookings(); }} />`;
+    else if (open && navOn && open.status === 'reserved') body = html`<${Navigation} b=${open} gps=${gps} gpsStatus=${gpsStatus} onRoute=${setNavRoute} onExit=${() => { setNavOn(false); setNavRoute(null); }} />`;
+    else if (open) body = html`<${BookingFlow} b=${open} user=${user} reload=${reloadBookings} onPaid=${(id) => { setReceiptId(id); reloadBookings(); }} onNavigate=${() => setNavOn(true)} />`;
     else if (tab === 'history') body = html`<div class="side-body">${history.length ? history.map((b) => { const c = STATUS_CHIP[b.status] || [b.status, '']; return html`<div class="row-item"><div class="grow"><b>${(b.parking_spots && b.parking_spots.title) || 'Parking'}</b><small>${dateTime(b.created_at)} · ${String(b.slot_name || '').replace(/^Slot\s*/i, 'bay ')}</small></div><span class=${'chip ' + c[1]}>${c[0]}</span><span class="num" style="min-width:64px;text-align:right">${b.status === 'completed' ? inr(b.total_price) : '—'}</span></div>`; }) : html`<div class="empty">Your past parkings will appear here.</div>`}</div>`;
     else if (selected) body = html`<${SpotDetail} sp=${selected} onBack=${() => setSel(null)} onBooked=${() => { setSel(null); reloadBookings(); reloadSpots(); }} />`;
     else body = html`<div class="side-body">
@@ -808,7 +949,8 @@
         </div>`}
         ${body}
       </aside>
-      <${MapView} spots=${mapSpots} selectedId=${openSpot ? openSpot.id : selected && selected.id} user=${gps} focus=${focus} onSelect=${choose} areas=${AREAS} />
+      <${MapView} spots=${mapSpots} selectedId=${openSpot ? openSpot.id : selected && selected.id} user=${gps} focus=${focus} onSelect=${choose} areas=${AREAS}
+        route=${navOn && open && open.status === 'reserved' ? navRoute : null} follow=${navOn && open && open.status === 'reserved' && navRoute ? gps : null} />
     </main>`;
   }
 
