@@ -854,6 +854,15 @@
     }));
     const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
     const [files, setFiles] = useState([]);
+    const [stage, setStage] = useState('');
+    const addFiles = (list) => {
+      const picked = Array.from(list || []);
+      const ok = picked.filter((x) => x.type.indexOf('image/') === 0 && x.size <= 5 * 1024 * 1024);
+      if (ok.length < picked.length) toast('Some files were skipped. Photos must be images under 5 MB.', 'bad');
+      setFiles((cur) => { const next = cur.concat(ok).slice(0, 5); if (cur.length + ok.length > 5) toast('You can add up to 5 photos.', 'bad'); return next; });
+    };
+    const previews = useMemo(() => files.map((x) => URL.createObjectURL(x)), [files]);
+    useEffect(() => () => previews.forEach((u) => URL.revokeObjectURL(u)), [previews]);
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState('');
     const [focus, setFocus] = useState({ lat: near.lat, lng: near.lng, zoom: 14 });
@@ -872,16 +881,21 @@
         const payload = editing
           ? { title: f.title.trim() || undefined, price_per_hour: f.price ? Number(f.price) : undefined, address: f.address.trim() || undefined, description: f.description.trim() || undefined, total_slots: car + bike, car_slots: car, bike_slots: bike }
           : { title: f.title.trim(), description: f.description.trim(), price_per_hour: Number(f.price), latitude: f.lat, longitude: f.lng, address: f.address.trim() || undefined, total_slots: car + bike, car_slots: car, bike_slots: bike, images: [] };
+        setStage('saving');
         const r = editing ? await api.put(`/spots/${initial.id}`, payload) : await api.post('/spots', payload);
         const id = editing ? initial.id : r.data && r.data.id;
+        // Photos are optional. The spot is already saved; a failed photo upload never undoes it.
+        let photoNote = '';
         if (files.length && id) {
+          setStage('photos');
           const fd = new FormData(); files.slice(0, 5).forEach((x) => fd.append('images', x));
-          try { await api.post(`/spots/${id}/images`, fd); } catch (ie) { toast('Spot saved, but the photos did not upload: ' + ie.message, 'bad'); }
+          try { await api.post(`/spots/${id}/images`, fd); photoNote = ` with ${files.length} photo${files.length === 1 ? '' : 's'}`; }
+          catch (ie) { toast('Spot saved, but the photos did not upload. You can add them later with Edit.', 'bad'); }
         }
-        toast(editing ? 'Spot updated' : 'Spot added');
+        toast((editing ? 'Spot updated' : 'Spot added') + photoNote);
         onSaved();
       } catch (ex) { setErr(ex.message); }
-      setBusy(false);
+      setBusy(false); setStage('');
     };
     return html`<form class="card-b" style="border-top:1px solid var(--line)" onSubmit=${save}>
       <div class="form-grid">
@@ -896,10 +910,15 @@
         <div class="field"><label for="sp-car">Car bays</label><input id="sp-car" class="input num" type="number" min="0" max="50" value=${f.car} onInput=${(e) => set('car', e.target.value)} /></div>
         <div class="field"><label for="sp-bike">Bike bays</label><input id="sp-bike" class="input num" type="number" min="0" max="50" value=${f.bike} onInput=${(e) => set('bike', e.target.value)} /></div>
         <div class="field" style="grid-column:1/-1"><label for="sp-desc">Directions for drivers (optional)</label><input id="sp-desc" class="input" placeholder="e.g. Enter from the back gate, basement level 1" value=${f.description} onInput=${(e) => set('description', e.target.value)} /></div>
-        <div class="field" style="grid-column:1/-1"><label for="sp-photos">Photos (up to 5)</label><input id="sp-photos" class="input" type="file" accept="image/*" multiple onChange=${(e) => setFiles(Array.from(e.target.files || []))} /></div>
+        <div class="field" style="grid-column:1/-1"><label for="sp-photos">Photos <span class="faint" style="font-weight:500">(optional · up to 5)</span></label>
+          <div class="photopick">
+            ${previews.map((u, i) => html`<div class="ph"><img src=${u} alt=${'Photo ' + (i + 1)} /><button type="button" aria-label=${'Remove photo ' + (i + 1)} onClick=${() => setFiles(files.filter((_, j) => j !== i))}><${Icon} n="x" size=${14} /></button></div>`)}
+            ${files.length < 5 && html`<label class="ph add"><input id="sp-photos" type="file" accept="image/*" multiple hidden onChange=${(e) => { addFiles(e.target.files); e.target.value = ''; }} /><${Icon} n="plus" /><span>Add photo</span></label>`}
+          </div>
+          <small class="faint" style="font-size:12px">Photos help drivers find your gate, but you can skip this and add them later.</small></div>
       </div>
       ${err && html`<p class="error">${err}</p>`}
-      <div class="inline"><button class="btn primary" type="submit" disabled=${busy}>${busy ? 'Saving…' : editing ? 'Save changes' : 'Add spot'}</button><button class="btn ghost" type="button" onClick=${onClose}>Cancel</button></div>
+      <div class="inline"><button class="btn primary" type="submit" disabled=${busy}>${stage === 'photos' ? 'Uploading photos…' : busy ? 'Saving…' : editing ? 'Save changes' : 'Add spot'}</button><button class="btn ghost" type="button" onClick=${onClose}>Cancel</button></div>
     </form>`;
   }
 
