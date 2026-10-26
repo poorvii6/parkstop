@@ -435,6 +435,90 @@
     </main>`;
   }
 
+
+  // ---------------- becoming / confirming a spot owner ----------------
+  const ss = { get(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { sessionStorage.setItem(k, v); } catch (e) {} }, del(k) { try { sessionStorage.removeItem(k); } catch (e) {} } };
+  const ownerOkKey = (u) => 'ps-owner-ok:' + (u && u.id);
+  const ageOn = (dob) => { const d = new Date(dob); if (isNaN(d)) return 0; const n = new Date(); let a = n.getFullYear() - d.getFullYear(); if (n.getMonth() < d.getMonth() || (n.getMonth() === d.getMonth() && n.getDate() < d.getDate())) a--; return a; };
+
+  /**
+   * Shown before the spot-owner screens open.
+   * needDetails: first time as an owner — collect owner details (sent with switch-role).
+   * needCode: confirm it is really the account holder with a fresh email code.
+   */
+  function OwnerGate({ user, needDetails, needCode, onDone, onCancel }) {
+    const [step, setStep] = useState(needDetails ? 'details' : 'code');
+    const [f, setF] = useState({ phone: user.phone || '', dob: '', address: user.address || '', own: false, terms: false });
+    const set = (k, v) => setF({ ...f, [k]: v });
+    const [err, setErr] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [pending, setPending] = useState(null);
+
+    const finish = async () => {
+      setBusy(true); setErr('');
+      try {
+        const body = { newRole: 'SPOTTER' };
+        if (needDetails) body.registrationDetails = { phone: f.phone.replace(/\s/g, ''), dob: f.dob, address: f.address.trim() };
+        const r = await api.post('/auth/switch-role', body);
+        await onDone(r.data && r.data.user, needDetails);
+      } catch (e) { setErr(e.message); setBusy(false); }
+    };
+    const askCode = async () => {
+      const r = await api.post('/auth/social-login', { email: user.email, token: await auth.token() });
+      if (!r.pending_login_token) throw new Error(r.message || 'Could not send the code. Please try again.');
+      setPending(r.pending_login_token);
+    };
+    useEffect(() => {
+      if (step !== 'code' || pending) return;
+      askCode().catch((e) => setErr(e.message));
+    }, [step]);
+
+    const submitDetails = (e) => {
+      e.preventDefault(); setErr('');
+      if (!/^(?:\+91|91)?[6-9]\d{9}$/.test(f.phone.replace(/\s/g, ''))) return setErr('Enter a valid 10-digit Indian mobile number.');
+      if (!f.dob) return setErr('Enter your date of birth.');
+      if (ageOn(f.dob) < 18) return setErr('You must be 18 or older to rent out a parking space.');
+      if (f.address.trim().length < 15) return setErr('Enter your full home address, with area and PIN code.');
+      if (!f.own) return setErr('Please confirm you own this space or have permission to rent it out.');
+      if (!f.terms) return setErr('Please accept the ParkStop owner terms.');
+      if (needCode) setStep('code'); else finish();
+    };
+
+    const side = step === 'details'
+      ? html`<form class="panel" onSubmit=${submitDetails} style="gap:12px">
+          <button type="button" class="back" onClick=${onCancel}><${Icon} n="back" />Back</button>
+          <div><p class="eyebrow">Step 1 of ${needCode ? 2 : 1} · Owner details</p><h2 style="font-size:24px;margin-top:6px">Become a spot owner</h2>
+            <p class="muted" style="font-size:14px">We need a few details before you can list a space. Next you will verify your identity (Aadhaar, PAN, selfie, bank and property proof) before drivers can see your spots.</p></div>
+          <${Field} label="Name on your account" id="ow-name"><input id="ow-name" class="input" value=${user.full_name || user.name || ''} disabled /><//>
+          <div class="form-grid">
+            <${Field} label="Mobile number" id="ow-phone"><input id="ow-phone" class="input" inputmode="tel" placeholder="98765 43210" value=${f.phone} onInput=${(e) => set('phone', e.target.value)} /><//>
+            <${Field} label="Date of birth" id="ow-dob"><input id="ow-dob" class="input" type="date" max=${new Date().toISOString().slice(0, 10)} value=${f.dob} onInput=${(e) => set('dob', e.target.value)} /><//>
+          </div>
+          <${Field} label="Home address" id="ow-addr" hint="Your own address, as on your ID. You add each parking space's address later."><textarea id="ow-addr" class="input" rows="3" placeholder="House no., street, area, city, PIN code" value=${f.address} onInput=${(e) => set('address', e.target.value)}></textarea><//>
+          <label class="check"><input type="checkbox" checked=${f.own} onChange=${(e) => set('own', e.target.checked)} /> <span>I own the parking space, or I have the owner's permission to rent it out.</span></label>
+          <label class="check"><input type="checkbox" checked=${f.terms} onChange=${(e) => set('terms', e.target.checked)} /> <span>I agree to the ParkStop <a href="/terms" target="_blank" rel="noopener">owner terms</a>, including the 20% platform fee on each parking.</span></label>
+          ${err && html`<p class="error">${err}</p>`}
+          <button class="btn primary block" type="submit" disabled=${busy}>${busy ? 'Saving…' : needCode ? 'Continue' : 'Create my owner account'}</button>
+        </form>`
+      : html`<div class="stack" style="gap:14px">
+          ${needDetails && html`<p class="eyebrow">Step 2 of 2 · Confirm it's you</p>`}
+          ${pending ? html`<${OtpStep} email=${user.email} title="Confirm it's you"
+              note=${needDetails ? 'Enter it to create your spot-owner account.' : 'Spot-owner screens show your earnings and bank details, so we confirm it is you first.'}
+              onBack=${needDetails ? () => setStep('details') : onCancel}
+              resend=${askCode}
+              verify=${async (code) => { await api.post('/auth/login/verify-otp', { email: user.email, code, pending_login_token: pending }); await finish(); }} />`
+            : err ? html`<div class="panel"><p class="error">${err}</p><div class="inline"><button class="btn" onClick=${onCancel}>Back</button><button class="btn primary" onClick=${() => { setErr(''); askCode().catch((e) => setErr(e.message)); }}>Try again</button></div></div>`
+            : html`<${Busy} label="Sending a code to your email…" />`}
+          ${err && pending && html`<p class="error">${err}</p>`}
+        </div>`;
+    return html`<main class="gate"><section class="gate-hero"><${HeroCanvas} />
+        <div class="brand" style="font-size:22px"><span class="psign">P</span>ParkStop</div>
+        <div style="display:flex;flex-direction:column;gap:18px"><h1>${needDetails ? html`Rent out your <em>empty bay.</em>` : html`Owner mode, <em>secured.</em>`}</h1>
+          <p class="lede">${needDetails ? 'List a driveway or basement bay, check cars in with a PIN, and get paid to your bank. Every owner is verified before drivers can book.' : 'Your owner dashboard has your earnings, payouts and bank details. We ask for a fresh email code before opening it.'}</p></div>
+        <div></div></section>
+      <section class="gate-side">${side}</section></main>`;
+  }
+
   function RolePick({ user, onPick }) {
     const [busy, setBusy] = useState(null);
     const cards = [
@@ -1133,24 +1217,33 @@
     const [phase, setPhase] = useState('boot'); // boot | out | role | in
     const [me, setMe] = useState(null);
     const [view, setView] = useState(null); // driver | owner | admin
+    const [ownerGate, setOwnerGate] = useState(null); // { needDetails, needCode, back }
+    const freshRef = useRef(false);
     const flowRef = useRef(false);
     const phaseRef = useRef('boot'); phaseRef.current = phase;
     const flow = { begin: () => { flowRef.current = true; }, end: () => { flowRef.current = false; } };
 
     useEffect(() => { const th = ls.get('ps-theme'); if (th) document.documentElement.setAttribute('data-theme', th); }, []);
 
-    const landOn = (u, preferred) => {
+    const landOn = (u, preferred, fresh) => {
       if (String(u.role).toUpperCase() === 'ADMIN') { setView('admin'); setPhase('in'); return; }
       const want = preferred || ls.get('ps-web-view:' + u.id);
       const v = want === 'drive' ? 'driver' : want;
-      if (v === 'driver' || v === 'owner') { setView(v); setPhase('in'); }
+      // A sign-in that has just passed the email code counts as owner confirmation —
+      // but only if the person goes straight to owner mode. Switching later asks again.
+      freshRef.current = !!fresh;
+      if (fresh && v === 'owner') ss.set(ownerOkKey(u), '1');
+      if (v === 'owner' && !u.is_spotter_registered) { setOwnerGate({ needDetails: true, needCode: false, back: 'role' }); setPhase('owner-gate'); return; }
+      if (v === 'owner' && !ss.get(ownerOkKey(u))) { setOwnerGate({ needDetails: false, needCode: true, back: 'role' }); setPhase('owner-gate'); return; }
+      if (v === 'driver' || v === 'owner') { freshRef.current = false; setView(v); setPhase('in'); }
       else setPhase('role');
     };
     const signOut = async (msg) => {
       try { await api.post('/auth/logout', {}, { noSessionCheck: true }); } catch (e) {}
       disconnectRealtime(); flow.end();
       await auth.signOut().catch(() => {});
-      setMe(null); setView(null); setPhase('out');
+      if (me) ss.del(ownerOkKey(me));
+      setMe(null); setView(null); setOwnerGate(null); setPhase('out');
       history.replaceState(null, '', '#/');
       if (msg) toast(msg, 'bad');
     };
@@ -1175,25 +1268,43 @@
       flow.end();
       if (!user) { await signOut('Could not load your account. Please sign in again.'); return; }
       setMe(user); connectRealtime(); toast(`Welcome, ${firstName(user)}`);
-      landOn(user, preferred);
+      landOn(user, preferred, true);
     };
     const reloadMe = async () => { try { const r = await api.get('/auth/profile'); setMe(r.data.user); } catch (e) {} };
+    const enter = (v) => {
+      freshRef.current = false;
+      setView(v); setPhase('in');
+      history.replaceState(null, '', v === 'driver' ? '#/drive' : v === 'owner' ? '#/owner' : '#/admin');
+      window.scrollTo(0, 0);
+    };
     const go = async (v) => {
-      if (v === view) return;
+      if (v === view && phase === 'in') return;
+      if (v === 'owner') {
+        const needDetails = !me.is_spotter_registered;
+        const needCode = !ss.get(ownerOkKey(me)) && !(phase === 'role' && freshRef.current);
+        if (needDetails || needCode) { setOwnerGate({ needDetails, needCode, back: phase === 'in' ? view : 'role' }); setPhase('owner-gate'); return; }
+      }
       if (v === 'driver' || v === 'owner') {
         const r = await attempt(() => api.post('/auth/switch-role', { newRole: v === 'owner' ? 'SPOTTER' : 'FINDER' }));
         if (!r) return;
         if (r.data && r.data.user) setMe((m) => ({ ...m, ...r.data.user }));
         ls.set('ps-web-view:' + (me && me.id), v);
       }
-      setView(v); setPhase('in');
-      history.replaceState(null, '', v === 'driver' ? '#/drive' : v === 'owner' ? '#/owner' : '#/admin');
-      window.scrollTo(0, 0);
+      enter(v);
     };
 
     if (phase === 'boot') return html`<${Splash} label="Connecting to ParkStop…" />`;
     if (phase === 'out') return html`<${Gate} flow=${flow} onDone=${onSignedIn} /><${Toasts} />`;
     if (phase === 'role') return html`<${RolePick} user=${me} onPick=${go} /><${Toasts} />`;
+    if (phase === 'owner-gate') return html`<${OwnerGate} user=${me} ...${ownerGate}
+      onCancel=${() => { const b = ownerGate && ownerGate.back; setOwnerGate(null); if (b === 'driver') enter('driver'); else setPhase('role'); }}
+      onDone=${async (u, first) => {
+        ss.set(ownerOkKey(me), '1');
+        try { const r = await api.get('/auth/profile'); setMe(r.data.user); } catch (e) { if (u) setMe((m) => ({ ...m, ...u })); }
+        ls.set('ps-web-view:' + me.id, 'owner');
+        setOwnerGate(null); enter('owner');
+        if (first) { history.replaceState(null, '', '#/owner/verify'); toast('Owner account created. Next, verify your identity.'); } else toast('Owner mode unlocked');
+      }} /><${Toasts} />`;
     return html`<${TopBar} user=${me} view=${view} go=${go} signOut=${() => signOut()} />
       ${view === 'driver' && html`<${Driver} user=${me} />`}
       ${view === 'owner' && html`<${Owner} user=${me} me=${me} reloadMe=${reloadMe} />`}

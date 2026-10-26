@@ -376,3 +376,4 @@ a.brand { color: inherit; text-decoration: none; }
   .steps { grid-template-columns: minmax(0, 1fr); }
   .otp input { width: 40px; height: 50px; }
 }
+textarea.input { font: inherit; resize: vertical; min-height: 76px; }
