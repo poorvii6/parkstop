@@ -460,6 +460,11 @@ class ParkingSpot {
         available_slots: true,
         car_slots: true,
         bike_slots: true,
+        // Extra fields so an owner can see and edit their spot (website).
+        price_per_hour: true,
+        address: true,
+        description: true,
+        images: true,
       }
     });
 

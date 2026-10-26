@@ -181,7 +181,41 @@
       ${!data ? html`<${Busy} />` : data.items.length ? data.items.map((n) => html`<div class="note-item"><b>${n.title}</b>${n.body}<br /><small>${ago(n.created_at)}</small></div>`) : html`<div class="empty">No notifications yet.</div>`}
     </div>`;
   }
-  function TopBar({ user, view, go, signOut }) {
+  const LegalLinks = () => html`<p class="legal"><a href="/terms" target="_blank" rel="noopener">Terms</a><span>·</span><a href="/privacy" target="_blank" rel="noopener">Privacy</a><span>·</span><a href="/refund" target="_blank" rel="noopener">Refunds</a><span>·</span><a href="mailto:parkstopapp@gmail.com">parkstopapp@gmail.com</a></p>`;
+
+  function Account({ user, onClose, onSaved, signOut }) {
+    const [name, setName] = useState(user.full_name || user.name || '');
+    const [phone, setPhone] = useState(user.phone || '');
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState('');
+    const save = async (e) => {
+      e.preventDefault(); setErr('');
+      if (name.trim().length < 2) return setErr('Please enter your full name.');
+      if (phone && !/^(?:\+91|91)?[6-9]\d{9}$/.test(phone.replace(/\s/g, ''))) return setErr('Enter a valid 10-digit Indian mobile number.');
+      setBusy(true);
+      const r = await attempt(() => api.put('/auth/profile', { name: name.trim(), phone: phone.replace(/\s/g, '') || undefined }), 'Profile saved');
+      setBusy(false);
+      if (r) { onSaved(); onClose(); }
+    };
+    const roles = [user.is_finder_registered !== false && 'Finder', user.is_spotter_registered && 'Spot owner', String(user.role).toUpperCase() === 'ADMIN' && 'Admin'].filter(Boolean);
+    return html`<div class="scrim" role="dialog" aria-modal="true" aria-label="My account" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <form class="modal" onSubmit=${save}>
+        <div class="modal-h"><div class="inline" style="flex-wrap:nowrap;gap:12px"><span class="avatar" style="width:44px;height:44px;font-size:16px">${initials(name || user.email)}</span><div><h2 style="font-size:20px">My account</h2><p class="muted" style="font-size:13px;word-break:break-all">${user.email}</p></div></div>
+          <button type="button" class="iconbtn" onClick=${onClose} aria-label="Close"><${Icon} n="x" size=${16} /></button></div>
+        <div class="modal-b">
+          <${Field} label="Full name" id="ac-name"><input id="ac-name" class="input" value=${name} onInput=${(e) => setName(e.target.value)} /><//>
+          <${Field} label="Mobile number" id="ac-phone"><input id="ac-phone" class="input" inputmode="tel" value=${phone} onInput=${(e) => setPhone(e.target.value)} /><//>
+          <div class="inline">${roles.map((r) => html`<span class="chip">${r}</span>`)}</div>
+          ${err && html`<p class="error">${err}</p>`}
+          <button class="btn primary block" type="submit" disabled=${busy}>${busy ? 'Saving…' : 'Save changes'}</button>
+          <button class="btn block" type="button" onClick=${() => { onClose(); signOut(); }}><${Icon} n="out" />Sign out</button>
+          <${LegalLinks} />
+        </div>
+      </form>
+    </div>`;
+  }
+
+  function TopBar({ user, view, go, signOut, onProfile }) {
     const [open, setOpen] = useState(null);
     const [unread, setUnread] = useState(0);
     useEffect(() => {
@@ -212,12 +246,14 @@
         </button>
         ${open === 'menu' && html`<div class="menu">
           <div class="faint" style="padding:8px 12px;font-size:12.5px;word-break:break-all">${user.email}</div>
+          <button onClick=${() => setOpen('account')}><${Icon} n="key" />My account</button>
           <button onClick=${toggleTheme}><${Icon} n="moon" />Switch light / dark</button>
           <hr />
           <button onClick=${() => { setOpen(null); signOut(); }}><${Icon} n="out" />Sign out</button>
         </div>`}
       </div>
       ${open === 'notes' && html`<${Notifications} onClose=${() => setOpen(null)} />`}
+      ${open === 'account' && html`<${Account} user=${user} onClose=${() => setOpen(null)} onSaved=${onProfile} signOut=${signOut} />`}
     </header>`;
   }
 
@@ -430,6 +466,7 @@
       </section>
       <section class="gate-side">
         ${mode === 'signin' ? html`<${SignIn} flow=${flow} onDone=${onDone} switchTo=${() => setMode('register')} />` : html`<${Register} flow=${flow} onDone=${onDone} switchTo=${() => setMode('signin')} />`}
+        <${LegalLinks} />
       </section>
     </main>`;
   }
@@ -973,7 +1010,7 @@
     else if (receipt && !openBookingOf([receipt])) body = html`<${Receipt} b=${receipt} onDone=${() => { setReceiptId(null); setSel(null); setFocus({ lat: center.lat, lng: center.lng, zoom: 13.4 }); reloadSpots(); }} />`;
     else if (open && navOn && open.status === 'reserved') body = html`<${Navigation} b=${open} gps=${gps} gpsStatus=${gpsStatus} onRoute=${setNavRoute} onArrive=${() => markArrived(open.id)} onExit=${() => { setNavOn(false); setNavRoute(null); }} />`;
     else if (open) body = html`<${BookingFlow} b=${open} user=${user} reload=${reloadBookings} onPaid=${(id) => { setReceiptId(id); reloadBookings(); }} onNavigate=${() => setNavOn(true)} atSpot=${atSpot} />`;
-    else if (tab === 'history') body = html`<div class="side-body">${history.length ? history.map((b) => { const c = STATUS_CHIP[b.status] || [b.status, '']; return html`<div class="row-item"><div class="grow"><b>${(b.parking_spots && b.parking_spots.title) || 'Parking'}</b><small>${dateTime(b.created_at)} · ${String(b.slot_name || '').replace(/^Slot\s*/i, 'bay ')}</small></div><span class=${'chip ' + c[1]}>${c[0]}</span><span class="num" style="min-width:64px;text-align:right">${b.status === 'completed' ? inr(b.total_price) : '—'}</span></div>`; }) : html`<div class="empty">Your past parkings will appear here.</div>`}</div>`;
+    else if (tab === 'history') body = html`<div class="side-body">${history.length ? history.map((b) => { const c = STATUS_CHIP[b.status] || [b.status, '']; const paid = b.status === 'completed' && b.payment_status === 'paid'; const row = html`<div class="grow"><b>${(b.parking_spots && b.parking_spots.title) || 'Parking'}</b><small>${dateTime(b.created_at)} · ${String(b.slot_name || '').replace(/^Slot\s*/i, 'bay ')}${paid ? ' · tap for receipt' : ''}</small></div><span class=${'chip ' + c[1]}>${paid ? 'Paid' : c[0]}</span><span class="num" style="min-width:64px;text-align:right">${b.status === 'completed' ? inr(b.total_price) : '—'}</span>`; return paid ? html`<button class="row-item rowbtn" onClick=${() => setReceiptId(b.id)}>${row}</button>` : html`<div class="row-item">${row}</div>`; }) : html`<div class="empty">Your past parkings will appear here.</div>`}</div>`;
     else if (selected) body = html`<${SpotDetail} sp=${selected} onBack=${() => setSel(null)} onBooked=${() => { setSel(null); reloadBookings(); reloadSpots(); }} />`;
     else body = html`<div class="side-body">
       <div class="listhead"><span class="eyebrow">${nearby ? `${spots.length} verified spot${spots.length === 1 ? '' : 's'} near ${center.name}` : 'Finding spots…'}</span><button class="linkbtn" style="font-size:12.5px" onClick=${reloadSpots}>Refresh</button></div>
@@ -1036,7 +1073,7 @@
   function SpotForm({ initial, onSaved, onClose, near }) {
     const editing = !!initial;
     const [f, setF] = useState(() => ({
-      title: initial ? initial.title : '', description: '', address: '', price: '',
+      title: initial ? initial.title : '', description: initial ? initial.description || '' : '', address: initial ? initial.address || '' : '', price: initial && initial.price_per_hour ? String(Math.round(num(initial.price_per_hour))) : '',
       car: initial ? String(num(initial.car_slots) || '') : '2', bike: initial ? String(num(initial.bike_slots) || 0) : '0',
       lat: null, lng: null,
     }));
@@ -1205,7 +1242,7 @@
       ${adding && html`<div class="card"><div class="card-h"><h2>New spot</h2></div><${SpotForm} near=${near} onClose=${() => setAdding(false)} onSaved=${() => { setAdding(false); reloadAll(); }} /></div>`}
       ${!dash ? html`<${Busy} />` : !inv.length ? html`<div class="card"><div class="empty">${dash.global_online === false ? 'Your spots are offline. Turn on “Accepting bookings” on the Today tab to see them here.' : 'You have not added a spot yet. Add your first one — it takes two minutes.'}</div></div>` : html`<div class="spotgrid">
         ${inv.map((sp) => html`<div class="card">
-          <div class="card-h"><div style="min-width:0"><h2 style="font-size:16px">${sp.title}</h2><small class="faint">${sp.total_slots} bay${sp.total_slots === 1 ? '' : 's'} · ${num(sp.car_slots)} car · ${num(sp.bike_slots)} bike</small></div>
+          <div class="card-h"><div class="inline" style="flex-wrap:nowrap;min-width:0;gap:12px"><${SpotPhoto} sp=${sp} cls="thumb sm" /><div style="min-width:0"><h2 style="font-size:16px">${sp.title}</h2><small class="faint">${sp.price_per_hour ? '₹' + Math.round(num(sp.price_per_hour)) + '/h · ' : ''}${sp.total_slots} bay${sp.total_slots === 1 ? '' : 's'} · ${num(sp.car_slots)} car · ${num(sp.bike_slots)} bike</small>${sp.address ? html`<small class="faint" style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${sp.address}</small>` : null}</div></div>
             <div class="inline" style="flex-wrap:nowrap"><button class="iconbtn" aria-label=${'Edit ' + sp.title} onClick=${() => { setEditing(sp.id); setAdding(false); }}><${Icon} n="edit" size=${16} /></button><button class="iconbtn" aria-label=${'Delete ' + sp.title} onClick=${() => setDel(sp.id)}><${Icon} n="trash" size=${16} /></button></div></div>
           <div class="card-b">
             <div class="minibays">${Array.from({ length: num(sp.total_slots) }, (_, i) => html`<span class=${i < num(sp.total_slots) - num(sp.available_slots) ? 's-active' : ''}>${i + 1}</span>`)}</div>
@@ -1544,7 +1581,7 @@
         setOwnerGate(null); enter('owner');
         if (first) { history.replaceState(null, '', '#/owner/verify'); toast('Owner account created. Next, verify your identity.'); } else toast('Owner mode unlocked');
       }} /><${Toasts} />`;
-    return html`<${TopBar} user=${me} view=${view} go=${go} signOut=${() => signOut()} />
+    return html`<${TopBar} user=${me} view=${view} go=${go} signOut=${() => signOut()} onProfile=${reloadMe} />
       ${view === 'driver' && html`<${FinderView} user=${me} />`}
       ${view === 'owner' && html`<${Owner} user=${me} me=${me} reloadMe=${reloadMe} />`}
       ${view === 'admin' && html`<${Admin} />`}

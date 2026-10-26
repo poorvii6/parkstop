@@ -414,3 +414,9 @@ textarea.input { font: inherit; resize: vertical; min-height: 76px; }
 .nextsteps li.on::before { background: var(--signal); border-color: var(--signal); color: var(--signal-ink); }
 .nextsteps span { color: var(--ink-3); font-size: 13px; }
 @media (max-width: 560px) { .pin.big { font-size: 42px; } }
+
+.legal { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 8px; font-size: 12.5px; color: var(--ink-3); margin: 0; }
+.legal a { color: var(--ink-3); text-decoration: none; }
+.legal a:hover { color: var(--signal); text-decoration: underline; }
+.thumb.sm { width: 52px; height: 40px; border-radius: 8px; flex: none; }
+.scrim .modal { max-height: calc(100vh - 32px); overflow-y: auto; }
