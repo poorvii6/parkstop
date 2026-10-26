@@ -150,6 +150,20 @@
       </div>`}
     </div>`;
   }
+  /** Live GPS position from the browser (null until the first fix or if blocked). */
+  function useGps() {
+    const [pos, setPos] = useState(null);
+    const [status, setStatus] = useState('waiting'); // waiting | ok | blocked | unsupported
+    useEffect(() => {
+      if (!navigator.geolocation) { setStatus('unsupported'); return; }
+      const id = navigator.geolocation.watchPosition(
+        (p) => { setPos({ lat: p.coords.latitude, lng: p.coords.longitude, accuracy: p.coords.accuracy, name: 'your location' }); setStatus('ok'); },
+        () => setStatus('blocked'),
+        { enableHighAccuracy: true, maximumAge: 15000, timeout: 20000 });
+      return () => navigator.geolocation.clearWatch(id);
+    }, []);
+    return [pos, status];
+  }
   function locateMe() {
     return new Promise((resolve, reject) => {
       if (!navigator.geolocation) return reject(new Error('Your browser cannot share location.'));
@@ -652,7 +666,9 @@
   const STATUS_CHIP = { reserved: ['Booked', 'warn'], active: ['Parked', 'sig'], checkout_pending: ['Leaving', 'warn'], completed: ['Completed', 'ok'], cancelled: ['Cancelled', ''], expired: ['Expired', ''] };
 
   function Driver({ user }) {
-    const [center, setCenter] = useState(() => { try { return JSON.parse(ls.get('ps-center')) || HOME; } catch (e) { return HOME; } });
+    const [gps, gpsStatus] = useGps();
+    const [center, setCenter] = useState(HOME);
+    const followGps = useRef(true); // start the search at the real location until the user searches somewhere else
     const [focus, setFocus] = useState({ lat: center.lat, lng: center.lng, zoom: 13.4 });
     const [sel, setSel] = useState(null);
     const [vehicle, setVehicle] = useState('all');
@@ -665,7 +681,18 @@
     const selected = spots.find((x) => x.id === sel);
     const openSpot = open && open.parking_spots ? spotView({ ...open.parking_spots, distance: 0 }) : null;
     const mapSpots = openSpot ? [openSpot] : spots;
-    const moveTo = (p) => { const c = { lat: p.lat, lng: p.lng, name: p.name || 'this place' }; setCenter(c); ls.set('ps-center', JSON.stringify(c)); setSel(null); setFocus({ lat: p.lat, lng: p.lng, zoom: 13.6 }); };
+    const moveTo = (p) => { const c = { lat: p.lat, lng: p.lng, name: p.name || 'this place' }; setCenter(c); setSel(null); setFocus({ lat: p.lat, lng: p.lng, zoom: 13.6 }); };
+    useEffect(() => {
+      if (!gps || !followGps.current) return;
+      followGps.current = false;
+      moveTo(gps);
+      if (gps.accuracy > 1500) toast(`Your device only knows your location roughly (about ${Math.round(gps.accuracy / 1000)} km). Turn on Windows location, or search your area.`, 'bad');
+    }, [gps]);
+    const locate = () => {
+      if (gps) { moveTo(gps); return; }
+      if (gpsStatus === 'blocked') { toast('Location is blocked. Click the lock icon in the address bar, allow Location, then reload.', 'bad'); return; }
+      locateMe().then(moveTo).catch((e) => toast(e.message, 'bad'));
+    };
     const choose = (id) => { if (open) return; const sp = spots.find((x) => x.id === id); setSel(id); setTab('find'); if (sp) setFocus({ lat: sp.lat, lng: sp.lng, zoom: 15.2 }); };
     useEffect(() => { if (openSpot) setFocus({ lat: openSpot.lat, lng: openSpot.lng, zoom: 15 }); }, [open && open.id]);
     const receipt = receiptId && bookings && bookings.find((b) => String(b.id) === String(receiptId));
@@ -687,8 +714,8 @@
       <aside class="side" aria-label="Find parking">
         ${!open && !(receipt && !openBookingOf([receipt])) && html`<div class="side-head">
           <div class="inline" style="flex-wrap:nowrap;gap:8px">
-            <div style="flex:1;min-width:0"><${PlaceSearch} near=${center} onPick=${moveTo} placeholder="Where are you going? Try Koramangala" /></div>
-            <button class="iconbtn" title="Use my location" aria-label="Use my location" onClick=${async () => { try { moveTo(await locateMe()); } catch (e) { toast(e.message, 'bad'); } }}><${Icon} n="locate" /></button>
+            <div style="flex:1;min-width:0"><${PlaceSearch} near=${center} onPick=${(p) => { followGps.current = false; moveTo(p); }} placeholder="Where are you going? Try Koramangala" /></div>
+            <button class="iconbtn" title="Use my location" aria-label="Use my location" onClick=${locate}><${Icon} n="locate" /></button>
           </div>
           <div class="inline" style="justify-content:space-between">
             <div class="seg" style="flex:1">${[['all', 'All'], ['car', 'Car'], ['bike', 'Bike']].map(([k, t]) => html`<button aria-pressed=${vehicle === k} onClick=${() => setVehicle(k)}>${t}</button>`)}</div>
@@ -697,7 +724,7 @@
         </div>`}
         ${body}
       </aside>
-      <${MapView} spots=${mapSpots} selectedId=${openSpot ? openSpot.id : selected && selected.id} user=${center} focus=${focus} onSelect=${choose} areas=${AREAS} />
+      <${MapView} spots=${mapSpots} selectedId=${openSpot ? openSpot.id : selected && selected.id} user=${gps} focus=${focus} onSelect=${choose} areas=${AREAS} />
     </main>`;
   }
 

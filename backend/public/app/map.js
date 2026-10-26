@@ -178,6 +178,7 @@
         d.style.zIndex = sp.id === selectedId ? 5 : 1;
       });
       Object.keys(markers.current).forEach((k) => { if (!seen[k]) { markers.current[k].remove(); delete markers.current[k]; } });
+      if (!user && youMarker.current) { youMarker.current.remove(); youMarker.current = null; }
       if (user) {
         if (!youMarker.current) {
           const y = document.createElement('div'); y.className = 'youdot'; y.title = 'You are here';
