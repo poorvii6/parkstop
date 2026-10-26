@@ -853,6 +853,24 @@
       lat: null, lng: null,
     }));
     const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
+    // Location comes from the device GPS, like the mobile app: it starts on its own
+    // when the form opens and follows the GPS until the owner moves the pin by hand.
+    const [gpsState, setGpsState] = useState(editing ? 'off' : 'waiting'); // waiting | live | manual | blocked | off
+    const [acc, setAcc] = useState(null);
+    const follow = useRef(!editing);
+    const watchId = useRef(null);
+    const startGps = () => {
+      if (!navigator.geolocation) { setGpsState('blocked'); return; }
+      follow.current = true; setGpsState('waiting');
+      if (watchId.current !== null) navigator.geolocation.clearWatch(watchId.current);
+      watchId.current = navigator.geolocation.watchPosition((p) => {
+        if (!follow.current) return;
+        setF((x) => ({ ...x, lat: p.coords.latitude, lng: p.coords.longitude }));
+        setAcc(p.coords.accuracy); setGpsState('live');
+        setFocus({ lat: p.coords.latitude, lng: p.coords.longitude, zoom: 17 });
+      }, () => setGpsState((g) => (g === 'live' || g === 'manual' ? g : 'blocked')), { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
+    };
+    useEffect(() => { if (!editing) startGps(); return () => { if (watchId.current !== null) navigator.geolocation.clearWatch(watchId.current); }; }, []);
     const [files, setFiles] = useState([]);
     const [stage, setStage] = useState('');
     const addFiles = (list) => {
@@ -866,13 +884,16 @@
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState('');
     const [focus, setFocus] = useState({ lat: near.lat, lng: near.lng, zoom: 14 });
-    const pick = (p) => { set('lat', p.lat); set('lng', p.lng); if (p.address && !f.address) set('address', p.address); setFocus({ lat: p.lat, lng: p.lng, zoom: 16 }); };
+    // Moving the pin by hand stops following the GPS.
+    const pick = (p) => { follow.current = false; setGpsState('manual'); setF((x) => ({ ...x, lat: p.lat, lng: p.lng })); };
+    const setCoord = (k, v) => { follow.current = false; setGpsState('manual'); const n = parseFloat(v); setF((x) => ({ ...x, [k]: isNaN(n) ? null : n })); };
     const save = async (e) => {
       e.preventDefault(); setErr('');
       const car = parseInt(f.car || '0', 10), bike = parseInt(f.bike || '0', 10);
       if (!editing) {
         if (f.title.trim().length < 3) return setErr('Give the spot a name drivers will recognise.');
-        if (f.lat === null) return setErr('Mark the spot on the map: search for the address, use your location, or click the map.');
+        if (f.lat === null || f.lng === null) return setErr(gpsState === 'blocked' ? 'Location is blocked. Allow location for this site (lock icon in the address bar), then tap Detect my location.' : 'Waiting for your location. Tap Detect my location.');
+        if (f.address.trim().length < 5) return setErr('Enter the address of the parking space.');
         if (!(Number(f.price) > 0)) return setErr('Enter the price per hour.');
       }
       if (car + bike <= 0) return setErr('Add at least one bay.');
@@ -900,12 +921,23 @@
     return html`<form class="card-b" style="border-top:1px solid var(--line)" onSubmit=${save}>
       <div class="form-grid">
         <div class="field" style="grid-column:1/-1"><label for="sp-title">Spot name drivers will see</label><input id="sp-title" class="input" placeholder="e.g. Hennur Cross Apartment Basement" value=${f.title} onInput=${(e) => set('title', e.target.value)} /></div>
-        ${!editing && html`<div class="field" style="grid-column:1/-1"><label>Where is it?</label>
-          <div class="inline" style="flex-wrap:nowrap"><div style="flex:1;min-width:0"><${PlaceSearch} id="sp-search" near=${near} onPick=${pick} placeholder="Search the address" /></div>
-          <button type="button" class="iconbtn" aria-label="Use my location" title="Use my location" onClick=${async () => { try { pick(await locateMe()); } catch (x) { toast(x.message, 'bad'); } }}><${Icon} n="locate" /></button></div>
+        ${!editing && html`<div class="field" style="grid-column:1/-1"><label>Location (from your GPS)</label>
+          <div class="gpsbar">
+            <span class=${'pulse' + (gpsState === 'live' ? ' ok' : '')} style=${gpsState === 'blocked' ? 'background:var(--bad)' : gpsState === 'manual' ? 'background:var(--sign)' : ''}></span>
+            <span class="grow">${gpsState === 'live' ? html`<b>Using your current location</b>${acc ? html` · accurate to about ${acc < 1000 ? Math.round(acc) + ' m' : (acc / 1000).toFixed(1) + ' km'}` : ''}`
+              : gpsState === 'manual' ? html`<b>Pin set by you</b>`
+              : gpsState === 'blocked' ? html`<b>Location is blocked.</b> Allow location for this site (lock icon in the address bar), then try again.`
+              : html`<b>Detecting your location…</b>`}</span>
+            <button type="button" class="btn sm" onClick=${startGps}><${Icon} n="locate" size=${15} />Detect my location</button>
+          </div>
+          <div class="form-grid">
+            <div class="field"><label for="sp-lat">Latitude</label><input id="sp-lat" class="input mono" inputmode="decimal" value=${f.lat === null ? '' : f.lat.toFixed(6)} onChange=${(e) => setCoord('lat', e.target.value)} /></div>
+            <div class="field"><label for="sp-lng">Longitude</label><input id="sp-lng" class="input mono" inputmode="decimal" value=${f.lng === null ? '' : f.lng.toFixed(6)} onChange=${(e) => setCoord('lng', e.target.value)} /></div>
+          </div>
+          ${acc && acc > 150 && gpsState === 'live' ? html`<p class="note">Laptops often know their location only roughly. Stand at the parking space when you add it, or click the map to put the pin exactly on your gate.</p>` : null}
           <div class="pickmap"><${MapView} spots=${[]} user=${null} focus=${focus} onSelect=${() => {}} onPick=${pick} pick=${f.lat !== null ? { lat: f.lat, lng: f.lng } : null} areas=${AREAS} /></div>
-          <small class="faint" style="font-size:12px">${f.lat !== null ? `Pinned at ${f.lat.toFixed(5)}, ${f.lng.toFixed(5)} · click the map to move it` : 'Click the map to drop the pin exactly on your gate.'}</small></div>`}
-        <div class="field" style="grid-column:1/-1"><label for="sp-addr">Address</label><input id="sp-addr" class="input" placeholder=${editing ? 'Leave empty to keep the current address' : 'House / building, street, area'} value=${f.address} onInput=${(e) => set('address', e.target.value)} /></div>
+          <small class="faint" style="font-size:12px">Click the map if you need to move the pin.</small></div>`}
+        <div class="field" style="grid-column:1/-1"><label for="sp-addr">Address</label><input id="sp-addr" class="input" placeholder=${editing ? 'Leave empty to keep the current address' : 'House / building, street, area, PIN code'} value=${f.address} onInput=${(e) => set('address', e.target.value)} /></div>
         <div class="field"><label for="sp-price">Price per hour (₹)</label><input id="sp-price" class="input num" type="number" min="1" max="10000" placeholder=${editing ? 'Keep current' : '40'} value=${f.price} onInput=${(e) => set('price', e.target.value)} /></div>
         <div class="field"><label for="sp-car">Car bays</label><input id="sp-car" class="input num" type="number" min="0" max="50" value=${f.car} onInput=${(e) => set('car', e.target.value)} /></div>
         <div class="field"><label for="sp-bike">Bike bays</label><input id="sp-bike" class="input num" type="number" min="0" max="50" value=${f.bike} onInput=${(e) => set('bike', e.target.value)} /></div>
