@@ -13,15 +13,24 @@
     light: 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json',
   };
   const styleCache = {};
+  // If the server's map (Ola) fails in this browser once, use CARTO from then on.
+  let serverStyleBroken = false;
+  try { serverStyleBroken = sessionStorage.getItem('ps-map-carto') === '1'; } catch (e) {}
+  const cartoStyle = (theme) => ({ url: CARTO[theme], apiKey: null, carto: true });
+  function markServerStyleBroken() {
+    serverStyleBroken = true;
+    try { sessionStorage.setItem('ps-map-carto', '1'); } catch (e) {}
+  }
   async function styleFor(theme) {
+    if (serverStyleBroken) return cartoStyle(theme);
     if (styleCache[theme]) return styleCache[theme];
-    let out = { url: CARTO[theme], apiKey: null };
+    let out = cartoStyle(theme);
     try {
       const base = (window.PS_API_BASE || '/api/v1');
       const t = window.PSApi ? await window.PSApi.auth.token().catch(() => null) : null;
       const r = await fetch(`${base}/maps/style?theme=${theme}`, { headers: t ? { Authorization: 'Bearer ' + t } : {} });
       const j = await r.json();
-      if (j && j.data && j.data.styleUrl) out = { url: j.data.styleUrl, apiKey: j.data.apiKey || null };
+      if (j && j.data && j.data.styleUrl) out = { url: j.data.styleUrl, apiKey: j.data.apiKey || null, carto: j.data.styleUrl.indexOf('cartocdn') !== -1 };
     } catch (e) {}
     styleCache[theme] = out;
     return out;
@@ -125,21 +134,31 @@
     useEffect(() => {
       if (mode === 'svg' || !el.current || !window.maplibregl) return;
       let done = false, timer = null, cancelled = false;
-      const giveUp = () => { if (done) return; done = true; try { map.current && map.current.remove(); } catch (e) {} map.current = null; markers.current = {}; youMarker.current = null; pickMarker.current = null; setMode('svg'); };
-      styleFor(theme).then((st) => {
+      const clear = () => { try { map.current && map.current.remove(); } catch (e) {} map.current = null; markers.current = {}; youMarker.current = null; pickMarker.current = null; };
+      const giveUp = () => { if (done) return; done = true; clear(); setMode('svg'); };
+      // Try the server's map first (Ola Maps); if it does not load, try CARTO
+      // (free, open map); only if that also fails show the drawn overview.
+      const attemptStyle = (st) => {
         if (cancelled || !el.current) return;
-        let m;
+        let m, failed = false;
+        const fail = () => {
+          if (failed || done) return; failed = true; clearTimeout(timer); clear();
+          if (!st.carto) { markServerStyleBroken(); attemptStyle(cartoStyle(theme)); } else giveUp();
+        };
         try {
           const c = focus || user || { lat: 12.9716, lng: 77.5946 };
           m = new window.maplibregl.Map({ container: el.current, style: st.url, transformRequest: withKey(st.apiKey), center: [c.lng, c.lat], zoom: focus && focus.zoom ? focus.zoom : 12.5, attributionControl: { compact: true }, fadeDuration: 0 });
-        } catch (e) { giveUp(); return; }
+        } catch (e) { fail(); return; }
         map.current = m;
-        timer = setTimeout(giveUp, 12000);
-        m.on('load', () => { if (done) return; done = true; clearTimeout(timer); setMode('gl'); });
-        m.on('error', () => { if (!done) { clearTimeout(timer); giveUp(); } });
+        timer = setTimeout(fail, 10000);
+        m.on('load', () => { if (done || failed) return; done = true; clearTimeout(timer); setMode('gl'); });
+        // Only errors before the map has loaded mean "this map does not work here".
+        // A single missing tile or icon later on is ignored.
+        m.on('error', (ev) => { if (!done && !failed && m.isStyleLoaded && !m.isStyleLoaded()) fail(); });
         m.on('click', (e) => { if (onPickRef.current) onPickRef.current({ lat: e.lngLat.lat, lng: e.lngLat.lng }); });
         m.addControl(new window.maplibregl.NavigationControl({ showCompass: false }), 'bottom-right');
-      });
+      };
+      styleFor(theme).then(attemptStyle);
       return () => { cancelled = true; clearTimeout(timer); };
     }, [mode === 'svg']);
 
