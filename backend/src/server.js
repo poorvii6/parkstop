@@ -46,6 +46,32 @@ if (process.env.NODE_ENV === 'production') {
 }
 app.use(compression());
 
+// ParkStop website (backend/public/app), served from this same server so it
+// talks to the API without cross-site problems. Its page needs a few outside
+// services that the default helmet policy blocks: Firebase sign-in (Google),
+// Razorpay checkout, map tiles (Ola / CARTO) and Google Fonts. This policy
+// applies ONLY to the website pages under /app; the API and the mobile app
+// are unchanged.
+const WEB_APP_CSP = [
+  "default-src 'self'",
+  "script-src 'self' https://checkout.razorpay.com https://apis.google.com https://www.gstatic.com",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' data: https://fonts.gstatic.com",
+  "img-src 'self' data: blob: https:",
+  "connect-src 'self' wss: https://*.googleapis.com https://*.cartocdn.com https://*.olamaps.io https://*.razorpay.com https://*.firebaseapp.com",
+  "frame-src https://*.razorpay.com https://*.firebaseapp.com https://accounts.google.com",
+  "worker-src 'self' blob:",
+  "child-src blob:",
+  "object-src 'none'",
+  "base-uri 'self'",
+].join('; ');
+app.use('/app', (req, res, next) => {
+  res.setHeader('Content-Security-Policy', WEB_APP_CSP);
+  // Google sign-in and Razorpay open pop-up windows that must talk back to the page.
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+  next();
+});
+
 // Rate limiting
 // General API limiter.
 //
@@ -89,6 +115,16 @@ app.use('/api/v1/auth/register', authLimiter);
 const allowedOrigins = process.env.ALLOWED_ORIGINS 
   ? process.env.ALLOWED_ORIGINS.split(',') 
   : ['http://localhost:3000', 'http://localhost:8081', 'http://localhost:8080'];
+
+// The ParkStop website is served by this server, so its own address must
+// always be allowed (browsers send an Origin header even on same-site POSTs).
+const SELF_ORIGINS = [
+  'https://parkstop-production.up.railway.app',
+  'https://parkstop.online',
+  'https://www.parkstop.online',
+];
+if (process.env.RAILWAY_PUBLIC_DOMAIN) SELF_ORIGINS.push(`https://${process.env.RAILWAY_PUBLIC_DOMAIN}`);
+SELF_ORIGINS.forEach((o) => { if (!allowedOrigins.includes(o)) allowedOrigins.push(o); });
 
 app.use(cors({
   origin: (origin, callback) => {
