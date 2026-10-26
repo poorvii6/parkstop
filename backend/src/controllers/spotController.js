@@ -374,6 +374,17 @@ class SpotController {
         });
       }
 
+      // Do not delete a spot while a car is booked, parked or leaving there.
+      const openBookings = await prisma.bookings.count({
+        where: { spot_id: parseInt(req.params.id), status: { in: ['reserved', 'active', 'checkout_pending'] } }
+      });
+      if (openBookings > 0) {
+        return res.status(409).json({
+          success: false,
+          message: 'This spot has a booking in progress. You can delete it after that parking is finished.'
+        });
+      }
+
       await ParkingSpot.delete(req.params.id, req.user.id);
 
       res.json({
@@ -472,7 +483,8 @@ class SpotController {
       }
 
       await require('../config/prisma').parking_spots.updateMany({
-        where: { spotter_id: req.user.id },
+        // Deleted spots stay deleted.
+        where: { spotter_id: req.user.id, deleted_at: null },
         data: { is_active, updated_at: new Date() }
       });
 

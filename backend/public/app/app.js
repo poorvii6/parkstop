@@ -591,7 +591,74 @@
     </button>`;
   }
 
-  function SpotDetail({ sp, onBack, onBooked }) {
+
+  // ---------------- ratings, saved spots, reporting ----------------
+  function Stars({ value, onPick, size }) {
+    const [hover, setHover] = useState(0);
+    const v = hover || Math.round(num(value));
+    return html`<span class=${'stars' + (onPick ? ' pick' : '')} style=${size ? `font-size:${size}px` : ''} role=${onPick ? 'radiogroup' : 'img'} aria-label=${onPick ? 'Your rating' : `${num(value).toFixed(1)} out of 5`}>
+      ${[1, 2, 3, 4, 5].map((i) => onPick
+        ? html`<button type="button" class=${i <= v ? 'on' : ''} aria-label=${i + ' star' + (i > 1 ? 's' : '')} aria-checked=${i === Math.round(num(value))} role="radio" onMouseEnter=${() => setHover(i)} onMouseLeave=${() => setHover(0)} onClick=${() => onPick(i)}>★</button>`
+        : html`<i class=${i <= v ? 'on' : ''}>★</i>`)}
+    </span>`;
+  }
+
+  function SpotReviews({ spotId }) {
+    const [data] = useLive(() => api.get(`/reviews/spot/${spotId}`, { noSessionCheck: true }).then((r) => r.data), [spotId]);
+    if (!data) return null;
+    return html`<div class="card"><div class="card-h"><h2 style="font-size:15px">Reviews</h2>
+        ${data.total_reviews ? html`<span class="inline" style="gap:6px"><${Stars} value=${data.average_rating} /><b class="num">${data.average_rating}</b><small class="faint">(${data.total_reviews})</small></span>` : html`<small class="faint">No reviews yet</small>`}</div>
+      ${data.reviews.length > 0 && html`<div class="card-b">${data.reviews.slice(0, 4).map((rv) => html`<div class="review">
+        <div class="inline" style="justify-content:space-between"><b>${(rv.reviewer && (rv.reviewer.full_name || rv.reviewer.name)) || 'Finder'}</b><${Stars} value=${rv.rating} size=${13} /></div>
+        ${rv.comment && html`<p>${rv.comment}</p>`}<small class="faint">${dateShort(rv.created_at)}</small></div>`)}</div>`}
+    </div>`;
+  }
+
+  function RateBox({ bookingId }) {
+    const key = 'ps-rated:' + bookingId;
+    const [done, setDone] = useState(() => ls.get(key) === '1');
+    const [rating, setRating] = useState(0);
+    const [comment, setComment] = useState('');
+    const [busy, setBusy] = useState(false);
+    if (done) return html`<div class="panel" style="flex-direction:row;align-items:center;gap:10px"><span style="color:var(--ok)"><${Icon} n="check" /></span><span>Thanks for rating this parking.</span></div>`;
+    const send = async () => {
+      setBusy(true);
+      try { await api.post('/reviews', { booking_id: Number(bookingId), rating, comment: comment.trim() || undefined }); toast('Thanks! Your rating helps other finders.'); ls.set(key, '1'); setDone(true); }
+      catch (e) { if (/already reviewed/i.test(e.message)) { ls.set(key, '1'); setDone(true); } else toast(e.message, 'bad'); }
+      setBusy(false);
+    };
+    return html`<div class="panel" style="gap:10px">
+      <b>How was this parking?</b>
+      <${Stars} value=${rating} onPick=${setRating} size=${28} />
+      ${rating > 0 && html`<textarea id="rv-comment" class="input" rows="2" maxlength="500" placeholder="Anything other finders should know? (optional)" value=${comment} onInput=${(e) => setComment(e.target.value)}></textarea>
+        <button class="btn primary" disabled=${busy} onClick=${send}>${busy ? 'Sending…' : 'Submit rating'}</button>`}
+    </div>`;
+  }
+
+  const REPORT_REASONS = ['The spot was taken or blocked', 'The owner did not check me in', 'I was charged the wrong amount', 'Safety or damage problem', 'Something else'];
+  function ReportProblem({ bookingId, label }) {
+    const [open, setOpen] = useState(false);
+    const [reason, setReason] = useState(REPORT_REASONS[0]);
+    const [desc, setDesc] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [sent, setSent] = useState(() => ls.get('ps-reported:' + bookingId) === '1');
+    if (sent) return html`<p class="note">You reported a problem with this booking. Our team will get back to you within 24 hours.</p>`;
+    if (!open) return html`<button class="linkbtn" style="align-self:flex-start;color:var(--ink-3)" onClick=${() => setOpen(true)}>${label || 'Report a problem'}</button>`;
+    const send = async (e) => {
+      e.preventDefault(); setBusy(true);
+      try { await api.post('/disputes', { booking_id: Number(bookingId), reason: reason.slice(0, 100), description: desc.trim() || undefined }); ls.set('ps-reported:' + bookingId, '1'); setSent(true); toast('Reported. Our team will review it within 24 hours.'); }
+      catch (ex) { if (/already been raised/i.test(ex.message)) { ls.set('ps-reported:' + bookingId, '1'); setSent(true); } else toast(ex.message, 'bad'); }
+      setBusy(false);
+    };
+    return html`<form class="panel" onSubmit=${send} style="gap:10px">
+      <b>Report a problem</b>
+      <select id="rp-reason" class="input" value=${reason} onChange=${(e) => setReason(e.target.value)}>${REPORT_REASONS.map((r) => html`<option>${r}</option>`)}</select>
+      <textarea id="rp-desc" class="input" rows="3" maxlength="500" placeholder="Tell us what happened" value=${desc} onInput=${(e) => setDesc(e.target.value)}></textarea>
+      <div class="inline"><button class="btn primary" type="submit" disabled=${busy}>${busy ? 'Sending…' : 'Send report'}</button><button class="btn ghost" type="button" onClick=${() => setOpen(false)}>Cancel</button></div>
+    </form>`;
+  }
+
+  function SpotDetail({ sp, onBack, onBooked, saved, onToggleSave }) {
     const [slots, reloadSlots] = useLive(() => api.get(`/spots/${sp.id}/slots`).then((r) => r.data || []), [sp.id], { every: 15000 });
     const [slot, setSlot] = useState('');
     const [hours, setHours] = useState(2);
@@ -619,7 +686,8 @@
     const free = slots ? slots.filter((s) => s.status === 'available').length : sp.free;
     return html`<div class="side-body">
       <button class="back" onClick=${onBack}><${Icon} n="back" />All spots</button>
-      <${SpotPhoto} sp=${sp} cls="detail-photo" />
+      <div style="position:relative"><${SpotPhoto} sp=${sp} cls="detail-photo" />
+        ${onToggleSave && html`<button class=${'savebtn' + (saved ? ' on' : '')} aria-pressed=${!!saved} aria-label=${saved ? 'Remove from saved spots' : 'Save this spot'} onClick=${onToggleSave}>${saved ? '♥' : '♡'}</button>`}</div>
       <div style="display:flex;flex-direction:column;gap:6px">
         <h2 style="font-size:22px">${sp.title}</h2>
         ${sp.address && html`<p class="muted" style="font-size:14px">${sp.address}</p>`}
@@ -646,6 +714,7 @@
         <button class="btn primary block" disabled=${busy || !free} onClick=${book}>${busy ? 'Booking…' : free ? `Book ${slot ? String(slot).replace(/^Slot\s*/i, 'bay ') : 'a bay'}` : 'No free bays'}</button>
         <p class="note">Free to cancel until the owner checks you in. Your bay is held for 30 minutes.</p>
       </div>
+      <${SpotReviews} spotId=${sp.id} />
     </div>`;
   }
 
@@ -762,6 +831,7 @@
         ${confirm === 'end' ? html`<div class="panel"><b>End your session now?</b><p class="muted" style="font-size:14px">The meter stops now. The owner confirms your car has left, then you pay.</p>
             <div class="inline"><button class="btn" onClick=${() => setConfirm(null)}>Not yet</button><button class="btn primary" disabled=${busy} onClick=${() => act(() => api.post(`/bookings/${b.id}/request-checkout`), 'Meter stopped. Waiting for the owner.')}>End session</button></div></div>`
           : html`<button class="btn primary block" onClick=${() => setConfirm('end')}>End session</button>`}
+        <${ReportProblem} bookingId=${b.id} />
       </div>`;
     }
     if (b.status === 'checkout_pending') {
@@ -773,6 +843,7 @@
           <p class="muted" style="font-size:14px">They check that your bay is empty. If they do not answer in time, ParkStop confirms it for you.</p>
         </div>
         <button class="btn" disabled=${busy} onClick=${() => act(() => api.post(`/bookings/${b.id}/request-checkout`), 'Reminder sent to the owner')}>Remind the owner</button>
+        <${ReportProblem} bookingId=${b.id} />
       </div>`;
     }
     // completed, not paid
@@ -945,7 +1016,9 @@
           ${b.payment_id && html`<div><span>Payment</span><span>${String(b.payment_id).slice(0, 18)}</span></div>`}
           <div class="total"><span>Total paid</span><span>${inr(b.total_price)}</span></div>
         </div></div></div>
+      <${RateBox} bookingId=${b.id} />
       <button class="btn primary block" onClick=${onDone}>Find another spot</button>
+      <${ReportProblem} bookingId=${b.id} label="Problem with this parking? Report it" />
     </div>`;
   }
 
@@ -964,6 +1037,12 @@
     const [sel, setSel] = useState(null);
     const [vehicle, setVehicle] = useState('all');
     const [tab, setTab] = useState('find');
+    const [savedList, reloadSaved] = useLive(() => api.get('/saved-spots').then((r) => r.data || []), []);
+    const savedIds = (savedList || []).map((x) => Number(x.id));
+    const toggleSave = async (id) => {
+      const r = await attempt(() => api.post(`/saved-spots/${id}/toggle`));
+      if (r) { toast(r.saved ? 'Saved. Find it under Saved.' : 'Removed from saved spots'); reloadSaved(); }
+    };
     const [receiptId, setReceiptId] = useState(null);
     const [nearby, reloadSpots, spotsErr] = useLive(() => api.get(`/spots/nearby?lat=${center.lat}&lng=${center.lng}&radius=10`), [center.lat, center.lng], { every: 30000 });
     const [bookings, reloadBookings, bookErr] = useLive(() => api.get('/bookings/my-bookings').then((r) => r.data || []), [], { every: 8000, events: ['booking:checkedin', 'booking:checkout_confirmed'] });
@@ -985,7 +1064,8 @@
       });
     }, [bookings]);
     const spots = useMemo(() => ((nearby && nearby.data) || []).map(spotView).filter((sp) => vehicle === 'all' || (vehicle === 'bike' ? num(sp.bike_slots) > 0 : num(sp.car_slots) > 0 || num(sp.bike_slots) === 0)), [nearby, vehicle]);
-    const selected = spots.find((x) => x.id === sel);
+    const savedViews = (savedList || []).map((x) => spotView({ ...x, distance: meters([center.lng, center.lat], [num(x.longitude), num(x.latitude)]) / 1000 }));
+    const selected = spots.find((x) => x.id === sel) || savedViews.find((x) => x.id === sel);
     const openSpot = open && open.parking_spots ? spotView({ ...open.parking_spots, distance: 0 }) : null;
     const mapSpots = openSpot ? [openSpot] : spots;
     const moveTo = (p) => { const c = { lat: p.lat, lng: p.lng, name: p.name || 'this place' }; setCenter(c); setSel(null); setFocus({ lat: p.lat, lng: p.lng, zoom: 13.6 }); };
@@ -1011,7 +1091,11 @@
     else if (open && navOn && open.status === 'reserved') body = html`<${Navigation} b=${open} gps=${gps} gpsStatus=${gpsStatus} onRoute=${setNavRoute} onArrive=${() => markArrived(open.id)} onExit=${() => { setNavOn(false); setNavRoute(null); }} />`;
     else if (open) body = html`<${BookingFlow} b=${open} user=${user} reload=${reloadBookings} onPaid=${(id) => { setReceiptId(id); reloadBookings(); }} onNavigate=${() => setNavOn(true)} atSpot=${atSpot} />`;
     else if (tab === 'history') body = html`<div class="side-body">${history.length ? history.map((b) => { const c = STATUS_CHIP[b.status] || [b.status, '']; const paid = b.status === 'completed' && b.payment_status === 'paid'; const row = html`<div class="grow"><b>${(b.parking_spots && b.parking_spots.title) || 'Parking'}</b><small>${dateTime(b.created_at)} · ${String(b.slot_name || '').replace(/^Slot\s*/i, 'bay ')}${paid ? ' · tap for receipt' : ''}</small></div><span class=${'chip ' + c[1]}>${paid ? 'Paid' : c[0]}</span><span class="num" style="min-width:64px;text-align:right">${b.status === 'completed' ? inr(b.total_price) : '—'}</span>`; return paid ? html`<button class="row-item rowbtn" onClick=${() => setReceiptId(b.id)}>${row}</button>` : html`<div class="row-item">${row}</div>`; }) : html`<div class="empty">Your past parkings will appear here.</div>`}</div>`;
-    else if (selected) body = html`<${SpotDetail} sp=${selected} onBack=${() => setSel(null)} onBooked=${() => { setSel(null); reloadBookings(); reloadSpots(); }} />`;
+    else if (selected) body = html`<${SpotDetail} sp=${selected} saved=${savedIds.includes(selected.id)} onToggleSave=${() => toggleSave(selected.id)} onBack=${() => setSel(null)} onBooked=${() => { setSel(null); reloadBookings(); reloadSpots(); }} />`;
+    else if (tab === 'saved') body = html`<div class="side-body">
+      <div class="listhead"><span class="eyebrow">${savedViews.length} saved spot${savedViews.length === 1 ? '' : 's'}</span></div>
+      ${!savedList ? html`<${Busy} />` : savedViews.length ? savedViews.map((sp) => html`<${SpotCard} sp=${sp} on=${false} onClick=${() => { setSel(sp.id); setFocus({ lat: sp.lat, lng: sp.lng, zoom: 15.2 }); }} />`) : html`<div class="empty">Tap ♡ on a spot to save it here for next time.</div>`}
+    </div>`;
     else body = html`<div class="side-body">
       <div class="listhead"><span class="eyebrow">${nearby ? `${spots.length} verified spot${spots.length === 1 ? '' : 's'} near ${center.name}` : 'Finding spots…'}</span><button class="linkbtn" style="font-size:12.5px" onClick=${reloadSpots}>Refresh</button></div>
       ${nearby && nearby.message && spots.length > 0 && !/retrieved/i.test(nearby.message) ? html`<p class="note">${nearby.message}</p>` : null}
@@ -1027,7 +1111,7 @@
           </div>
           <div class="inline" style="justify-content:space-between">
             <div class="seg" style="flex:1">${[['all', 'All'], ['car', 'Car'], ['bike', 'Bike']].map(([k, t]) => html`<button aria-pressed=${vehicle === k} onClick=${() => setVehicle(k)}>${t}</button>`)}</div>
-            <div class="seg" style="flex:1">${[['find', 'Find'], ['history', 'History']].map(([k, t]) => html`<button aria-pressed=${tab === k} onClick=${() => { setTab(k); setSel(null); }}>${t}</button>`)}</div>
+            <div class="seg" style="flex:1">${[['find', 'Find'], ['saved', 'Saved'], ['history', 'History']].map(([k, t]) => html`<button aria-pressed=${tab === k} onClick=${() => { setTab(k); setSel(null); }}>${t}</button>`)}</div>
           </div>
         </div>`}
         ${body}
@@ -1075,8 +1159,12 @@
     const [f, setF] = useState(() => ({
       title: initial ? initial.title : '', description: initial ? initial.description || '' : '', address: initial ? initial.address || '' : '', price: initial && initial.price_per_hour ? String(Math.round(num(initial.price_per_hour))) : '',
       car: initial ? String(num(initial.car_slots) || '') : '2', bike: initial ? String(num(initial.bike_slots) || 0) : '0',
-      lat: null, lng: null,
+      lat: initial && initial.latitude ? num(initial.latitude) : null, lng: initial && initial.longitude ? num(initial.longitude) : null,
     }));
+    // Existing photos (edit). Removing one here sends the shorter list on save.
+    const origImages = initial && Array.isArray(initial.images) ? initial.images.filter((x) => typeof x === 'string') : [];
+    const [keepImages, setKeepImages] = useState(origImages);
+    const moved = editing && f.lat !== null && (Math.abs(f.lat - num(initial.latitude)) > 1e-7 || Math.abs(f.lng - num(initial.longitude)) > 1e-7);
     const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
     // Location comes from the device GPS, like the mobile app: it starts on its own
     // when the form opens and follows the GPS until the owner moves the pin by hand.
@@ -1102,13 +1190,13 @@
       const picked = Array.from(list || []);
       const ok = picked.filter((x) => x.type.indexOf('image/') === 0 && x.size <= 5 * 1024 * 1024);
       if (ok.length < picked.length) toast('Some files were skipped. Photos must be images under 5 MB.', 'bad');
-      setFiles((cur) => { const next = cur.concat(ok).slice(0, 5); if (cur.length + ok.length > 5) toast('You can add up to 5 photos.', 'bad'); return next; });
+      setFiles((cur) => { const room = Math.max(0, 5 - keepImages.length); const next = cur.concat(ok).slice(0, room); if (cur.length + ok.length > room) toast('You can have up to 5 photos.', 'bad'); return next; });
     };
     const previews = useMemo(() => files.map((x) => URL.createObjectURL(x)), [files]);
     useEffect(() => () => previews.forEach((u) => URL.revokeObjectURL(u)), [previews]);
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState('');
-    const [focus, setFocus] = useState({ lat: near.lat, lng: near.lng, zoom: 14 });
+    const [focus, setFocus] = useState(f.lat !== null ? { lat: f.lat, lng: f.lng, zoom: 16.5 } : { lat: near.lat, lng: near.lng, zoom: 14 });
     // Moving the pin by hand stops following the GPS.
     const pick = (p) => { follow.current = false; setGpsState('manual'); setF((x) => ({ ...x, lat: p.lat, lng: p.lng })); };
     const setCoord = (k, v) => { follow.current = false; setGpsState('manual'); const n = parseFloat(v); setF((x) => ({ ...x, [k]: isNaN(n) ? null : n })); };
@@ -1125,7 +1213,9 @@
       setBusy(true);
       try {
         const payload = editing
-          ? { title: f.title.trim() || undefined, price_per_hour: f.price ? Number(f.price) : undefined, address: f.address.trim() || undefined, description: f.description.trim() || undefined, total_slots: car + bike, car_slots: car, bike_slots: bike }
+          ? { title: f.title.trim() || undefined, price_per_hour: f.price ? Number(f.price) : undefined, address: f.address.trim() || undefined, description: f.description.trim() || undefined, total_slots: car + bike, car_slots: car, bike_slots: bike,
+              ...(moved ? { latitude: f.lat, longitude: f.lng } : {}),
+              ...(keepImages.length !== origImages.length ? { images: keepImages } : {}) }
           : { title: f.title.trim(), description: f.description.trim(), price_per_hour: Number(f.price), latitude: f.lat, longitude: f.lng, address: f.address.trim() || undefined, total_slots: car + bike, car_slots: car, bike_slots: bike, images: [] };
         setStage('saving');
         const r = editing ? await api.put(`/spots/${initial.id}`, payload) : await api.post('/spots', payload);
@@ -1146,12 +1236,13 @@
     return html`<form class="card-b" style="border-top:1px solid var(--line)" onSubmit=${save}>
       <div class="form-grid">
         <div class="field" style="grid-column:1/-1"><label for="sp-title">Spot name finders will see</label><input id="sp-title" class="input" placeholder="e.g. Hennur Cross Apartment Basement" value=${f.title} onInput=${(e) => set('title', e.target.value)} /></div>
-        ${!editing && html`<div class="field" style="grid-column:1/-1"><label>Location (from your GPS)</label>
+        ${html`<div class="field" style="grid-column:1/-1"><label>${editing ? 'Location' : 'Location (from your GPS)'}</label>
           <div class="gpsbar">
             <span class=${'pulse' + (gpsState === 'live' ? ' ok' : '')} style=${gpsState === 'blocked' ? 'background:var(--bad)' : gpsState === 'manual' ? 'background:var(--sign)' : ''}></span>
             <span class="grow">${gpsState === 'live' ? html`<b>Using your current location</b>${acc ? html` · accurate to about ${acc < 1000 ? Math.round(acc) + ' m' : (acc / 1000).toFixed(1) + ' km'}` : ''}`
               : gpsState === 'manual' ? html`<b>Pin set by you</b>`
               : gpsState === 'blocked' ? html`<b>Location is blocked.</b> Allow location for this site (lock icon in the address bar), then try again.`
+              : gpsState === 'off' ? html`<b>Saved location.</b> Click the map or tap Detect to move the pin.`
               : html`<b>Detecting your location…</b>`}</span>
             <button type="button" class="btn sm" onClick=${startGps}><${Icon} n="locate" size=${15} />Detect my location</button>
           </div>
@@ -1161,7 +1252,7 @@
           </div>
           ${acc && acc > 150 && gpsState === 'live' ? html`<p class="note">Laptops often know their location only roughly. Stand at the parking space when you add it, or click the map to put the pin exactly on your gate.</p>` : null}
           <div class="pickmap"><${MapView} spots=${[]} user=${null} focus=${focus} onSelect=${() => {}} onPick=${pick} pick=${f.lat !== null ? { lat: f.lat, lng: f.lng } : null} areas=${AREAS} /></div>
-          <small class="faint" style="font-size:12px">Click the map if you need to move the pin.</small></div>`}
+          <small class="faint" style="font-size:12px">${moved ? 'The pin will move when you save.' : 'Click the map if you need to move the pin.'}</small></div>`}
         <div class="field" style="grid-column:1/-1"><label for="sp-addr">Address</label><input id="sp-addr" class="input" placeholder=${editing ? 'Leave empty to keep the current address' : 'House / building, street, area, PIN code'} value=${f.address} onInput=${(e) => set('address', e.target.value)} /></div>
         <div class="field"><label for="sp-price">Price per hour (₹)</label><input id="sp-price" class="input num" type="number" min="1" max="10000" placeholder=${editing ? 'Keep current' : '40'} value=${f.price} onInput=${(e) => set('price', e.target.value)} /></div>
         <div class="field"><label for="sp-car">Car bays</label><input id="sp-car" class="input num" type="number" min="0" max="50" value=${f.car} onInput=${(e) => set('car', e.target.value)} /></div>
@@ -1169,8 +1260,9 @@
         <div class="field" style="grid-column:1/-1"><label for="sp-desc">Directions for finders (optional)</label><input id="sp-desc" class="input" placeholder="e.g. Enter from the back gate, basement level 1" value=${f.description} onInput=${(e) => set('description', e.target.value)} /></div>
         <div class="field" style="grid-column:1/-1"><label for="sp-photos">Photos <span class="faint" style="font-weight:500">(optional · up to 5)</span></label>
           <div class="photopick">
+            ${keepImages.map((u, i) => html`<div class="ph"><img src=${u} alt=${'Saved photo ' + (i + 1)} /><button type="button" aria-label=${'Remove saved photo ' + (i + 1)} onClick=${() => setKeepImages(keepImages.filter((_, j) => j !== i))}><${Icon} n="x" size=${14} /></button></div>`)}
             ${previews.map((u, i) => html`<div class="ph"><img src=${u} alt=${'Photo ' + (i + 1)} /><button type="button" aria-label=${'Remove photo ' + (i + 1)} onClick=${() => setFiles(files.filter((_, j) => j !== i))}><${Icon} n="x" size=${14} /></button></div>`)}
-            ${files.length < 5 && html`<label class="ph add"><input id="sp-photos" type="file" accept="image/*" multiple hidden onChange=${(e) => { addFiles(e.target.files); e.target.value = ''; }} /><${Icon} n="plus" /><span>Add photo</span></label>`}
+            ${keepImages.length + files.length < 5 && html`<label class="ph add"><input id="sp-photos" type="file" accept="image/*" multiple hidden onChange=${(e) => { addFiles(e.target.files); e.target.value = ''; }} /><${Icon} n="plus" /><span>Add photo</span></label>`}
           </div>
           <small class="faint" style="font-size:12px">Photos help finders find your gate, but you can skip this and add them later.</small></div>
       </div>
@@ -1473,14 +1565,107 @@
         ${status === 'requested' && html`<p class="note">Send the money by IMPS or NEFT from the ParkStop bank account, then mark it paid with the UTR.</p>`}
       </div></div>`;
   }
+
+  function SearchBar({ value, onChange, placeholder }) {
+    const [v, setV] = useState(value || '');
+    useEffect(() => { const t = setTimeout(() => onChange(v.trim()), 350); return () => clearTimeout(t); }, [v]);
+    return html`<div class="searchbox" style="max-width:340px;flex:1"><${Icon} n="search" /><input class="input" placeholder=${placeholder} value=${v} onInput=${(e) => setV(e.target.value)} /></div>`;
+  }
+  const BOOK_CHIP = { reserved: ['Booked', 'warn'], active: ['Parked', 'sig'], checkout_pending: ['Leaving', 'warn'], completed: ['Completed', 'ok'], cancelled: ['Cancelled', ''], expired: ['Expired', ''] };
+
+  function AdminBookings() {
+    const [status, setStatus] = useState('');
+    const [q, setQ] = useState('');
+    const [list, reload, err] = useLive(() => api.get(`/admin/bookings?status=${status}&q=${encodeURIComponent(q)}`).then((r) => r.data || []), [status, q], { every: 30000 });
+    return html`
+      <div class="dash-head"><div><p class="eyebrow">ParkStop admin</p><h1>All bookings</h1></div>
+        <div class="inline"><${SearchBar} value=${q} onChange=${setQ} placeholder="Booking #, finder or spot" />
+        <select class="input" style="width:auto" value=${status} onChange=${(e) => setStatus(e.target.value)} aria-label="Filter by status">
+          ${[['', 'All'], ['active', 'Parked now'], ['reserved', 'Booked'], ['checkout_pending', 'Leaving'], ['unpaid', 'Completed, unpaid'], ['completed', 'Completed'], ['cancelled', 'Cancelled'], ['expired', 'Expired']].map(([k, t]) => html`<option value=${k}>${t}</option>`)}</select></div></div>
+      <div class="card"><div class="table-wrap"><table><thead><tr><th>#</th><th>Spot</th><th>Finder</th><th>Owner</th><th>When</th><th>Status</th><th class="r">Total</th><th class="r">Fee</th></tr></thead><tbody>
+        ${(list || []).map((b) => { const c = BOOK_CHIP[b.status] || [b.status, '']; return html`<tr>
+          <td class="mono">${b.id}</td><td>${b.spot ? b.spot.title : '—'}<br /><small class="faint">${String(b.slot_name || '').replace(/^Slot\s*/i, 'bay ')} · ${b.vehicle_type || 'car'}</small></td>
+          <td>${b.finder ? b.finder.name : '—'}<br /><small class="faint">${b.finder ? b.finder.email : ''}</small></td><td>${b.owner ? b.owner.name : '—'}</td>
+          <td>${dateTime(b.start_time)}${b.actual_end_time ? html`<br /><small class="faint">to ${time(b.actual_end_time)}</small>` : null}</td>
+          <td><span class=${'chip ' + c[1]}>${c[0]}</span>${b.status === 'completed' ? html`<br /><small class=${b.payment_status === 'paid' ? 'faint' : ''} style=${b.payment_status === 'paid' ? '' : 'color:var(--bad)'}>${b.payment_status === 'paid' ? 'paid' : 'not paid'}</small>` : null}</td>
+          <td class="r num">${b.total_price ? inr(b.total_price) : '—'}</td><td class="r num">${b.platform_fee ? inr(b.platform_fee) : '—'}</td></tr>`; })}
+      </tbody></table>${!list ? (err ? html`<${ErrorBox} msg=${err} retry=${reload} />` : html`<${Busy} />`) : !list.length && html`<div class="empty">No bookings match.</div>`}</div></div>`;
+  }
+
+  function AdminUsers() {
+    const [q, setQ] = useState('');
+    const [list, reload, err] = useLive(() => api.get(`/admin/users?q=${encodeURIComponent(q)}`).then((r) => r.data || []), [q]);
+    const vchip = { approved: ['Verified', 'ok'], pending: ['In review', 'warn'], rejected: ['Sent back', 'bad'], in_progress: ['Verifying', ''], not_started: ['Not verified', ''] };
+    return html`
+      <div class="dash-head"><div><p class="eyebrow">ParkStop admin</p><h1>Users</h1></div><${SearchBar} value=${q} onChange=${setQ} placeholder="Name, email or phone" /></div>
+      <div class="card"><div class="table-wrap"><table><thead><tr><th>Name</th><th>Email / phone</th><th>Modes</th><th>Owner check</th><th class="r">Bookings</th><th class="r">Spots</th><th class="r">Wallet</th><th>Joined</th></tr></thead><tbody>
+        ${(list || []).map((u) => { const v = u.owner ? (vchip[u.verification_status] || vchip.not_started) : null; return html`<tr>
+          <td><b>${u.name || '—'}</b></td><td>${u.email}<br /><small class="faint">${u.phone || ''}</small></td>
+          <td>${String(u.role).toUpperCase() === 'ADMIN' ? html`<span class="chip sig">Admin</span>` : html`${u.finder ? html`<span class="chip">Finder</span> ` : null}${u.owner ? html`<span class="chip">Owner</span>` : null}`}</td>
+          <td>${v ? html`<span class=${'chip ' + v[1]}>${v[0]}</span>` : '—'}</td>
+          <td class="r num">${u.bookings}</td><td class="r num">${u.spots}</td><td class="r num" style=${u.balance < 0 ? 'color:var(--bad)' : ''}>${inr(u.balance)}</td><td>${dateShort(u.created_at)}</td></tr>`; })}
+      </tbody></table>${!list ? (err ? html`<${ErrorBox} msg=${err} retry=${reload} />` : html`<${Busy} />`) : !list.length && html`<div class="empty">No users match.</div>`}</div></div>`;
+  }
+
+  function AdminSpotRow({ sp, reload }) {
+    const [mode, setMode] = useState(null);
+    const [why, setWhy] = useState('');
+    const state = sp.deleted_at ? ['Removed', 'bad'] : sp.is_active ? ['Live', 'ok'] : ['Offline', ''];
+    return html`<div class="row-item" style="flex-wrap:wrap">
+      <${SpotPhoto} sp=${sp} cls="thumb sm" />
+      <div class="grow"><b>${sp.title}</b><small>₹${Math.round(sp.price_per_hour)}/h · ${sp.total_slots} bays · ${sp.bookings} bookings · ${sp.owner ? sp.owner.name : 'unknown owner'}${sp.owner && sp.owner.verification_status !== 'approved' ? ' (not verified)' : ''}</small><small>${sp.address || ''}</small></div>
+      <span class=${'chip ' + state[1]}>${state[0]}</span>
+      ${sp.deleted_at ? html`<button class="btn sm" onClick=${async () => { if (await attempt(() => api.post(`/admin/spots/${sp.id}/restore`), (r) => r.message)) reload(); }}>Restore</button>`
+        : mode ? html`<form class="inline" style="flex-basis:100%" onSubmit=${async (e) => { e.preventDefault(); if (await attempt(() => api.post(`/admin/spots/${sp.id}/remove`, { reason: why }), (r) => r.message)) { setMode(null); reload(); } }}>
+            <input class="input" style="flex:1;min-width:200px" placeholder="Reason, e.g. fake listing or unsafe space" value=${why} onInput=${(e) => setWhy(e.target.value)} />
+            <button class="btn sm danger" type="submit">Remove listing</button><button class="btn sm ghost" type="button" onClick=${() => setMode(null)}>Cancel</button></form>`
+        : html`<button class="btn sm" onClick=${() => setMode('remove')}>Remove</button>`}
+    </div>`;
+  }
+  function AdminSpots() {
+    const [show, setShow] = useState('all');
+    const [q, setQ] = useState('');
+    const [list, reload, err] = useLive(() => api.get(`/admin/spots?show=${show}&q=${encodeURIComponent(q)}`).then((r) => r.data || []), [show, q]);
+    return html`
+      <div class="dash-head"><div><p class="eyebrow">ParkStop admin</p><h1>Spots</h1></div>
+        <div class="inline"><${SearchBar} value=${q} onChange=${setQ} placeholder="Spot name or address" />
+        <div class="seg">${[['all', 'All'], ['live', 'Live'], ['hidden', 'Offline'], ['deleted', 'Removed']].map(([k, t]) => html`<button aria-pressed=${show === k} onClick=${() => setShow(k)}>${t}</button>`)}</div></div></div>
+      <div class="card"><div class="card-b">${!list ? (err ? html`<${ErrorBox} msg=${err} retry=${reload} />` : html`<${Busy} />`) : list.length ? list.map((sp) => html`<${AdminSpotRow} key=${sp.id} sp=${sp} reload=${reload} />`) : html`<div class="empty">No spots here.</div>`}</div></div>`;
+  }
+
+  function DisputeRow({ d, reload }) {
+    const [res, setRes] = useState('');
+    return html`<div class="row-item" style="flex-direction:column;align-items:stretch;gap:8px">
+      <div class="inline" style="justify-content:space-between"><div><b>${d.reason}</b><small>Booking #${d.booking_id}${d.booking && d.booking.spot ? ' · ' + d.booking.spot : ''} · ${d.raised_by ? d.raised_by.name + ' (' + d.raised_by.email + ')' : ''} · ${ago(d.created_at)}</small></div>
+        ${d.booking && html`<span class="chip">${inr(d.booking.total_price)} · ${d.booking.payment_status === 'paid' ? 'paid' : d.booking.status}</span>`}</div>
+      ${d.description && html`<p class="muted" style="font-size:14px;margin:0">“${d.description}”</p>`}
+      ${d.status === 'open' ? html`<form class="inline" onSubmit=${async (e) => { e.preventDefault(); if (await attempt(() => api.post(`/admin/disputes/${d.id}/resolve`, { resolution: res }), (r) => r.message)) reload(); }}>
+          <input class="input" style="flex:1;min-width:200px" placeholder="What did you decide? e.g. Refunded ₹50 to the finder" value=${res} onInput=${(e) => setRes(e.target.value)} />
+          <button class="btn sm primary" type="submit">Mark resolved</button></form>`
+        : html`<p class="note" style="margin:0"><b>Resolved:</b> ${d.resolution}</p>`}
+    </div>`;
+  }
+  function AdminDisputes() {
+    const [status, setStatus] = useState('open');
+    const [list, reload, err] = useLive(() => api.get(`/admin/disputes?status=${status}`).then((r) => r.data || []), [status], { every: 60000 });
+    return html`
+      <div class="dash-head"><div><p class="eyebrow">ParkStop admin</p><h1>Reported problems</h1></div>
+        <div class="seg">${[['open', 'Open'], ['resolved', 'Resolved']].map(([k, t]) => html`<button aria-pressed=${status === k} onClick=${() => setStatus(k)}>${t}</button>`)}</div></div>
+      <div class="card"><div class="card-b">${!list ? (err ? html`<${ErrorBox} msg=${err} retry=${reload} />` : html`<${Busy} />`) : list.length ? list.map((d) => html`<${DisputeRow} key=${d.id} d=${d} reload=${reload} />`) : html`<div class="empty">${status === 'open' ? 'No open problems. 🎉' : 'Nothing resolved yet.'}</div>`}</div></div>`;
+  }
+
   function Admin() {
-    const [tab, setTab] = useState(() => (/#\/admin\/(verifications|payouts)/.exec(location.hash) || [0, 'overview'])[1]);
+    const [tab, setTab] = useState(() => (/#\/admin\/(verifications|payouts|bookings|users|spots|disputes)/.exec(location.hash) || [0, 'overview'])[1]);
     const goTab = (t) => { setTab(t); history.replaceState(null, '', `#/admin/${t}`); };
     return html`<main class="dash"><div class="dash-in">
-      <nav class="tabs" aria-label="Admin sections">${[['overview', 'Overview'], ['verifications', 'Verifications'], ['payouts', 'Payouts']].map(([k, t]) => html`<button aria-pressed=${tab === k} onClick=${() => goTab(k)}>${t}</button>`)}</nav>
+      <nav class="tabs" aria-label="Admin sections">${[['overview', 'Overview'], ['bookings', 'Bookings'], ['verifications', 'Verifications'], ['payouts', 'Payouts'], ['disputes', 'Problems'], ['spots', 'Spots'], ['users', 'Users']].map(([k, t]) => html`<button aria-pressed=${tab === k} onClick=${() => goTab(k)}>${t}</button>`)}</nav>
       ${tab === 'overview' && html`<${AdminOverview} />`}
       ${tab === 'verifications' && html`<${AdminVerifications} />`}
       ${tab === 'payouts' && html`<${AdminPayouts} />`}
+      ${tab === 'bookings' && html`<${AdminBookings} />`}
+      ${tab === 'users' && html`<${AdminUsers} />`}
+      ${tab === 'spots' && html`<${AdminSpots} />`}
+      ${tab === 'disputes' && html`<${AdminDisputes} />`}
     </div></main>`;
   }
 
@@ -1569,6 +1754,10 @@
       enter(v);
     };
 
+    useEffect(() => {
+      const label = phase === 'in' ? (view === 'driver' ? 'Find parking' : view === 'owner' ? 'Spot owner' : 'Admin') : phase === 'out' ? 'Sign in' : null;
+      document.title = label ? `${label} · ParkStop` : 'ParkStop — Book parking by the hour';
+    }, [phase, view]);
     if (phase === 'boot') return html`<${Splash} label="Connecting to ParkStop…" />`;
     if (phase === 'out') return html`<${Gate} flow=${flow} onDone=${onSignedIn} /><${Toasts} />`;
     if (phase === 'role') return html`<${RolePick} user=${me} onPick=${go} /><${Toasts} />`;
@@ -1589,4 +1778,9 @@
   }
 
   render(html`<${App} />`, document.getElementById('app'));
+
+  // Installable app + quicker repeat visits (network first; live data is never cached).
+  if ('serviceWorker' in navigator && location.protocol === 'https:') {
+    window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js', { scope: './' }).catch(() => {}); });
+  }
 })();

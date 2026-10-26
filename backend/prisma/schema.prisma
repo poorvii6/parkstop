@@ -97,6 +97,9 @@ model parking_spots {
   location_type   String?    @db.VarChar(20)
   is_active       Boolean?   @default(true)
   updated_at      DateTime?  @default(now()) @db.Timestamp(6)
+  // Set when the owner deletes the spot. A deleted spot is never switched back
+  // on by "go online" and is hidden from the owner's lists.
+  deleted_at      DateTime?  @db.Timestamp(6)
   amenities       Json?      @default("[]")
   bike_slots      Int?       @default(0)
   car_slots       Int?       @default(1)

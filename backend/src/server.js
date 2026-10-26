@@ -27,6 +27,7 @@ const reviewRoutes = require('./routes/reviews');
 const disputeRoutes = require('./routes/disputes');
 const notificationRoutes = require('./routes/notifications');
 const ownerVerificationRoutes = require('./routes/ownerVerification');
+const adminRoutes = require('./routes/admin'); // website admin views
 
 const app = express();
 app.set('trust proxy', 1);
@@ -200,6 +201,7 @@ app.use(`${API_PREFIX}/payouts`, payoutRoutes);
 app.use(`${API_PREFIX}/reviews`, reviewRoutes);
 app.use(`${API_PREFIX}/disputes`, disputeRoutes);
 app.use(`${API_PREFIX}/notifications`, notificationRoutes);
+app.use(`${API_PREFIX}/admin`, adminRoutes);
 
 // Serve the ParkStop landing page at root URL
 app.use(express.static(path.join(__dirname, '..', 'public')));

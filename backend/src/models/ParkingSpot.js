@@ -283,8 +283,14 @@ class ParkingSpot {
       car_slots,
       bike_slots,
       total_slots,
-      images
+      images,
+      latitude,
+      longitude
     } = updates;
+    // Moving the pin: only accept real coordinates.
+    const lat = latitude !== undefined && latitude !== null && latitude !== '' ? Number(latitude) : undefined;
+    const lng = longitude !== undefined && longitude !== null && longitude !== '' ? Number(longitude) : undefined;
+    const coordsOk = lat !== undefined && lng !== undefined && Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
 
     const { normalizeLocationType } = require('../constants/spotTypes');
     const normalizedLocation = location_type ? normalizeLocationType(location_type) : undefined;
@@ -302,6 +308,8 @@ class ParkingSpot {
         bike_slots: bike_slots !== undefined ? parseInt(bike_slots) : undefined,
         total_slots: total_slots !== undefined ? parseInt(total_slots) : undefined,
         images: Array.isArray(images) ? images : undefined,
+        latitude: coordsOk ? lat : undefined,
+        longitude: coordsOk ? lng : undefined,
         updated_at: new Date()
       }
     });
@@ -312,6 +320,7 @@ class ParkingSpot {
       where: { id: parseInt(id) },
       data: {
         is_active: false,
+        deleted_at: new Date(),
         updated_at: new Date()
       }
     });
@@ -465,6 +474,8 @@ class ParkingSpot {
         address: true,
         description: true,
         images: true,
+        latitude: true,
+        longitude: true,
       }
     });
 
@@ -541,7 +552,7 @@ class ParkingSpot {
 
     // 3. Global Online/Offline Status
     const allSpots = await prisma.parking_spots.findMany({
-      where: { spotter_id: parseInt(userId) },
+      where: { spotter_id: parseInt(userId), deleted_at: null },
       select: { is_active: true }
     });
     const globalOnline = allSpots.length > 0 && allSpots.some(s => s.is_active);

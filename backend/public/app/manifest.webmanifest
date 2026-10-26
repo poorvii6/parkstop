@@ -1,0 +1,15 @@
+{
+  "name": "ParkStop — Book parking by the hour",
+  "short_name": "ParkStop",
+  "description": "Book verified private parking in Bengaluru by the hour, or rent out your empty bay.",
+  "start_url": "/app/",
+  "scope": "/app/",
+  "display": "standalone",
+  "background_color": "#0f1217",
+  "theme_color": "#0f1217",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
