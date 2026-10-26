@@ -404,3 +404,13 @@ textarea.input { font: inherit; resize: vertical; min-height: 76px; }
 .navstep.on { color: var(--ink); font-weight: 600; }
 .navstep svg { flex: none; color: var(--ink-3); }
 .navstep.on svg { color: var(--sign); }
+
+.gatepin { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 26px 16px; border-radius: 18px; border: 2px dashed color-mix(in srgb, var(--signal) 55%, var(--line)); background: var(--signal-soft); text-align: center; }
+.pin.big { font-size: 54px; letter-spacing: 0.16em; line-height: 1.05; }
+.nextsteps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0; counter-reset: s; }
+.nextsteps li { counter-increment: s; position: relative; padding: 10px 0 10px 40px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 2px; font-size: 14px; }
+.nextsteps li:first-child { border-top: 0; }
+.nextsteps li::before { content: counter(s); position: absolute; left: 0; top: 10px; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; border: 1.5px solid var(--line); font-family: var(--mono); font-size: 12.5px; color: var(--ink-2); }
+.nextsteps li.on::before { background: var(--signal); border-color: var(--signal); color: var(--signal-ink); }
+.nextsteps span { color: var(--ink-3); font-size: 13px; }
+@media (max-width: 560px) { .pin.big { font-size: 42px; } }

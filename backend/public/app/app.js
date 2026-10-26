@@ -653,7 +653,7 @@
     return html`<button class="btn primary block" disabled=${busy} onClick=${pay}>${busy ? 'Opening secure payment…' : `Pay ${inr(amount)}`}</button>`;
   }
 
-  function BookingFlow({ b, user, reload, onPaid, onNavigate }) {
+  function BookingFlow({ b, user, reload, onPaid, onNavigate, atSpot }) {
     const now = useNow(1000);
     const sp = b.parking_spots || {};
     const [confirm, setConfirm] = useState(null);
@@ -663,6 +663,32 @@
     const act = async (fn, msg) => { setBusy(true); await attempt(fn, msg); setBusy(false); setConfirm(null); reload(); };
     const lat = num(sp.latitude), lng = num(sp.longitude);
 
+    if (b.status === 'reserved' && atSpot) {
+      // Arrived: the only thing left to do is show the PIN. This screen moves on
+      // by itself the moment the owner checks the car in.
+      const left = ts(b.otp_expires_at) - now;
+      return html`<div class="side-body">
+        <p class="eyebrow">At the spot${left > 0 ? ` · bay held for ${mmss(left)}` : ''}</p>
+        <h2 style="font-size:24px">Show this PIN at the gate</h2>
+        <div class="gatepin">
+          <span class="eyebrow">Check-in PIN</span>
+          <div class="pin big">${b.otp_code || '······'}</div>
+          <span class="muted" style="font-size:14px">${sp.title} · ${String(b.slot_name || 'your bay').replace(/^Slot\s*/i, 'bay ')}</span>
+        </div>
+        <div class="status"><span class="pulse"></span>Waiting for the owner to enter your PIN. This screen updates by itself.</div>
+        <ol class="nextsteps">
+          <li class="on"><b>Show the PIN</b><span>Tell the owner or show them this screen.</span></li>
+          <li><b>Owner checks you in</b><span>Your parking time starts then.</span></li>
+          <li><b>Park in ${String(b.slot_name || 'your bay').replace(/^Slot\s*/i, 'bay ')}</b><span>End the session here when you leave, then pay.</span></li>
+        </ol>
+        <div class="inline" style="justify-content:space-between">
+          <button class="linkbtn" onClick=${onNavigate}>Directions again</button>
+          ${confirm === 'cancel' ? null : html`<button class="linkbtn" style="color:var(--bad)" onClick=${() => setConfirm('cancel')}>Cancel booking</button>`}
+        </div>
+        ${confirm === 'cancel' && html`<div class="panel"><b>Cancel this booking?</b><p class="muted" style="font-size:14px">Your bay will be released for other drivers.</p>
+            <div class="inline"><button class="btn" onClick=${() => setConfirm(null)}>Keep booking</button><button class="btn primary" disabled=${busy} onClick=${() => act(() => api.put(`/bookings/${b.id}/cancel`), (r) => r.message || 'Booking cancelled')}>Cancel booking</button></div></div>`}
+      </div>`;
+    }
     if (b.status === 'reserved') {
       const left = ts(b.otp_expires_at) - now;
       return html`<div class="side-body">
@@ -777,7 +803,7 @@
     return { ...r, coordinates: c, _cum: cum, steps };
   }
 
-  function Navigation({ b, gps, gpsStatus, onRoute, onExit }) {
+  function Navigation({ b, gps, gpsStatus, onRoute, onExit, onArrive }) {
     const sp = b.parking_spots || {};
     const dest = [num(sp.longitude), num(sp.latitude)];
     const [route, setRoute] = useState(null);
@@ -803,6 +829,7 @@
 
     const prog = route && here ? progressOn(route, here) : null;
     const arrived = here && meters(here, dest) < 45;
+    useEffect(() => { if (arrived) onArrive(); }, [arrived]);
     // Off the route for real (not GPS jitter): get a new one, at most every 15 s.
     const offRef = useRef({ prog: null, arrived: false, acc: 0 });
     offRef.current = { prog, arrived, acc: (gps && gps.accuracy) || 0 };
@@ -849,7 +876,7 @@
           <div><b>You have arrived</b><span>${sp.title}</span></div>
         </div>
         <div class="ticket"><div class="ticket-pin"><div><span class="eyebrow">Show this PIN at the gate</span><div class="pin">${b.otp_code}</div></div></div></div>
-        <button class="btn primary block" onClick=${onExit}>Done</button>`
+        <button class="btn primary block" onClick=${onExit}>Continue</button>`
       : !route ? (err ? html`<div class="panel"><p class="error">${err}</p><button class="btn" onClick=${() => fetchRoute()}>Try again</button></div>` : html`<${Busy} label="Finding the best route…" />`)
       : html`
         <div class="navcard">
@@ -890,6 +917,9 @@
   function Driver({ user }) {
     const [gps, gpsStatus] = useGps();
     const [navOn, setNavOn] = useState(false);
+    // Bookings the driver has arrived at (kept across reloads).
+    const [arrivedIds, setArrivedIds] = useState(() => { try { return JSON.parse(ls.get('ps-arrived') || '[]'); } catch (e) { return []; } });
+    const markArrived = (id) => setArrivedIds((l) => { if (l.includes(String(id))) return l; const n = l.concat(String(id)).slice(-20); ls.set('ps-arrived', JSON.stringify(n)); return n; });
     const [navRoute, setNavRoute] = useState(null);
     const [center, setCenter] = useState(HOME);
     const followGps = useRef(true); // start the search at the real location until the user searches somewhere else
@@ -901,6 +931,22 @@
     const [nearby, reloadSpots, spotsErr] = useLive(() => api.get(`/spots/nearby?lat=${center.lat}&lng=${center.lng}&radius=10`), [center.lat, center.lng], { every: 30000 });
     const [bookings, reloadBookings, bookErr] = useLive(() => api.get('/bookings/my-bookings').then((r) => r.data || []), [], { every: 8000, events: ['booking:checkedin', 'booking:checkout_confirmed'] });
     const open = openBookingOf(bookings);
+    const nearSpot = !!(open && gps && open.parking_spots && meters([gps.lng, gps.lat], [num(open.parking_spots.longitude), num(open.parking_spots.latitude)]) < 60);
+    const atSpot = !!(open && (arrivedIds.includes(String(open.id)) || nearSpot));
+    useEffect(() => { if (nearSpot && open) markArrived(open.id); }, [nearSpot, open && open.id]);
+    // Tell the driver plainly when the owner moves the booking on.
+    const lastStatus = useRef({});
+    useEffect(() => {
+      (bookings || []).forEach((bk) => {
+        const prev = lastStatus.current[bk.id];
+        if (prev && prev !== bk.status) {
+          if (prev === 'reserved' && bk.status === 'active') { toast('You are checked in. Your parking time has started.'); setNavOn(false); setNavRoute(null); }
+          if (prev === 'checkout_pending' && bk.status === 'completed') toast('The owner confirmed you have left. Please pay now.');
+          if (prev === 'reserved' && bk.status === 'expired') toast('Your booking expired because check-in did not happen in time.', 'bad');
+        }
+        lastStatus.current[bk.id] = bk.status;
+      });
+    }, [bookings]);
     const spots = useMemo(() => ((nearby && nearby.data) || []).map(spotView).filter((sp) => vehicle === 'all' || (vehicle === 'bike' ? num(sp.bike_slots) > 0 : num(sp.car_slots) > 0 || num(sp.bike_slots) === 0)), [nearby, vehicle]);
     const selected = spots.find((x) => x.id === sel);
     const openSpot = open && open.parking_spots ? spotView({ ...open.parking_spots, distance: 0 }) : null;
@@ -925,8 +971,8 @@
     let body;
     if (!bookings && !bookErr) body = html`<div class="side-body"><${Busy} /></div>`;
     else if (receipt && !openBookingOf([receipt])) body = html`<${Receipt} b=${receipt} onDone=${() => { setReceiptId(null); setSel(null); setFocus({ lat: center.lat, lng: center.lng, zoom: 13.4 }); reloadSpots(); }} />`;
-    else if (open && navOn && open.status === 'reserved') body = html`<${Navigation} b=${open} gps=${gps} gpsStatus=${gpsStatus} onRoute=${setNavRoute} onExit=${() => { setNavOn(false); setNavRoute(null); }} />`;
-    else if (open) body = html`<${BookingFlow} b=${open} user=${user} reload=${reloadBookings} onPaid=${(id) => { setReceiptId(id); reloadBookings(); }} onNavigate=${() => setNavOn(true)} />`;
+    else if (open && navOn && open.status === 'reserved') body = html`<${Navigation} b=${open} gps=${gps} gpsStatus=${gpsStatus} onRoute=${setNavRoute} onArrive=${() => markArrived(open.id)} onExit=${() => { setNavOn(false); setNavRoute(null); }} />`;
+    else if (open) body = html`<${BookingFlow} b=${open} user=${user} reload=${reloadBookings} onPaid=${(id) => { setReceiptId(id); reloadBookings(); }} onNavigate=${() => setNavOn(true)} atSpot=${atSpot} />`;
     else if (tab === 'history') body = html`<div class="side-body">${history.length ? history.map((b) => { const c = STATUS_CHIP[b.status] || [b.status, '']; return html`<div class="row-item"><div class="grow"><b>${(b.parking_spots && b.parking_spots.title) || 'Parking'}</b><small>${dateTime(b.created_at)} · ${String(b.slot_name || '').replace(/^Slot\s*/i, 'bay ')}</small></div><span class=${'chip ' + c[1]}>${c[0]}</span><span class="num" style="min-width:64px;text-align:right">${b.status === 'completed' ? inr(b.total_price) : '—'}</span></div>`; }) : html`<div class="empty">Your past parkings will appear here.</div>`}</div>`;
     else if (selected) body = html`<${SpotDetail} sp=${selected} onBack=${() => setSel(null)} onBooked=${() => { setSel(null); reloadBookings(); reloadSpots(); }} />`;
     else body = html`<div class="side-body">
