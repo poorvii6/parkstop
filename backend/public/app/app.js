@@ -20,7 +20,7 @@
   const firstName = (u) => String((u && (u.full_name || u.name)) || '').split(' ')[0] || 'there';
   const OPEN = ['reserved', 'active', 'checkout_pending'];
 
-  /** The booking the driver must deal with first (same rule as the app). */
+  /** The booking the finder must deal with first (same rule as the app). */
   function openBookingOf(list) {
     const now = Date.now();
     return (list || []).find((b) => {
@@ -172,7 +172,7 @@
   }
 
   // ---------------- top bar ----------------
-  const ROLE_LABEL = { driver: 'Driver', owner: 'Spot owner', admin: 'Admin' };
+  const ROLE_LABEL = { driver: 'Finder', owner: 'Spot owner', admin: 'Admin' };
   function Notifications({ onClose }) {
     const [data, reload] = useLive(() => api.get('/notifications').then((r) => r.data), []);
     useEffect(() => { if (data && data.unread) api.post('/notifications/read', {}).catch(() => {}); }, [data && data.unread]);
@@ -487,7 +487,7 @@
       ? html`<form class="panel" onSubmit=${submitDetails} style="gap:12px">
           <button type="button" class="back" onClick=${onCancel}><${Icon} n="back" />Back</button>
           <div><p class="eyebrow">Step 1 of ${needCode ? 2 : 1} · Owner details</p><h2 style="font-size:24px;margin-top:6px">Become a spot owner</h2>
-            <p class="muted" style="font-size:14px">We need a few details before you can list a space. Next you will verify your identity (Aadhaar, PAN, selfie, bank and property proof) before drivers can see your spots.</p></div>
+            <p class="muted" style="font-size:14px">We need a few details before you can list a space. Next you will verify your identity (Aadhaar, PAN, selfie, bank and property proof) before finders can see your spots.</p></div>
           <${Field} label="Name on your account" id="ow-name"><input id="ow-name" class="input" value=${user.full_name || user.name || ''} disabled /><//>
           <div class="form-grid">
             <${Field} label="Mobile number" id="ow-phone"><input id="ow-phone" class="input" inputmode="tel" placeholder="98765 43210" value=${f.phone} onInput=${(e) => set('phone', e.target.value)} /><//>
@@ -513,7 +513,7 @@
     return html`<main class="gate"><section class="gate-hero"><${HeroCanvas} />
         <div class="brand" style="font-size:22px"><span class="psign">P</span>ParkStop</div>
         <div style="display:flex;flex-direction:column;gap:18px"><h1>${needDetails ? html`Rent out your <em>empty bay.</em>` : html`Owner mode, <em>secured.</em>`}</h1>
-          <p class="lede">${needDetails ? 'List a driveway or basement bay, check cars in with a PIN, and get paid to your bank. Every owner is verified before drivers can book.' : 'Your owner dashboard has your earnings, payouts and bank details. We ask for a fresh email code before opening it.'}</p></div>
+          <p class="lede">${needDetails ? 'List a driveway or basement bay, check cars in with a PIN, and get paid to your bank. Every owner is verified before finders can book.' : 'Your owner dashboard has your earnings, payouts and bank details. We ask for a fresh email code before opening it.'}</p></div>
         <div></div></section>
       <section class="gate-side">${side}</section></main>`;
   }
@@ -532,11 +532,11 @@
         ${cards.map((c) => html`<button class="rolecard" disabled=${!!busy} onClick=${async () => { setBusy(c.r); await onPick(c.r); setBusy(null); }}>
           <span class="ic"><${Icon} n=${c.icon} size=${22} /></span><span style="flex:1"><b>${c.t}</b><small>${c.d}</small></span>${busy === c.r ? html`<span class="spinner sm"></span>` : null}
         </button>`)}
-        <p class="note">You can switch between driver and spot owner any time from the top bar.</p>
+        <p class="note">You can switch between finder and spot owner any time from the top bar.</p>
       </section></main>`;
   }
 
-  // ---------------- driver ----------------
+  // ---------------- finder ----------------
   const spotView = (sp) => ({
     ...sp, id: Number(sp.id), lat: num(sp.latitude), lng: num(sp.longitude),
     rate: Math.round(num(sp.dynamic_price || sp.price_per_hour)), free: num(sp.available_slots), total: num(sp.total_slots), distance: num(sp.distance),
@@ -685,7 +685,7 @@
           <button class="linkbtn" onClick=${onNavigate}>Directions again</button>
           ${confirm === 'cancel' ? null : html`<button class="linkbtn" style="color:var(--bad)" onClick=${() => setConfirm('cancel')}>Cancel booking</button>`}
         </div>
-        ${confirm === 'cancel' && html`<div class="panel"><b>Cancel this booking?</b><p class="muted" style="font-size:14px">Your bay will be released for other drivers.</p>
+        ${confirm === 'cancel' && html`<div class="panel"><b>Cancel this booking?</b><p class="muted" style="font-size:14px">Your bay will be released for other finders.</p>
             <div class="inline"><button class="btn" onClick=${() => setConfirm(null)}>Keep booking</button><button class="btn primary" disabled=${busy} onClick=${() => act(() => api.put(`/bookings/${b.id}/cancel`), (r) => r.message || 'Booking cancelled')}>Cancel booking</button></div></div>`}
       </div>`;
     }
@@ -698,7 +698,7 @@
         <//>
         <button class="btn blue block" onClick=${onNavigate}><${Icon} n="nav" />Navigate to the spot</button>
         <div class="status"><span class="pulse"></span>Waiting for the owner to check you in</div>
-        ${confirm === 'cancel' ? html`<div class="panel"><b>Cancel this booking?</b><p class="muted" style="font-size:14px">Your bay will be released for other drivers.</p>
+        ${confirm === 'cancel' ? html`<div class="panel"><b>Cancel this booking?</b><p class="muted" style="font-size:14px">Your bay will be released for other finders.</p>
             <div class="inline"><button class="btn" onClick=${() => setConfirm(null)}>Keep booking</button><button class="btn primary" disabled=${busy} onClick=${() => act(() => api.put(`/bookings/${b.id}/cancel`), (r) => r.message || 'Booking cancelled')}>Cancel booking</button></div></div>`
           : html`<button class="btn danger" onClick=${() => setConfirm('cancel')}>Cancel booking</button>`}
       </div>`;
@@ -777,7 +777,7 @@
   };
   const TurnIcon = ({ kind, size }) => html`<svg width=${size || 34} height=${size || 34} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d=${TURN[kind] || TURN.straight} /></svg>`;
 
-  /** Where the driver is on the route: nearest point, distances, current step. */
+  /** Where the finder is on the route: nearest point, distances, current step. */
   function progressOn(route, here) {
     const c = route.coordinates;
     let best = 0, bestD = Infinity;
@@ -914,10 +914,10 @@
 
   const STATUS_CHIP = { reserved: ['Booked', 'warn'], active: ['Parked', 'sig'], checkout_pending: ['Leaving', 'warn'], completed: ['Completed', 'ok'], cancelled: ['Cancelled', ''], expired: ['Expired', ''] };
 
-  function Driver({ user }) {
+  function FinderView({ user }) {
     const [gps, gpsStatus] = useGps();
     const [navOn, setNavOn] = useState(false);
-    // Bookings the driver has arrived at (kept across reloads).
+    // Bookings the finder has arrived at (kept across reloads).
     const [arrivedIds, setArrivedIds] = useState(() => { try { return JSON.parse(ls.get('ps-arrived') || '[]'); } catch (e) { return []; } });
     const markArrived = (id) => setArrivedIds((l) => { if (l.includes(String(id))) return l; const n = l.concat(String(id)).slice(-20); ls.set('ps-arrived', JSON.stringify(n)); return n; });
     const [navRoute, setNavRoute] = useState(null);
@@ -934,7 +934,7 @@
     const nearSpot = !!(open && gps && open.parking_spots && meters([gps.lng, gps.lat], [num(open.parking_spots.longitude), num(open.parking_spots.latitude)]) < 60);
     const atSpot = !!(open && (arrivedIds.includes(String(open.id)) || nearSpot));
     useEffect(() => { if (nearSpot && open) markArrived(open.id); }, [nearSpot, open && open.id]);
-    // Tell the driver plainly when the owner moves the booking on.
+    // Tell the finder plainly when the owner moves the booking on.
     const lastStatus = useRef({});
     useEffect(() => {
       (bookings || []).forEach((bk) => {
@@ -1025,9 +1025,9 @@
     const sp = b.parking_spots || {};
     const left = ts(b.otp_expires_at) - Date.now();
     return html`<div class="row-item" style="flex-wrap:wrap">
-      <div class="grow"><b>Arriving · ${String(b.slot_name || 'a bay').replace(/^Slot\s*/i, 'bay ')}</b><small>${sp.title} · ${(b.users && b.users.full_name) || 'Driver'} · ${b.vehicle_type === 'bike' ? 'bike' : 'car'} · ${left > 0 ? `hold ends in ${Math.ceil(left / 60000)} min` : 'hold time over'}</small></div>
-      <form class="inline" style="flex-wrap:nowrap" onSubmit=${async (e) => { e.preventDefault(); setBusy(true); const ok = await attempt(() => api.post('/bookings/verify-otp', { bookingId: Number(b.id), otp: pin }).catch((e) => { if (/^invalid otp$/i.test(e.message)) e.message = 'That PIN does not match. Ask the driver to show the PIN in their ParkStop app.'; throw e; }), 'Car checked in. The meter is running.'); setBusy(false); if (ok) { setPin(''); reload(); } }}>
-        <input id=${'pin-' + b.id} class="input mono" style="width:132px;padding:8px 10px;letter-spacing:0.12em" inputmode="numeric" maxlength="6" placeholder="6-digit PIN" aria-label=${'Driver PIN for booking ' + b.id} value=${pin} onInput=${(e) => setPin(e.target.value.replace(/\D/g, ''))} />
+      <div class="grow"><b>Arriving · ${String(b.slot_name || 'a bay').replace(/^Slot\s*/i, 'bay ')}</b><small>${sp.title} · ${(b.users && b.users.full_name) || 'Finder'} · ${b.vehicle_type === 'bike' ? 'bike' : 'car'} · ${left > 0 ? `hold ends in ${Math.ceil(left / 60000)} min` : 'hold time over'}</small></div>
+      <form class="inline" style="flex-wrap:nowrap" onSubmit=${async (e) => { e.preventDefault(); setBusy(true); const ok = await attempt(() => api.post('/bookings/verify-otp', { bookingId: Number(b.id), otp: pin }).catch((e) => { if (/^invalid otp$/i.test(e.message)) e.message = 'That PIN does not match. Ask the finder to show the PIN in their ParkStop app.'; throw e; }), 'Car checked in. The meter is running.'); setBusy(false); if (ok) { setPin(''); reload(); } }}>
+        <input id=${'pin-' + b.id} class="input mono" style="width:132px;padding:8px 10px;letter-spacing:0.12em" inputmode="numeric" maxlength="6" placeholder="6-digit PIN" aria-label=${'Finder PIN for booking ' + b.id} value=${pin} onInput=${(e) => setPin(e.target.value.replace(/\D/g, ''))} />
         <button class="btn sm primary" type="submit" disabled=${pin.length !== 6 || busy}>Check in</button>
       </form>
     </div>`;
@@ -1079,7 +1079,7 @@
       e.preventDefault(); setErr('');
       const car = parseInt(f.car || '0', 10), bike = parseInt(f.bike || '0', 10);
       if (!editing) {
-        if (f.title.trim().length < 3) return setErr('Give the spot a name drivers will recognise.');
+        if (f.title.trim().length < 3) return setErr('Give the spot a name finders will recognise.');
         if (f.lat === null || f.lng === null) return setErr(gpsState === 'blocked' ? 'Location is blocked. Allow location for this site (lock icon in the address bar), then tap Detect my location.' : 'Waiting for your location. Tap Detect my location.');
         if (f.address.trim().length < 5) return setErr('Enter the address of the parking space.');
         if (!(Number(f.price) > 0)) return setErr('Enter the price per hour.');
@@ -1108,7 +1108,7 @@
     };
     return html`<form class="card-b" style="border-top:1px solid var(--line)" onSubmit=${save}>
       <div class="form-grid">
-        <div class="field" style="grid-column:1/-1"><label for="sp-title">Spot name drivers will see</label><input id="sp-title" class="input" placeholder="e.g. Hennur Cross Apartment Basement" value=${f.title} onInput=${(e) => set('title', e.target.value)} /></div>
+        <div class="field" style="grid-column:1/-1"><label for="sp-title">Spot name finders will see</label><input id="sp-title" class="input" placeholder="e.g. Hennur Cross Apartment Basement" value=${f.title} onInput=${(e) => set('title', e.target.value)} /></div>
         ${!editing && html`<div class="field" style="grid-column:1/-1"><label>Location (from your GPS)</label>
           <div class="gpsbar">
             <span class=${'pulse' + (gpsState === 'live' ? ' ok' : '')} style=${gpsState === 'blocked' ? 'background:var(--bad)' : gpsState === 'manual' ? 'background:var(--sign)' : ''}></span>
@@ -1129,13 +1129,13 @@
         <div class="field"><label for="sp-price">Price per hour (₹)</label><input id="sp-price" class="input num" type="number" min="1" max="10000" placeholder=${editing ? 'Keep current' : '40'} value=${f.price} onInput=${(e) => set('price', e.target.value)} /></div>
         <div class="field"><label for="sp-car">Car bays</label><input id="sp-car" class="input num" type="number" min="0" max="50" value=${f.car} onInput=${(e) => set('car', e.target.value)} /></div>
         <div class="field"><label for="sp-bike">Bike bays</label><input id="sp-bike" class="input num" type="number" min="0" max="50" value=${f.bike} onInput=${(e) => set('bike', e.target.value)} /></div>
-        <div class="field" style="grid-column:1/-1"><label for="sp-desc">Directions for drivers (optional)</label><input id="sp-desc" class="input" placeholder="e.g. Enter from the back gate, basement level 1" value=${f.description} onInput=${(e) => set('description', e.target.value)} /></div>
+        <div class="field" style="grid-column:1/-1"><label for="sp-desc">Directions for finders (optional)</label><input id="sp-desc" class="input" placeholder="e.g. Enter from the back gate, basement level 1" value=${f.description} onInput=${(e) => set('description', e.target.value)} /></div>
         <div class="field" style="grid-column:1/-1"><label for="sp-photos">Photos <span class="faint" style="font-weight:500">(optional · up to 5)</span></label>
           <div class="photopick">
             ${previews.map((u, i) => html`<div class="ph"><img src=${u} alt=${'Photo ' + (i + 1)} /><button type="button" aria-label=${'Remove photo ' + (i + 1)} onClick=${() => setFiles(files.filter((_, j) => j !== i))}><${Icon} n="x" size=${14} /></button></div>`)}
             ${files.length < 5 && html`<label class="ph add"><input id="sp-photos" type="file" accept="image/*" multiple hidden onChange=${(e) => { addFiles(e.target.files); e.target.value = ''; }} /><${Icon} n="plus" /><span>Add photo</span></label>`}
           </div>
-          <small class="faint" style="font-size:12px">Photos help drivers find your gate, but you can skip this and add them later.</small></div>
+          <small class="faint" style="font-size:12px">Photos help finders find your gate, but you can skip this and add them later.</small></div>
       </div>
       ${err && html`<p class="error">${err}</p>`}
       <div class="inline"><button class="btn primary" type="submit" disabled=${busy}>${stage === 'photos' ? 'Uploading photos…' : busy ? 'Saving…' : editing ? 'Save changes' : 'Add spot'}</button><button class="btn ghost" type="button" onClick=${onClose}>Cancel</button></div>
@@ -1163,7 +1163,7 @@
         <div class="kpi"><span class="eyebrow">Wallet</span><b class="num">${dash ? inr(balance) : '…'}</b>
           <div class="row"><small class="faint">${open ? inr(open.amount) + ' on its way to your bank' : balance < 0 ? 'Platform dues to clear' : 'Ready to send to your bank'}</small>
           <button class="btn sm primary" disabled=${!payouts || !!open || !payouts.can_request || balance < num(payouts && payouts.min_amount)} title=${payouts && payouts.blocked_reason || ''} onClick=${async () => { const r = await attempt(() => api.post('/payouts/request', {}), (x) => x.message || 'Payout requested'); if (r) reloadAll(); }}>Request payout</button></div></div>
-        <div class="kpi"><span class="eyebrow">Earned so far</span><b class="num">${dash ? inr(Math.round(num(dash.earnings))) : '…'}</b><small class="faint">${dash && num(dash.pending_earnings) > 0 ? inr(num(dash.pending_earnings)) + ' waiting for driver payment' : "after ParkStop's fee"}</small></div>
+        <div class="kpi"><span class="eyebrow">Earned so far</span><b class="num">${dash ? inr(Math.round(num(dash.earnings))) : '…'}</b><small class="faint">${dash && num(dash.pending_earnings) > 0 ? inr(num(dash.pending_earnings)) + ' waiting for finder payment' : "after ParkStop's fee"}</small></div>
         <div class="kpi"><span class="eyebrow">Cars parked now</span><b class="num">${parked.length}</b><small class="faint">${arriving.length} arriving · ${leaving.length} leaving</small></div>
         <div class="kpi"><span class="eyebrow">Bays in use</span><b class="num">${dash ? num(dash.occupancy_rate) + '%' : '…'}</b><small class="faint">${dash ? `${dash.active_spots} live spot${dash.active_spots === 1 ? '' : 's'} · avg stay ${num(dash.avg_duration)} h` : ''}</small></div>
       </section>
@@ -1173,21 +1173,21 @@
             <div class="card-h"><h2>Needs you</h2><span class=${'chip ' + (leaving.length + arriving.length ? 'sig' : '')}>${leaving.length + arriving.length} waiting</span></div>
             <div class="card-b">
               ${leaving.map((b) => html`<div class="row-item" style="flex-wrap:wrap">
-                <div class="grow"><b>Leaving · ${String(b.slot_name || 'bay').replace(/^Slot\s*/i, 'bay ')}</b><small>${(b.parking_spots || {}).title} · ${(b.users && b.users.full_name) || 'Driver'} · asked ${ago(b.actual_end_time || b.updated_at)}</small></div>
-                <button class="btn sm primary" onClick=${async () => { const r = await attempt(() => api.post(`/bookings/${b.id}/confirm-checkout`), 'Confirmed. The driver can now pay.'); if (r) reloadAll(); }}>Car has left</button></div>`)}
+                <div class="grow"><b>Leaving · ${String(b.slot_name || 'bay').replace(/^Slot\s*/i, 'bay ')}</b><small>${(b.parking_spots || {}).title} · ${(b.users && b.users.full_name) || 'Finder'} · asked ${ago(b.actual_end_time || b.updated_at)}</small></div>
+                <button class="btn sm primary" onClick=${async () => { const r = await attempt(() => api.post(`/bookings/${b.id}/confirm-checkout`), 'Confirmed. The finder can now pay.'); if (r) reloadAll(); }}>Car has left</button></div>`)}
               ${arriving.map((b) => html`<${CheckInRow} key=${b.id} b=${b} reload=${reloadAll} />`)}
               ${!bookings ? html`<${Busy} />` : !leaving.length && !arriving.length && html`<div class="empty">Nothing waiting. New bookings and checkouts appear here the moment they happen.</div>`}
             </div>
           </div>
           <div class="card"><div class="card-h"><h2>Parked now</h2></div><div class="card-b">
-            ${parked.length ? parked.map((b) => html`<div class="row-item"><div class="grow"><b>${String(b.slot_name || 'Bay').replace(/^Slot\s*/i, 'Bay ')} · ${(b.parking_spots || {}).title}</b><small>${(b.users && b.users.full_name) || 'Driver'} · since ${time(b.start_time)} · until ${time(b.end_time)}</small></div><span class="num mono" style="font-size:13px">${hms(now - ts(b.start_time))}</span></div>`) : html`<div class="empty">No cars parked right now.</div>`}
+            ${parked.length ? parked.map((b) => html`<div class="row-item"><div class="grow"><b>${String(b.slot_name || 'Bay').replace(/^Slot\s*/i, 'Bay ')} · ${(b.parking_spots || {}).title}</b><small>${(b.users && b.users.full_name) || 'Finder'} · since ${time(b.start_time)} · until ${time(b.end_time)}</small></div><span class="num mono" style="font-size:13px">${hms(now - ts(b.start_time))}</span></div>`) : html`<div class="empty">No cars parked right now.</div>`}
           </div></div>
         </div>
         <div class="col">
           <div class="card"><div class="card-h"><h2>Earnings, last 7 days</h2><span class="faint num" style="font-size:13px">${inr(Math.round(trend.reduce((a, v) => a + num(v), 0)))} total</span></div>
             <div class="card-b"><${BarChart} values=${trend.map(num)} labels=${last7()} money=${true} aria="Earnings over the last 7 days" /></div></div>
           <div class="card"><div class="card-h"><h2>Recent activity</h2><button class="linkbtn" onClick=${() => go('earnings')}>All earnings</button></div><div class="card-b">
-            ${list.slice(0, 6).map((b) => { const c = STATUS_CHIP[b.status] || [b.status, '']; return html`<div class="row-item"><div class="grow"><b>${(b.parking_spots || {}).title}</b><small>#${b.id} · ${(b.users && b.users.full_name) || 'Driver'} · ${ago(b.updated_at || b.created_at)}</small></div><span class=${'chip ' + c[1]}>${c[0]}</span><span class="num" style="min-width:60px;text-align:right">${b.status === 'completed' ? inr(b.spotter_earning) : '—'}</span></div>`; })}
+            ${list.slice(0, 6).map((b) => { const c = STATUS_CHIP[b.status] || [b.status, '']; return html`<div class="row-item"><div class="grow"><b>${(b.parking_spots || {}).title}</b><small>#${b.id} · ${(b.users && b.users.full_name) || 'Finder'} · ${ago(b.updated_at || b.created_at)}</small></div><span class=${'chip ' + c[1]}>${c[0]}</span><span class="num" style="min-width:60px;text-align:right">${b.status === 'completed' ? inr(b.spotter_earning) : '—'}</span></div>`; })}
             ${bookings && !list.length && html`<div class="empty">No bookings yet.</div>`}
           </div></div>
         </div>
@@ -1210,7 +1210,7 @@
           <div class="card-b">
             <div class="minibays">${Array.from({ length: num(sp.total_slots) }, (_, i) => html`<span class=${i < num(sp.total_slots) - num(sp.available_slots) ? 's-active' : ''}>${i + 1}</span>`)}</div>
             <small class="faint">${num(sp.available_slots)} of ${sp.total_slots} free right now</small>
-            ${del === sp.id && html`<div class="panel"><b>Delete this spot?</b><p class="muted" style="font-size:14px">Drivers will no longer see it. This cannot be undone.</p><div class="inline"><button class="btn" onClick=${() => setDel(null)}>Keep it</button><button class="btn primary" onClick=${async () => { const r = await attempt(() => api.del(`/spots/${sp.id}`), 'Spot deleted'); setDel(null); if (r) reloadAll(); }}>Delete</button></div></div>`}
+            ${del === sp.id && html`<div class="panel"><b>Delete this spot?</b><p class="muted" style="font-size:14px">Finders will no longer see it. This cannot be undone.</p><div class="inline"><button class="btn" onClick=${() => setDel(null)}>Keep it</button><button class="btn primary" onClick=${async () => { const r = await attempt(() => api.del(`/spots/${sp.id}`), 'Spot deleted'); setDel(null); if (r) reloadAll(); }}>Delete</button></div></div>`}
           </div>
           ${editing === sp.id && html`<${SpotForm} initial=${sp} near=${near} onClose=${() => setEditing(null)} onSaved=${() => { setEditing(null); reloadAll(); }} />`}
         </div>`)}
@@ -1226,7 +1226,7 @@
         <div class="seg">${[7, 30, 90].map((d) => html`<button aria-pressed=${days === d} onClick=${() => setDays(d)}>${d} days</button>`)}</div></div>
       ${err && !data ? html`<${ErrorBox} msg=${err} retry=${reload} />` : null}
       <section class="kpis">
-        <div class="kpi"><span class="eyebrow">Drivers paid</span><b class="num">${t ? inr(t.gross) : '…'}</b><small class="faint">${t ? t.bookings + ' parkings' : ''}</small></div>
+        <div class="kpi"><span class="eyebrow">Finders paid</span><b class="num">${t ? inr(t.gross) : '…'}</b><small class="faint">${t ? t.bookings + ' parkings' : ''}</small></div>
         <div class="kpi"><span class="eyebrow">ParkStop fee</span><b class="num">${t ? inr(t.fees) : '…'}</b><small class="faint">platform commission</small></div>
         <div class="kpi"><span class="eyebrow">You earned</span><b class="num">${t ? inr(t.earnings) : '…'}</b><small class="faint">last ${days} days</small></div>
         <div class="kpi"><span class="eyebrow">Payout account</span><b class="num" style="font-size:20px">${payouts && payouts.requests[0] && payouts.requests[0].bank_account_last4 ? '••' + payouts.requests[0].bank_account_last4 : payouts && payouts.can_request ? 'Verified' : 'Not set'}</b><small class="faint">${payouts && payouts.blocked_reason ? payouts.blocked_reason : `Minimum payout ${inr(payouts ? payouts.min_amount : 100)}`}</small></div>
@@ -1316,8 +1316,8 @@
     return html`
       <div class="dash-head"><div><p class="eyebrow">Spot owner</p><h1>Verification</h1></div><span class=${'chip ' + statusChip[1]}>${statusChip[0]}</span></div>
       ${v.status === 'rejected' && v.rejection_reason && html`<div class="banner bad"><b>Our team asked for changes:</b> ${v.rejection_reason}</div>`}
-      ${v.status === 'pending' && html`<div class="banner"><b>Thanks — we are checking your details.</b> Your spots go live for drivers as soon as you are approved.</div>`}
-      ${v.status === 'approved' && html`<div class="banner ok"><b>You are verified.</b> Your spots are visible to drivers and payouts go to your bank.</div>`}
+      ${v.status === 'pending' && html`<div class="banner"><b>Thanks — we are checking your details.</b> Your spots go live for finders as soon as you are approved.</div>`}
+      ${v.status === 'approved' && html`<div class="banner ok"><b>You are verified.</b> Your spots are visible to finders and payouts go to your bank.</div>`}
       <div class="card"><div class="card-b" style="gap:0">
         ${steps.map((s, i) => html`<div class="vstep">
           <div class="vstep-h">
@@ -1337,15 +1337,15 @@
     const [dash, reloadDash] = useLive(() => api.get('/spots/dashboard').then((r) => r.data), [], { every: 20000, events: ['booking:new', 'booking:paid'] });
     const [bookings, reloadBookings] = useLive(() => api.get('/bookings/spotter-bookings').then((r) => r.data || []), [], { every: 8000, events: ['booking:new', 'booking:checkout_requested', 'booking:cancelled', 'booking:paid'] });
     const [payouts, reloadPayouts] = useLive(() => api.get('/payouts/requests').then((r) => r.data), [], { every: 30000 });
-    useEffect(() => onRealtime('booking:new', () => toast('New booking! A driver is on the way.')), []);
-    useEffect(() => onRealtime('booking:checkout_requested', () => toast('A driver is leaving. Confirm the car has left.')), []);
+    useEffect(() => onRealtime('booking:new', () => toast('New booking! A finder is on the way.')), []);
+    useEffect(() => onRealtime('booking:checkout_requested', () => toast('A finder is leaving. Confirm the car has left.')), []);
     const [ver, reloadVer] = useLive(() => api.get('/owner-verification').then((r) => r.data), [], { every: 60000 });
     const reloadAll = () => { reloadDash(); reloadBookings(); reloadPayouts(); reloadVer(); reloadMe(); };
     const vs = ver ? ver.status : 'approved';
     const tabs = [['today', 'Today'], ['spots', 'Spots'], ['earnings', 'Earnings'], ['verify', 'Verification']];
     return html`<main class="dash"><div class="dash-in">
       <nav class="tabs" aria-label="Owner sections">${tabs.map(([k, t]) => html`<button aria-pressed=${tab === k} onClick=${() => goTab(k)}>${t}${k === 'verify' && vs !== 'approved' ? html`<i class="dotwarn"></i>` : null}</button>`)}</nav>
-      ${vs !== 'approved' && tab !== 'verify' && html`<div class="banner"><b>${vs === 'pending' ? 'Your verification is under review.' : 'Drivers cannot see your spots yet.'}</b> ${vs === 'pending' ? 'Your spots go live as soon as our team approves you.' : 'Finish owner verification so your spots appear and you can get paid.'} ${vs !== 'pending' && html`<button class="linkbtn" onClick=${() => goTab('verify')}>Verify now</button>`}</div>`}
+      ${vs !== 'approved' && tab !== 'verify' && html`<div class="banner"><b>${vs === 'pending' ? 'Your verification is under review.' : 'Finders cannot see your spots yet.'}</b> ${vs === 'pending' ? 'Your spots go live as soon as our team approves you.' : 'Finish owner verification so your spots appear and you can get paid.'} ${vs !== 'pending' && html`<button class="linkbtn" onClick=${() => goTab('verify')}>Verify now</button>`}</div>`}
       ${tab === 'today' && html`<${OwnerToday} user=${user} dash=${dash} bookings=${bookings} payouts=${payouts} reloadAll=${reloadAll} go=${goTab} />`}
       ${tab === 'spots' && html`<${OwnerSpots} dash=${dash} reloadAll=${reloadAll} />`}
       ${tab === 'earnings' && html`<${OwnerEarnings} payouts=${payouts} reloadAll=${reloadAll} />`}
@@ -1365,7 +1365,7 @@
       ${err && !data ? html`<${ErrorBox} msg=${err} retry=${reload} />` : null}
       <section class="kpis">
         <div class="kpi"><span class="eyebrow">Completed parkings</span><b class="num">${data ? num(s.total_completed_bookings) : '…'}</b><small class="faint">${data ? num(s.total_bookings) + ' bookings in total' : ''}</small></div>
-        <div class="kpi"><span class="eyebrow">Paid by drivers</span><b class="num">${data ? inr(Math.round(num(s.total_revenue))) : '…'}</b><small class="faint">all time</small></div>
+        <div class="kpi"><span class="eyebrow">Paid by finders</span><b class="num">${data ? inr(Math.round(num(s.total_revenue))) : '…'}</b><small class="faint">all time</small></div>
         <div class="kpi"><span class="eyebrow">ParkStop commission</span><b class="num">${data ? inr(Math.round(num(s.platform_earnings))) : '…'}</b><small class="faint">owners earned ${data ? inr(Math.round(num(s.spotter_payout))) : '…'}</small></div>
         <div class="kpi"><span class="eyebrow">Waiting for you</span><b class="num">${pv && po ? pv.length + po.length : '…'}</b><small class="faint">${pv ? pv.length : '…'} verifications · ${po ? po.length : '…'} payouts</small></div>
       </section>
@@ -1455,7 +1455,7 @@
   function App() {
     const [phase, setPhase] = useState('boot'); // boot | out | role | in
     const [me, setMe] = useState(null);
-    const [view, setView] = useState(null); // driver | owner | admin
+    const [view, setView] = useState(null); // finder | owner | admin
     const [ownerGate, setOwnerGate] = useState(null); // { needDetails, needCode, back }
     const freshRef = useRef(false);
     const flowRef = useRef(false);
@@ -1545,7 +1545,7 @@
         if (first) { history.replaceState(null, '', '#/owner/verify'); toast('Owner account created. Next, verify your identity.'); } else toast('Owner mode unlocked');
       }} /><${Toasts} />`;
     return html`<${TopBar} user=${me} view=${view} go=${go} signOut=${() => signOut()} />
-      ${view === 'driver' && html`<${Driver} user=${me} />`}
+      ${view === 'driver' && html`<${FinderView} user=${me} />`}
       ${view === 'owner' && html`<${Owner} user=${me} me=${me} reloadMe=${reloadMe} />`}
       ${view === 'admin' && html`<${Admin} />`}
       <${Toasts} />`;

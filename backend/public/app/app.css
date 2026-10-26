@@ -85,7 +85,7 @@ p { margin: 0; }
   background: var(--kerb); border-bottom: 1px solid var(--line);
 }
 .brand { display: flex; align-items: center; gap: 10px; font-family: var(--display); font-stretch: 118%; font-weight: 800; font-size: 19px; letter-spacing: -0.01em; white-space: nowrap; }
-.psign { width: 30px; height: 30px; border-radius: 7px; background: var(--sign); color: #fff; display: grid; place-items: center; font-family: var(--display); font-weight: 800; font-size: 19px; box-shadow: inset 0 0 0 2px rgba(255,255,255,0.85), inset 0 0 0 4px var(--sign); }
+.psign { width: 30px; height: 30px; border-radius: 7px; background: var(--signal); color: #fff; display: grid; place-items: center; font-family: var(--display); font-weight: 800; font-size: 19px; box-shadow: inset 0 0 0 2px rgba(255,255,255,0.85), inset 0 0 0 4px var(--signal); }
 .roles { display: flex; gap: 4px; padding: 4px; border-radius: 12px; background: var(--lane); border: 1px solid var(--line); }
 .roles button { border: 0; background: transparent; padding: 7px 14px; border-radius: 9px; font-weight: 600; font-size: 14px; color: var(--ink-2); white-space: nowrap; }
 .roles button[aria-pressed="true"] { background: var(--kerb); color: var(--ink); box-shadow: 0 1px 0 var(--line), 0 4px 12px rgba(0,0,0,0.18); }

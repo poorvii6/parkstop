@@ -247,12 +247,22 @@ class Booking {
         throw new Error('Invalid OTP');
       }
 
+      // The parking (and the bill) starts when the owner checks the car in, not
+      // when it was booked. Move start_time to now and keep the booked length,
+      // so end_time and the final charge (computed from start_time in
+      // complete()) both count from check-in.
+      const checkedInAt = new Date();
+      const bookedMs = booking.end_time
+        ? Math.max(0, new Date(booking.end_time).getTime() - new Date(booking.start_time).getTime())
+        : 0;
       return tx.bookings.update({
         where: { id: parseInt(bookingId) },
         data: {
           status: 'active',
           otp_attempts: 0,
-          updated_at: new Date()
+          start_time: checkedInAt,
+          end_time: bookedMs ? new Date(checkedInAt.getTime() + bookedMs) : booking.end_time,
+          updated_at: checkedInAt
         }
       });
     });
