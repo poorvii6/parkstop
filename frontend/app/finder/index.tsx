@@ -22,10 +22,12 @@ import apiClient from '../../api/client';
 import { saveLastLocation, loadLastLocation } from '../../services/lastLocation';
 import { Spot, PricingBreakdown, AppStep } from '../../types/finder';
 import SkeletonCard from '../../components/SkeletonCard';
-import { openDirections } from '../../utils/directions';
+import { useInAppNavigation, NavDestination } from '../../hooks/useInAppNavigation';
+import { NavigationOverlay } from '../../components/finder/NavigationOverlay';
 import { BookedPanel, PaymentPanel, ReceiptPanel } from '../../components/finder/SessionPanels';
 
 const { width } = Dimensions.get('window');
+const NO_ROUTE: Array<{ latitude: number; longitude: number }> = [];
 
 export default function FinderDashboard() {
   const router = useRouter();
@@ -130,7 +132,7 @@ export default function FinderDashboard() {
     if (b.status === 'completed') { setStep('payment'); return; }
 
     // Reserved: back to the "you're booked" screen with the PIN and the
-    // Google Maps button.
+    // Navigate button.
     if (b.slot_name) setSelectedSlot(b.slot_name);
     setStep('booking_confirm');
   };
@@ -142,6 +144,15 @@ export default function FinderDashboard() {
   const [searchedPlace, setSearchedPlace] = useState<{ lat: number, lng: number, title: string } | null>(null);
   const [isFollowing, setIsFollowing] = useState(true);
   const [deviceHeading, setDeviceHeading] = useState(0);
+  // ParkStop's own turn-by-turn navigation (Google Routes API, drawn on our map).
+  const nav = useInAppNavigation({
+    userLocation,
+    onFix: (f) => {
+      setUserLocation({ lat: f.lat, lng: f.lng });
+      setLocationAccuracy(f.accuracy);
+    },
+  });
+  const navActive = nav.active;
   // Last position used to load nearby spots; null until the first fix.
   const lastUpdateCoords = useRef<{ lat: number; lng: number } | null>(null);
 
@@ -269,6 +280,12 @@ export default function FinderDashboard() {
 
   useEffect(() => {
     const backAction = () => {
+      // 1. Navigating: back ends navigation and returns to the booking.
+      if (nav.active) {
+        endNavigation();
+        return true;
+      }
+
       // 2. Spot Booking: Return to home
       if (step === 'spot_booking') {
         setStep('home');
@@ -324,7 +341,7 @@ export default function FinderDashboard() {
 
     const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
     return () => backHandler.remove();
-  }, [step, searchQuery]);
+  }, [step, searchQuery, nav.active]);
 
   // Fetch map style config (Ola Maps vector tiles or Carto fallback)
   useEffect(() => {
@@ -937,11 +954,51 @@ export default function FinderDashboard() {
     await fetchNearbySpots(lat, lon, 1000);
   };
 
-  // "Directions" from the place card opens Google Maps to the searched place.
+  // Start ParkStop's in-app navigation. Never opens Google Maps or any other app.
+  const startNavigation = async (dest: NavDestination, isBookedSpot: boolean) => {
+    if (nav.loading) return;
+    const r = await nav.start(dest);
+    if (r.ok) {
+      setIsFollowing(true);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      return;
+    }
+    if (r.reason === 'already-here') {
+      Alert.alert(
+        'You are here',
+        isBookedSpot
+          ? 'You are already at this spot. Show your check-in PIN to the owner.'
+          : 'You are already at this place.',
+      );
+      return;
+    }
+    if (r.reason === 'no-location') {
+      Alert.alert('Location needed', r.message);
+      return;
+    }
+    Alert.alert('Navigation unavailable', r.message);
+  };
+
+  // End navigation: clear the route and bring the camera back to a flat,
+  // north-up view around the driver (navigation leaves it tilted and zoomed).
+  const endNavigation = () => {
+    nav.stop();
+    setIsFollowing(true);
+    if (userLocation && mapRef.current) {
+      mapRef.current.animateCamera({
+        center: { latitude: userLocation.lat, longitude: userLocation.lng },
+        zoom: 16,
+        pitch: 0,
+        heading: 0,
+      }, { duration: 600 });
+    }
+  };
+
+  // "Directions" from the place card — route shown inside ParkStop's map.
   const handleDirectionsToPlace = () => {
     if (!searchedPlace) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    openDirections(searchedPlace.lat, searchedPlace.lng);
+    startNavigation({ lat: searchedPlace.lat, lng: searchedPlace.lng, title: searchedPlace.title }, false);
   };
 
   const recenterCamera = () => {
@@ -959,6 +1016,7 @@ export default function FinderDashboard() {
             if (currentBooking) {
               if (step === 'booking_confirm' && (currentBooking.status === 'active' || currentBooking.status === 'occupied')) {
                 setBookingDetails({ ...bookingDetails, ...currentBooking });
+                nav.stop();
                 Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
                 setStep('active_parking');
                 clearInterval(pollInterval);
@@ -988,6 +1046,7 @@ export default function FinderDashboard() {
     const off = onRealtime('booking:checkedin', (b: any) => {
       if (String(b?.id) === String(bookingDetails?.id)) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        nav.stop();
         setBookingDetails((prev: any) => (prev ? { ...prev, ...b } : b));
         setStep('active_parking');
       }
@@ -1047,6 +1106,7 @@ export default function FinderDashboard() {
           try {
             await apiClient.put(`/bookings/${bookingDetails.id}/cancel`);
             Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            nav.stop();
             setStep('home');
             setSelectedSpotId(null);
             setBookingDetails(null);
@@ -1362,7 +1422,7 @@ export default function FinderDashboard() {
       )}
 
       {/* STEP 3: HOME — MAP WITH NEARBY BOTTOM SHEET */}
-      {step === 'home' && (
+      {step === 'home' && !navActive && (
         <View style={{ flex: 1, backgroundColor: 'transparent' }} pointerEvents="box-none">
           {/* Search Bar */}
           <View style={{ position: 'absolute', top: Platform.OS === 'ios' ? 20 : 12, left: 16, right: 16, zIndex: 100 }}>
@@ -1669,11 +1729,11 @@ export default function FinderDashboard() {
             })()}
             searchedPlace={searchedPlace ?? null}
             onRecenter={recenterCamera}
-            controlsBottomOffset={['spot_booking', 'booking_confirm'].includes(step) ? 470 : 260}
+            controlsBottomOffset={navActive ? 170 : ['spot_booking', 'booking_confirm'].includes(step) ? 470 : 260}
             onMapPress={(coords: [number, number]) => {
               fetchNearbySpots(coords[1], coords[0]);
             }}
-            heading={deviceHeading}
+            heading={navActive && nav.gpsHeading != null ? nav.gpsHeading : deviceHeading}
             userLocation={userLocation || undefined}
             locationAccuracy={locationAccuracy}
             isFollowing={isFollowing}
@@ -1700,6 +1760,7 @@ export default function FinderDashboard() {
               }
             }}
             onExit={() => {
+              nav.stop();
               setStep('home');
               setSelectedSpotId(null);
               setSearchedPlace(null);
@@ -1710,14 +1771,30 @@ export default function FinderDashboard() {
                 });
               }
             }}
+            routeCoords={nav.route?.coords ?? NO_ROUTE}
+            isActiveNavigation={navActive}
+            onOffRoute={nav.reroute}
             hideControls={['spot_booking'].includes(step)}
           />
 
         </View>
       )}
 
+      {/* IN-APP NAVIGATION — turn banner, trip summary, arrival card */}
+      {navActive && (
+        <NavigationOverlay
+          phase={nav.phase === 'arrived' ? 'arrived' : 'navigating'}
+          progress={nav.progress}
+          rerouting={nav.rerouting}
+          destinationTitle={nav.destination?.title}
+          otp={step === 'booking_confirm' ? bookingDetails?.otp : undefined}
+          onEnd={endNavigation}
+          onDone={endNavigation}
+        />
+      )}
+
       {/* FLOATING BACK/HOME BUTTON — rendered AFTER map so it sits on top of WebView */}
-      {['spot_booking', 'booking_confirm', 'active_parking', 'checkout_verification', 'awaiting_owner', 'payment'].includes(step) && (
+      {!navActive && ['spot_booking', 'booking_confirm', 'active_parking', 'checkout_verification', 'awaiting_owner', 'payment'].includes(step) && (
         <TouchableOpacity
           style={{
             position: 'absolute',
@@ -2105,7 +2182,7 @@ export default function FinderDashboard() {
       )}
 
       {/* STEPS 4b onward: Map-based overlays */}
-      {!['welcome', 'vehicle_select', 'home', 'spot_booking'].includes(step) && (
+      {!navActive && !['welcome', 'vehicle_select', 'home', 'spot_booking'].includes(step) && (
         <>
 
           {(
@@ -2119,7 +2196,8 @@ export default function FinderDashboard() {
                       slot={(selectedSlot || (bookingDetails as any)?.slot_name || '').split('_').pop() || '—'}
                       bookingId={bookingDetails?.id}
                       otp={bookingDetails?.otp}
-                      onNavigate={spot ? () => openDirections(spot.lat, spot.lng) : undefined}
+                      onNavigate={spot ? () => startNavigation({ lat: spot.lat, lng: spot.lng, title: spot.title }, true) : undefined}
+                      navigating={nav.loading}
                       onCancel={handleCancelBooking}
                       cancelling={isCancelling}
                     />

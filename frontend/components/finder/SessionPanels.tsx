@@ -2,7 +2,7 @@
  * SessionPanels.tsx — the driver's screens after booking, moved out of
  * app/finder/index.tsx so that file stays manageable.
  *
- *   BookedPanel   booked, not yet checked in: PIN + "Navigate with Google Maps"
+ *   BookedPanel   booked, not yet checked in: PIN + "Navigate"
  *   PaymentPanel  session closed: what is owed, and the Pay button
  *   ReceiptPanel  paid
  *
@@ -26,13 +26,15 @@ const Row = ({ label, value, color = '#fff' }: { label: string; value: string; c
 
 /* ── Booked: waiting for the owner to check the driver in ───────────────── */
 
-export function BookedPanel({ spotTitle, slot, bookingId, otp, onNavigate, onCancel, cancelling }: {
+export function BookedPanel({ spotTitle, slot, bookingId, otp, onNavigate, navigating = false, onCancel, cancelling }: {
   spotTitle?: string;
   slot: string;
   bookingId?: string;
   otp?: string;
-  /** Opens Google Maps. Undefined when the spot's location is not known yet. */
+  /** Starts ParkStop's in-app navigation to the spot. Undefined when the spot's location is not known yet. */
   onNavigate?: () => void;
+  /** True while the route is being fetched. */
+  navigating?: boolean;
   /** Cancel the booking (allowed until the owner checks the driver in). */
   onCancel: () => void;
   cancelling: boolean;
@@ -67,16 +69,18 @@ export function BookedPanel({ spotTitle, slot, bookingId, otp, onNavigate, onCan
 
       <TouchableOpacity
         activeOpacity={0.9}
-        disabled={!onNavigate}
+        disabled={!onNavigate || navigating}
         style={{ backgroundColor: '#1a73e8', paddingVertical: 17, borderRadius: 20, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8, marginBottom: 12, opacity: onNavigate ? 1 : 0.5 }}
         onPress={() => {
-          if (!onNavigate) return;
+          if (!onNavigate || navigating) return;
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
           onNavigate();
         }}
       >
-        <Ionicons name="navigate" size={18} color="#fff" />
-        <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>Navigate with Google Maps</Text>
+        {navigating
+          ? <ActivityIndicator size="small" color="#fff" />
+          : <Ionicons name="navigate" size={18} color="#fff" />}
+        <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>{navigating ? 'Finding route…' : 'Navigate'}</Text>
       </TouchableOpacity>
 
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingVertical: 12, backgroundColor: 'rgba(99,102,241,0.06)', borderRadius: 16, borderWidth: 1, borderColor: 'rgba(99,102,241,0.12)' }}>
