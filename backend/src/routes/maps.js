@@ -627,6 +627,96 @@ router.get('/route', async (req, res) => {
     }
 });
 
+// ── Speed limits (Ola Maps Roads API) ────────────────────────────────────
+//
+// GET /maps/speed-limit?path=lat,lng|lat,lng|...   (up to 10 recent points,
+// oldest first). Returns { speedLimit: km/h | null } for the road under the
+// LAST point. Proxied so OLA_MAPS_API_KEY never reaches the app.
+//
+// Never fails the caller: a missing key, an Ola outage or an unknown road all
+// return speedLimit null, and the app simply hides the sign.
+const speedCache = new LRUCache(3000, 6 * 60 * 60 * 1000); // roads don't change often
+let speedLogCount = 0; // log the first few raw Ola replies to confirm the format
+
+/**
+ * Ola does not publish its response schema, so read it defensively: walk the
+ * JSON and collect every value under a speed-limit-like key, in order.
+ */
+function extractSpeedLimits(node, out = []) {
+    if (Array.isArray(node)) {
+        node.forEach((n) => extractSpeedLimits(n, out));
+    } else if (node && typeof node === 'object') {
+        const mph = /mph/i.test(String(node.units || node.unit || ''));
+        for (const [k, v] of Object.entries(node)) {
+            if (/^(speed_?limit|max_?speed)$/i.test(k)) {
+                const raw = v && typeof v === 'object' ? (v.value ?? v.speed ?? v.speedLimit) : v;
+                const n = Number(raw);
+                if (Number.isFinite(n) && n > 0 && n < 200) out.push(Math.round(mph ? n * 1.609 : n));
+            } else if (v && typeof v === 'object') {
+                extractSpeedLimits(v, out);
+            }
+        }
+    }
+    return out;
+}
+
+async function olaSpeedLimit(points, apiKey) {
+    const list = points.map((p) => `${p.lat},${p.lng}`).join('|');
+    // Ola's Roads APIs take "points"; older docs used "path". Try both.
+    for (const param of ['points', 'path']) {
+        const url = `https://api.olamaps.io/routing/v1/speedLimits?${param}=${encodeURIComponent(list)}&api_key=${apiKey}`;
+        const r = await fetch(url, { headers: { 'X-Request-Id': `ps-speed-${Date.now()}` } });
+        const text = await r.text();
+        if (speedLogCount < 5) {
+            speedLogCount += 1;
+            console.log(`[SPEED] Ola ${param} -> ${r.status}: ${text.slice(0, 600)}`);
+        }
+        if (r.status === 400 && param === 'points') continue; // try the other name
+        if (!r.ok) return { answered: false, limit: null };
+        let data;
+        try { data = JSON.parse(text); } catch { return { answered: false, limit: null }; }
+        const limits = extractSpeedLimits(data);
+        return { answered: true, limit: limits.length ? limits[limits.length - 1] : null };
+    }
+    return { answered: false, limit: null };
+}
+
+router.get('/speed-limit', async (req, res) => {
+    const none = () => res.json({ success: true, data: { speedLimit: null } });
+    try {
+        const clientIp = req.ip || req.connection?.remoteAddress || 'unknown';
+        if (!checkRateLimit(clientIp, 'speed')) {
+            return res.status(429).json({ success: false, message: 'Too many speed-limit requests.' });
+        }
+        const points = String(req.query.path || '')
+            .split('|')
+            .map(parseLatLng)
+            .filter(Boolean)
+            .slice(-10);
+        if (points.length === 0) {
+            return res.status(400).json({ success: false, message: 'path must be "lat,lng|lat,lng|..."' });
+        }
+        const apiKey = process.env.OLA_MAPS_API_KEY;
+        if (!apiKey) return none();
+
+        const last = points[points.length - 1];
+        const key = `${last.lat.toFixed(4)},${last.lng.toFixed(4)}`; // ~11 m cell
+        const cached = speedCache.get(key);
+        if (cached !== null && cached !== undefined) {
+            return res.json({ success: true, data: { speedLimit: cached.speedLimit }, cached: true });
+        }
+
+        const { answered, limit } = await olaSpeedLimit(points, apiKey);
+        // Cache only real answers — never an outage, or the sign would stay
+        // blank on that road for hours after Ola recovers.
+        if (answered) speedCache.set(key, { speedLimit: limit });
+        return res.json({ success: true, data: { speedLimit: limit } });
+    } catch (error) {
+        console.error('[SPEED] failed:', error.message);
+        return none();
+    }
+});
+
 
 module.exports = router;
 
