@@ -78,6 +78,8 @@ export interface MapProps {
   mapApiKey?: string;
   /** Bottom offset for recenter/compass so they ride above visible panels. */
   controlsBottomOffset?: number;
+  /** Floating mini-map (picture-in-picture) while navigating: tiny window, no controls. */
+  compact?: boolean;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────

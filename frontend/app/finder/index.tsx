@@ -23,6 +23,9 @@ import { saveLastLocation, loadLastLocation } from '../../services/lastLocation'
 import { Spot, PricingBreakdown, AppStep } from '../../types/finder';
 import SkeletonCard from '../../components/SkeletonCard';
 import { useInAppNavigation, NavDestination } from '../../hooks/useInAppNavigation';
+import { useVoiceGuidance, voiceAvailable } from '../../hooks/useVoiceGuidance';
+import { useSpeedLimit } from '../../hooks/useSpeedLimit';
+import { useNavBackground } from '../../hooks/useNavBackground';
 import { NavigationOverlay } from '../../components/finder/NavigationOverlay';
 import { BookedPanel, PaymentPanel, ReceiptPanel } from '../../components/finder/SessionPanels';
 
@@ -153,6 +156,41 @@ export default function FinderDashboard() {
     },
   });
   const navActive = nav.active;
+  // Whether the trip is to the driver's booked spot (vs a searched place) —
+  // decides if arrival mentions the check-in PIN.
+  const [navToBookedSpot, setNavToBookedSpot] = useState(false);
+  // Voice guidance on/off, remembered between drives.
+  const [voiceMuted, setVoiceMuted] = useState(false);
+  useEffect(() => {
+    AsyncStorage.getItem('nav_voice_muted').then((v) => setVoiceMuted(v === '1')).catch(() => {});
+  }, []);
+  const toggleVoice = () => {
+    setVoiceMuted((m) => {
+      const next = !m;
+      AsyncStorage.setItem('nav_voice_muted', next ? '1' : '0').catch(() => {});
+      return next;
+    });
+  };
+  useVoiceGuidance({
+    enabled: !voiceMuted,
+    phase: nav.phase,
+    route: nav.route,
+    routeVersion: nav.routeVersion,
+    progress: nav.progress,
+    speedKmh: nav.speedKmh,
+    destinationTitle: nav.destination?.title,
+    isBookedSpot: navToBookedSpot,
+  });
+  // Speed limit of the current road (Ola Maps via our server).
+  const speedLimit = useSpeedLimit({ active: nav.phase === 'navigating', location: nav.puckLocation });
+  // Floating mini-map + "ParkStop is navigating" notification.
+  const { inPip } = useNavBackground({
+    active: navActive,
+    phase: nav.phase,
+    progress: nav.progress,
+    rerouting: nav.rerouting,
+    destinationTitle: nav.destination?.title,
+  });
   // Last position used to load nearby spots; null until the first fix.
   const lastUpdateCoords = useRef<{ lat: number; lng: number } | null>(null);
 
@@ -474,7 +512,9 @@ export default function FinderDashboard() {
 
         try {
           headingSub = await Location.watchHeadingAsync((h) => {
-            setDeviceHeading(h.trueHeading);
+            // trueHeading is -1 until the compass calibrates; use magnetic then.
+            const deg = h.trueHeading >= 0 ? h.trueHeading : h.magHeading;
+            if (deg >= 0) setDeviceHeading(deg);
           });
         } catch {
           // Compass unavailable on this device — navigation still works.
@@ -957,6 +997,7 @@ export default function FinderDashboard() {
   // Start ParkStop's in-app navigation. Never opens Google Maps or any other app.
   const startNavigation = async (dest: NavDestination, isBookedSpot: boolean) => {
     if (nav.loading) return;
+    setNavToBookedSpot(isBookedSpot);
     const r = await nav.start(dest);
     if (r.ok) {
       setIsFollowing(true);
@@ -1733,8 +1774,8 @@ export default function FinderDashboard() {
             onMapPress={(coords: [number, number]) => {
               fetchNearbySpots(coords[1], coords[0]);
             }}
-            heading={navActive && nav.gpsHeading != null ? nav.gpsHeading : deviceHeading}
-            userLocation={userLocation || undefined}
+            heading={navActive ? (nav.heading ?? deviceHeading) : deviceHeading}
+            userLocation={(navActive ? nav.puckLocation : userLocation) || undefined}
             locationAccuracy={locationAccuracy}
             isFollowing={isFollowing}
             onMapInteraction={() => setIsFollowing(false)}
@@ -1771,10 +1812,12 @@ export default function FinderDashboard() {
                 });
               }
             }}
-            routeCoords={nav.route?.coords ?? NO_ROUTE}
+            routeCoords={navActive ? nav.remainingCoords : NO_ROUTE}
+            trafficSegments={nav.trafficSegments}
             isActiveNavigation={navActive}
             onOffRoute={nav.reroute}
-            hideControls={['spot_booking'].includes(step)}
+            compact={navActive && inPip}
+            hideControls={(navActive && inPip) || ['spot_booking'].includes(step)}
           />
 
         </View>
@@ -1787,7 +1830,14 @@ export default function FinderDashboard() {
           progress={nav.progress}
           rerouting={nav.rerouting}
           destinationTitle={nav.destination?.title}
-          otp={step === 'booking_confirm' ? bookingDetails?.otp : undefined}
+          otp={navToBookedSpot && step === 'booking_confirm' ? bookingDetails?.otp : undefined}
+          speedKmh={nav.speedKmh}
+          speedLimitKmh={speedLimit}
+          compact={inPip}
+          voiceAvailable={voiceAvailable}
+          muted={voiceMuted}
+          onToggleMute={toggleVoice}
+          onOverview={() => mapRef.current?.fitRoute?.(nav.remainingCoords)}
           onEnd={endNavigation}
           onDone={endNavigation}
         />

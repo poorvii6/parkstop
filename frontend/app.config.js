@@ -12,5 +12,7 @@ module.exports = ({ config }) => {
   config.android.config.googleMaps = {
     apiKey: process.env.EXPO_PUBLIC_ANDROID_MAPS_KEY || '',
   };
+  // Floating mini-map (picture-in-picture) while navigating.
+  config.plugins = [...(config.plugins || []), './plugins/withNavPictureInPicture'];
   return config;
 };

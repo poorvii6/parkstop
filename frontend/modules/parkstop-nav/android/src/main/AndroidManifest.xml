@@ -1,0 +1,16 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- Navigation keeps running when ParkStop is minimised or the screen is
+       locked: a foreground service of type "location", shown to the driver as
+       a "ParkStop is navigating" notification. Started only while the app is
+       open, so the normal "while using the app" location permission is enough. -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+  <application>
+    <service
+      android:name="expo.modules.parkstopnav.NavForegroundService"
+      android:exported="false"
+      android:foregroundServiceType="location" />
+  </application>
+</manifest>

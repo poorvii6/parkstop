@@ -8,14 +8,22 @@
  *
  * While navigating it:
  *   - streams navigation-grade GPS (1 s fixes) back to the screen
- *   - works out how far along the route the driver is
- *   - picks the next turn and the distance to it
+ *   - snaps the driver's arrow onto the route (no drifting into buildings)
+ *   - trims the route line behind the driver, as Google does
+ *   - picks the next turn, the turn after it, and the distance to each
  *   - keeps remaining distance, time and arrival clock up to date
+ *   - gives the camera a steady heading: the direction of the road
+ *   - keeps the screen awake
  *   - flips to "arrived" when the driver reaches the spot
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as Location from 'expo-location';
 import { fetchRoute, NavRoute, NavStep, LatLng } from '../utils/directions';
+
+// Optional native module: loaded defensively so a build made before the
+// package was added still runs (the screen just may dim while driving).
+let KeepAwake: { activateKeepAwakeAsync: (tag?: string) => Promise<void>; deactivateKeepAwake: (tag?: string) => void } | null = null;
+try { KeepAwake = require('expo-keep-awake'); } catch { KeepAwake = null; }
 
 export type NavPhase = 'idle' | 'loading' | 'navigating' | 'arrived';
 
@@ -24,11 +32,17 @@ export type NavDestination = { lat: number; lng: number; title?: string };
 export type NavProgress = {
   /** The turn coming up next (null when the next thing is the destination). */
   nextStep: NavStep | null;
+  /** Index of nextStep in route.steps, or -1 when only the destination is left. */
+  nextIndex: number;
   /** Metres to the next turn, or to the destination if no turns are left. */
   distanceToNextM: number;
+  /** The turn straight after the next one, when it follows closely. */
+  thenStep: NavStep | null;
   remainingM: number;
   remainingS: number;
 };
+
+export type TrafficSegment = { coords: Array<[number, number]>; congestion: 'heavy' | 'severe' };
 
 export type StartResult =
   | { ok: true }
@@ -42,6 +56,10 @@ const ARRIVE_M = 30;
 const ALREADY_HERE_M = 40;
 /** Never re-route more often than this. */
 const REROUTE_MIN_GAP_MS = 12000;
+/** Snap the arrow onto the route when GPS is within this distance of it. */
+const SNAP_M = 25;
+/** Show "Then …" when the following turn is this close after the next one. */
+const THEN_M = 150;
 
 /* Flat-earth metres — accurate to well under 1% at city scale. */
 function metres(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
@@ -55,6 +73,16 @@ function segLen(p: LatLng, q: LatLng) {
   return metres({ lat: p.latitude, lng: p.longitude }, { lat: q.latitude, lng: q.longitude });
 }
 
+/** Compass bearing (0 = north) from p to q, in degrees. */
+function bearing(p: LatLng, q: LatLng) {
+  const toRad = Math.PI / 180;
+  const y = Math.sin((q.longitude - p.longitude) * toRad) * Math.cos(q.latitude * toRad);
+  const x =
+    Math.cos(p.latitude * toRad) * Math.sin(q.latitude * toRad) -
+    Math.sin(p.latitude * toRad) * Math.cos(q.latitude * toRad) * Math.cos((q.longitude - p.longitude) * toRad);
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
+}
+
 /** Cumulative distance (m) at each route vertex. */
 function cumulative(coords: LatLng[]) {
   const cum = [0];
@@ -62,11 +90,13 @@ function cumulative(coords: LatLng[]) {
   return cum;
 }
 
-/** How far along the route (m) the point sits, by projecting onto the nearest segment. */
-function distanceAlong(coords: LatLng[], cum: number[], u: { lat: number; lng: number }) {
+type Projection = { along: number; seg: number; point: LatLng; offBy: number };
+
+/** Project the driver onto the nearest route segment. */
+function project(coords: LatLng[], cum: number[], u: { lat: number; lng: number }): Projection {
   const cosLat = Math.cos((u.lat * Math.PI) / 180);
   let best = Infinity;
-  let along = 0;
+  let res: Projection = { along: 0, seg: 0, point: coords[0], offBy: Infinity };
   for (let i = 0; i < coords.length - 1; i++) {
     const ax = (coords[i].longitude - u.lng) * 111320 * cosLat;
     const ay = (coords[i].latitude - u.lat) * 110540;
@@ -81,10 +111,18 @@ function distanceAlong(coords: LatLng[], cum: number[], u: { lat: number; lng: n
     const d2 = px * px + py * py;
     if (d2 < best) {
       best = d2;
-      along = cum[i] + t * (cum[i + 1] - cum[i]);
+      res = {
+        along: cum[i] + t * (cum[i + 1] - cum[i]),
+        seg: i,
+        point: {
+          latitude: coords[i].latitude + t * (coords[i + 1].latitude - coords[i].latitude),
+          longitude: coords[i].longitude + t * (coords[i + 1].longitude - coords[i].longitude),
+        },
+        offBy: Math.sqrt(d2),
+      };
     }
   }
-  return along;
+  return res;
 }
 
 export function useInAppNavigation({
@@ -92,14 +130,17 @@ export function useInAppNavigation({
   onFix,
 }: {
   userLocation: { lat: number; lng: number } | null;
-  /** Receives each navigation-grade GPS fix so the screen's blue dot keeps up. */
+  /** Receives each navigation-grade GPS fix so the screen's position keeps up. */
   onFix?: (fix: Fix) => void;
 }) {
   const [phase, setPhase] = useState<NavPhase>('idle');
   const [route, setRoute] = useState<NavRoute | null>(null);
+  /** Bumped on every new route (start or re-route) — voice uses it. */
+  const [routeVersion, setRouteVersion] = useState(0);
   const [destination, setDestination] = useState<NavDestination | null>(null);
   const [rerouting, setRerouting] = useState(false);
   const [gpsHeading, setGpsHeading] = useState<number | null>(null);
+  const [speedKmh, setSpeedKmh] = useState<number | null>(null);
 
   // Refs so callbacks stay stable and never read stale state.
   const requestId = useRef(0);
@@ -120,6 +161,7 @@ export function useInAppNavigation({
     setDestination(null);
     setRerouting(false);
     setGpsHeading(null);
+    setSpeedKmh(null);
   }, []);
 
   const start = useCallback(async (dest: NavDestination): Promise<StartResult> => {
@@ -144,6 +186,7 @@ export function useInAppNavigation({
     }
     lastReroute.current = Date.now();
     setRoute(res.route);
+    setRouteVersion((v) => v + 1);
     setPhase('navigating');
     return { ok: true };
   }, []);
@@ -159,12 +202,17 @@ export function useInAppNavigation({
     const res = await fetchRoute(u.lat, u.lng, dest.lat, dest.lng);
     if (id !== requestId.current) return;
     setRerouting(false);
-    if (res.ok) setRoute(res.route);
-    else console.warn('[ParkStop nav] reroute failed:', res.message); // keep the old route
+    if (res.ok) {
+      setRoute(res.route);
+      setRouteVersion((v) => v + 1);
+    } else {
+      console.warn('[ParkStop nav] reroute failed:', res.message); // keep the old route
+    }
   }, []);
 
-  // ── Navigation-grade GPS while a route is active ──────────────────────
   const tracking = phase === 'navigating' || phase === 'arrived';
+
+  // ── Navigation-grade GPS while a route is active ──────────────────────
   useEffect(() => {
     if (!tracking) return;
     let sub: Location.LocationSubscription | null = null;
@@ -177,6 +225,7 @@ export function useInAppNavigation({
             const { latitude, longitude, accuracy, heading, speed } = l.coords;
             // GPS course is far steadier than the compass once the car moves.
             if (speed != null && speed > 1.5 && heading != null && heading >= 0) setGpsHeading(heading);
+            setSpeedKmh(speed != null && speed >= 0 ? speed * 3.6 : null);
             onFixRef.current?.({ lat: latitude, lng: longitude, accuracy: accuracy || 0, heading, speed });
           },
         );
@@ -192,7 +241,14 @@ export function useInAppNavigation({
     };
   }, [tracking]);
 
-  // ── Progress along the route ──────────────────────────────────────────
+  // ── Keep the screen on while navigating ───────────────────────────────
+  useEffect(() => {
+    if (!tracking || !KeepAwake) return;
+    KeepAwake.activateKeepAwakeAsync('parkstop-nav').catch(() => {});
+    return () => { try { KeepAwake?.deactivateKeepAwake('parkstop-nav'); } catch {} };
+  }, [tracking]);
+
+  // ── Route geometry (computed once per route) ──────────────────────────
   const geometry = useMemo(() => {
     if (!route) return null;
     const cum = cumulative(route.coords);
@@ -210,24 +266,71 @@ export function useInAppNavigation({
     return { cum, lineLen, stepStart };
   }, [route]);
 
-  const progress: NavProgress | null = useMemo(() => {
+  // ── Where the driver is on the route ──────────────────────────────────
+  const proj = useMemo(() => {
     if (!route || !geometry || !userLocation) return null;
-    const { cum, lineLen, stepStart } = geometry;
-    const along = distanceAlong(route.coords, cum, userLocation);
+    return project(route.coords, geometry.cum, userLocation);
+  }, [route, geometry, userLocation]);
+
+  const progress: NavProgress | null = useMemo(() => {
+    if (!route || !geometry || !proj) return null;
+    const { lineLen, stepStart } = geometry;
+    const along = proj.along;
     const remainingM = Math.max(0, lineLen - along);
-    const remainingS = route.distanceM > 0
-      ? route.durationS * Math.min(1, remainingM / lineLen)
-      : 0;
+    const remainingS = route.durationS * Math.min(1, remainingM / lineLen);
 
     // Current step = the last one whose start we have passed.
     let cur = 0;
     for (let i = 0; i < stepStart.length; i++) {
       if (stepStart[i] <= along + 5) cur = i;
     }
-    const next = cur + 1 < route.steps.length ? route.steps[cur + 1] : null;
-    const distanceToNextM = next ? Math.max(0, stepStart[cur + 1] - along) : remainingM;
-    return { nextStep: next, distanceToNextM, remainingM, remainingS };
-  }, [route, geometry, userLocation]);
+    const nextIndex = cur + 1 < route.steps.length ? cur + 1 : -1;
+    const next = nextIndex >= 0 ? route.steps[nextIndex] : null;
+    const distanceToNextM = next ? Math.max(0, stepStart[nextIndex] - along) : remainingM;
+    const then =
+      nextIndex >= 0 && nextIndex + 1 < route.steps.length && route.steps[nextIndex].distanceM <= THEN_M
+        ? route.steps[nextIndex + 1]
+        : null;
+    return { nextStep: next, nextIndex, distanceToNextM, thenStep: then, remainingM, remainingS };
+  }, [route, geometry, proj]);
+
+  /** Arrow position: on the road when close to it, raw GPS otherwise. */
+  const puckLocation = useMemo(() => {
+    if (!userLocation) return null;
+    if (!proj || proj.offBy > SNAP_M) return userLocation;
+    return { lat: proj.point.latitude, lng: proj.point.longitude };
+  }, [userLocation, proj]);
+
+  /** Route still ahead of the driver — the part already driven is dropped. */
+  const remainingCoords = useMemo(() => {
+    if (!route) return [] as LatLng[];
+    if (!proj || proj.offBy > SNAP_M) return route.coords;
+    return [proj.point, ...route.coords.slice(proj.seg + 1)];
+  }, [route, proj]);
+
+  /** Direction of the road under the driver, for a steady camera. */
+  const roadHeading = useMemo(() => {
+    if (!route || !proj || proj.offBy > SNAP_M) return null;
+    const a = route.coords[proj.seg];
+    const b = route.coords[proj.seg + 1];
+    if (!a || !b || segLen(a, b) < 1) return null;
+    return bearing(a, b);
+  }, [route, proj]);
+
+  /** Slow / jammed stretches still ahead, in the map's [lng, lat] format. */
+  const trafficSegments: TrafficSegment[] = useMemo(() => {
+    if (!route || route.traffic.length === 0) return [];
+    const from = proj ? proj.seg : 0;
+    return route.traffic
+      .filter((t) => t.end > from)
+      .map((t) => ({
+        congestion: t.speed === 'TRAFFIC_JAM' ? ('severe' as const) : ('heavy' as const),
+        coords: route.coords
+          .slice(Math.max(t.start, from), t.end + 1)
+          .map((c) => [c.longitude, c.latitude] as [number, number]),
+      }))
+      .filter((s) => s.coords.length >= 2);
+  }, [route, proj]);
 
   // ── Arrival ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -241,13 +344,19 @@ export function useInAppNavigation({
   return {
     phase,
     /** true from the moment a route is on screen until stop() */
-    active: phase === 'navigating' || phase === 'arrived',
+    active: tracking,
     loading: phase === 'loading',
     route,
+    routeVersion,
     destination,
     progress,
     rerouting,
-    gpsHeading,
+    puckLocation,
+    remainingCoords,
+    trafficSegments,
+    /** Best heading for the camera/arrow: road direction, else GPS course. */
+    heading: roadHeading ?? gpsHeading,
+    speedKmh,
     start,
     stop,
     reroute,

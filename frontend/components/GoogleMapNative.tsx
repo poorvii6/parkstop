@@ -21,6 +21,7 @@ import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM, USER_MAP_ZOOM, HINT_MAP_ZOOM } from '../constants/mapDefaults';
+import { MarkerImage, scheduleImage, spotMarkerImage, destinationPinImage, navArrowImage } from '../utils/markerBitmap';
 
 const FOLLOW_EASE_MS = 1000;
 
@@ -67,6 +68,10 @@ const AUTO_RESUME_FOLLOW_MS = 6000;
 const GESTURE_PRESS_GUARD_MS = 350;
 const OFF_ROUTE_BASE_M = 50;
 const OFF_ROUTE_CONFIRMATIONS = 2;
+/** Navigation arrow marker box (px). Must be set explicitly on the Marker under Fabric. */
+const NAV_PUCK_SIZE = 72;
+/** How long the route overview holds before the camera resumes following. */
+const OVERVIEW_HOLD_MS = 12000;
 
 /** Night runs 7pm–6am, matching the old MapLibre day/night switch. */
 const isNightHour = () => {
@@ -103,67 +108,56 @@ type Props = {
   onOffRoute?: (lat: number, lng: number) => void;
   locationAccuracy?: number;
   hideControls?: boolean;
+  /** Floating mini-map (picture-in-picture): tiny window, no controls. */
+  compact?: boolean;
   controlsBottomOffset?: number;
   style?: any;
   [key: string]: any; // tolerate the extra nav props finder passes through
 };
 
 /**
- * One parking marker. react-native-maps rasterises a custom marker to a bitmap;
- * if it snapshots before the text lays out, the pill clips (the "half ₹" bug).
- * So this keeps tracksViewChanges ON until the pill has measured (onLayout),
- * then a beat longer for font paint — and re-arms whenever the price changes.
+ * One parking marker, drawn as a PNG image (see below for why).
  */
 function SpotMarker({ m, onPress }: { m: { id: string; lat: number; lng: number; price: number; available: boolean; available_slots?: number }; onPress: () => void }) {
-  // Google-style balloon marker (per design reference): colored balloon with a
-  // white rounded-square "P" badge, "₹price/hr" + "N available", a pointer tail,
-  // and an anchor dot sitting on the exact coordinate.
-  // Fabric-safe: collapsable={false} + explicit sizes everywhere (RN 0.81
-  // flattens plain views and the map rasterises them clipped otherwise).
-  const color = m.available ? '#2962FF' : '#9aa0a6';
+  // Google-style balloon marker: coloured balloon with a white rounded "P"
+  // badge, "₹price/hr" + "N available", a pointer tail, and an anchor dot on
+  // the exact coordinate.
+  //
+  // Drawn as a finished PNG (utils/markerBitmap) and handed to the map with
+  // the `image` prop. The old version was a tree of React views that
+  // react-native-maps snapshots into a bitmap — under the new architecture
+  // that snapshot is taken at the wrong size and the marker came out cut off
+  // (the "incomplete P"). A native image cannot be clipped.
   const slots = typeof m.available_slots === 'number' ? m.available_slots : undefined;
-  const priceStr = `${m.price}`;
-  const balloonW = Math.max(128, 92 + priceStr.length * 13);
-  const rootW = balloonW + 8;
-  const rootH = 96;
+  const img = useMarkerImage(
+    () => spotMarkerImage(m.price, m.available, slots),
+    `${m.price}|${m.available ? 1 : 0}|${slots ?? ''}`,
+  );
+  if (!img) return null;
   return (
     <Marker
       identifier={String(m.id)}
       coordinate={{ latitude: m.lat, longitude: m.lng }}
-      anchor={{ x: 0.5, y: 1 }}
-      tracksViewChanges
+      image={{ uri: img.uri }}
+      anchor={img.anchor}
+      tracksViewChanges={false}
       onPress={onPress}
-      // Fabric (RN 0.81): the native marker view must be given its size
-      // EXPLICITLY on the Marker itself — otherwise it keeps a stale small
-      // bitmap and crops the children to the top-left corner (the clipping
-      // that survived every child-level fix). Documented react-native-maps
-      // new-architecture workaround.
-      style={{ width: rootW, height: rootH }}
-    >
-      <View collapsable={false} style={{ width: rootW, height: rootH, alignItems: 'center' }}>
-        {/* Balloon */}
-        <View collapsable={false} style={[styles.balloon, { backgroundColor: color, width: balloonW }]}>
-          <View style={styles.balloonBadge}>
-            <Text allowFontScaling={false} style={[styles.balloonBadgeP, { color }]}>P</Text>
-          </View>
-          <View style={{ marginLeft: 8 }}>
-            <Text allowFontScaling={false} style={styles.balloonPrice}>
-              ₹{priceStr}<Text style={styles.balloonPerHr}>/hr</Text>
-            </Text>
-            {slots !== undefined ? (
-              <Text allowFontScaling={false} style={styles.balloonSlots}>
-                {m.available ? `${slots} available` : 'Full'}
-              </Text>
-            ) : null}
-          </View>
-        </View>
-        {/* Tail */}
-        <View style={[styles.balloonTail, { borderTopColor: color }]} />
-        {/* Anchor dot on the exact coordinate */}
-        <View style={[styles.balloonDot, { backgroundColor: color }]} />
-      </View>
-    </Marker>
+    />
   );
+}
+
+/** A marker image, drawn in the background and cached. Null until ready. */
+function useMarkerImage(make: () => MarkerImage, key: string): MarkerImage | null {
+  const [img, setImg] = useState<MarkerImage | null>(null);
+  useEffect(() => {
+    let alive = true;
+    scheduleImage(make)
+      .then((i) => { if (alive) setImg(i); })
+      .catch((e) => console.warn('[map] marker image failed:', e));
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  return img;
 }
 
 /**
@@ -186,9 +180,7 @@ function AnimatedNavPuck({ lat, lng, heading }: { lat: number; lng: number; head
   const lastFix = useRef(0);
   const raf = useRef(0);
   const [pos, setPos] = useState({ lat, lng, h: heading || 0 });
-  // Rasterise the chevron once, then animate natively.
-  const [track, setTrack] = useState(true);
-  useEffect(() => { const t = setTimeout(() => setTrack(false), 800); return () => clearTimeout(t); }, []);
+  const arrow = useMarkerImage(navArrowImage, 'arrow');
 
   useEffect(() => {
     const now = Date.now();
@@ -215,35 +207,24 @@ function AnimatedNavPuck({ lat, lng, heading }: { lat: number; lng: number; head
     return () => cancelAnimationFrame(raf.current);
   }, [lat, lng, heading]);
 
+  if (!arrow) return null;
+  // The arrow is a finished PNG (utils/markerBitmap), standing upright and
+  // facing the camera ("billboard", flat={false}). Two earlier versions were
+  // drawn from React views lying flat on the road: the 60° navigation tilt
+  // squashed them to half height, and the view snapshot clipped them — the
+  // "incomplete arrow". For a billboard, rotation is relative to the SCREEN,
+  // so the caller passes heading minus the camera's own heading; while the
+  // camera follows the road that is ~0 and the arrow points straight up.
   return (
     <Marker
       coordinate={{ latitude: pos.lat, longitude: pos.lng }}
-      anchor={{ x: 0.5, y: 0.5 }}
-      flat
+      image={{ uri: arrow.uri }}
+      anchor={arrow.anchor}
+      flat={false}
       rotation={pos.h}
-      tracksViewChanges={track}
+      tracksViewChanges={false}
       zIndex={10}
-      style={{ width: 56, height: 56 }}
-    >
-      {/* Google's navigation arrow: a solid blue arrowhead with a white casing
-          and a soft shadow, drawn flat on the map and rotated to heading.
-
-          This was previously the Ionicons "navigate" glyph — a paper plane —
-          drawn twice and rotated -45deg to fake an arrow. Two problems: it
-          reads as a paper plane rather than Google's arrow, and the glyph is
-          not symmetric about its own centre, so once rotated its tip sat off
-          centre inside the marker box. The marker anchors at that box centre,
-          so the arrow was drawn slightly away from the real GPS position and
-          span about the wrong point when turning.
-
-          Built from border triangles, the shape is exactly symmetric about the
-          vertical axis and points straight up at rotation 0, so heading maps
-          directly onto it with no correction. */}
-      <View collapsable={false} style={styles.navArrowWrap}>
-        <View style={styles.navArrowCasing} />
-        <View style={styles.navArrowCore} />
-      </View>
-    </Marker>
+    />
   );
 }
 
@@ -304,8 +285,19 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
   // permanently, which is both visual noise and a control that does nothing
   // most of the time. Treat sub-degree rotation as north to avoid it flickering
   // in on rounding error.
-  const compassVisible =
-    !props.isActiveNavigation && (Math.abs(mapHeading) > 0.5 || mapPitch > 0.5);
+  //
+  // While navigating the map is always turned and tilted, so the compass stays
+  // up (as in Google Maps) and tapping it switches between the driving view
+  // (road ahead points up) and north-up.
+  const [navNorthUp, setNavNorthUp] = useState(false);
+  useEffect(() => {
+    if (!props.isActiveNavigation) setNavNorthUp(false); // each trip starts in the driving view
+  }, [props.isActiveNavigation]);
+  /** The heading the navigation camera should hold. */
+  const navCamHeading = navNorthUp ? 0 : props.heading || 0;
+  const compassVisible = props.isActiveNavigation
+    ? !props.compact
+    : Math.abs(mapHeading) > 0.5 || mapPitch > 0.5;
   const compassOpacity = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     Animated.timing(compassOpacity, {
@@ -363,6 +355,47 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
           ...(cfg.heading != null ? { heading: cfg.heading } : {}),
         },
         { duration: opts?.duration ?? 1000 }
+      );
+    },
+
+    /**
+     * Route overview while navigating: flat, north-up, the whole remaining
+     * route in view. Releases follow; it resumes on its own after
+     * OVERVIEW_HOLD_MS, or at once when the driver taps re-center.
+     *
+     * Computed by hand rather than fitToCoordinates, because the navigation
+     * camera's heavy top padding and 60° tilt would otherwise skew the fit.
+     */
+    fitRoute: (coords: Array<LatLng>) => {
+      if (!mapRef.current || !coords || coords.length < 2) return;
+      let minLat = 90, maxLat = -90, minLng = 180, maxLng = -180;
+      for (const c of coords) {
+        if (c.latitude < minLat) minLat = c.latitude;
+        if (c.latitude > maxLat) maxLat = c.latitude;
+        if (c.longitude < minLng) minLng = c.longitude;
+        if (c.longitude > maxLng) maxLng = c.longitude;
+      }
+      const { width: W, height: H } = Dimensions.get('window');
+      // Visible area between the turn banner and the trip card.
+      const usableW = Math.max(120, W - 80);
+      const usableH = Math.max(120, H - NAV_TOP_PADDING - 80 - 160);
+      const mercY = (lat: number) => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
+      const lngFrac = Math.max(1e-6, (maxLng - minLng) / 360);
+      const latFrac = Math.max(1e-6, (mercY(maxLat) - mercY(minLat)) / (2 * Math.PI));
+      const zoom = Math.max(3, Math.min(18,
+        Math.min(Math.log2(usableW / 256 / lngFrac), Math.log2(usableH / 256 / latFrac))));
+      lastInteraction.current = Date.now() + OVERVIEW_HOLD_MS - AUTO_RESUME_FOLLOW_MS;
+      propsRef.current.onMapInteraction?.();
+      currentZoom.current = zoom;
+      markProgrammatic(700);
+      mapRef.current.animateCamera(
+        {
+          center: { latitude: (minLat + maxLat) / 2, longitude: (minLng + maxLng) / 2 },
+          zoom,
+          pitch: 0,
+          heading: 0,
+        },
+        { duration: 700 }
       );
     },
   }));
@@ -468,7 +501,7 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
     if (props.isActiveNavigation) {
       markProgrammatic(NAV_FOLLOW_MS + 200);
       mapRef.current.animateCamera(
-        { center, zoom: NAV_ZOOM, pitch: NAV_PITCH, heading: props.heading || 0 },
+        { center, zoom: NAV_ZOOM, pitch: NAV_PITCH, heading: navCamHeading },
         { duration: NAV_FOLLOW_MS }
       );
     } else {
@@ -484,7 +517,7 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
         { duration: FOLLOW_EASE_MS }
       );
     }
-  }, [props.userLocation, props.isFollowing, props.isActiveNavigation, props.heading, headingMode]);
+  }, [props.userLocation, props.isFollowing, props.isActiveNavigation, props.heading, headingMode, navNorthUp]);
 
   // In heading-up mode the map must turn as the phone turns, not only when a
   // new GPS fix lands — standing still and rotating on the spot is exactly when
@@ -528,7 +561,7 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
         center: { latitude: u.lat, longitude: u.lng },
         zoom: NAV_ZOOM,
         pitch: NAV_PITCH,
-        heading: props.heading || 0,
+        heading: navCamHeading,
       },
       { duration: 600 }
     );
@@ -589,11 +622,9 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.userLocation, props.isActiveNavigation, props.locationAccuracy, routeSig]);
 
-  // ── Custom-marker bitmap capture ──────────────────────────────
-  // react-native-maps must render a custom marker's React view to a bitmap.
-  // Keeping tracksViewChanges permanently on re-rasterises every frame (jank);
-  // permanently off can leave a marker blank. Flip it on briefly whenever the
-  // marker set changes, then off once captured.
+  // ── Markers ───────────────────────────────────────────────────
+  // All markers are finished PNG images (utils/markerBitmap), so there is no
+  // view snapshot to time and nothing to clip.
   const dest = props.searchedPlace
     ? { lat: props.searchedPlace.lat, lng: props.searchedPlace.lng }
     : props.destination
@@ -601,12 +632,7 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
       : null;
   const markerSig = (props.markers || []).map((m) => `${m.id}:${m.price}:${m.available ? 1 : 0}:${m.available_slots ?? ''}`).join('|');
   const destKey = dest ? `${dest.lat.toFixed(5)},${dest.lng.toFixed(5)}` : '';
-  const [track, setTrack] = useState(true);
-  useEffect(() => {
-    setTrack(true);
-    const t = setTimeout(() => setTrack(false), 1200);
-    return () => clearTimeout(t);
-  }, [markerSig, destKey, props.isActiveNavigation]);
+  const destPin = useMarkerImage(destinationPinImage, 'dest');
 
   // ── Handlers ──────────────────────────────────────────────────
   const handlePress = (e: any) => {
@@ -662,7 +688,7 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
           zoom: targetZoom,
           pitch: props.isActiveNavigation ? NAV_PITCH : 0,
           heading: props.isActiveNavigation
-            ? props.heading || 0
+            ? navCamHeading
             : nextHeadingMode
               ? deviceHeading.current
               : 0,
@@ -822,9 +848,12 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
            navigation the bottom sheet is what needs clearing, so the padding
            flips back. */
         mapPadding={
-          props.isActiveNavigation
-            ? { top: NAV_TOP_PADDING, right: 6, bottom: 80, left: 6 }
-            : { top: 100, right: 6, bottom: props.controlsBottomOffset ?? 210, left: 6 }
+          props.compact
+            // Floating mini-map: a small window — just leave room for the turn card.
+            ? { top: 44, right: 0, bottom: 0, left: 0 }
+            : props.isActiveNavigation
+              ? { top: NAV_TOP_PADDING, right: 6, bottom: 80, left: 6 }
+              : { top: 100, right: 6, bottom: props.controlsBottomOffset ?? 210, left: 6 }
         }
         // Authentic Google location dot + controls when idle; during navigation
         // we hide them and draw the directional arrow puck instead.
@@ -858,15 +887,17 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
         {/* Traffic congestion overlay (navigation only) */}
         {trafficPolylines}
 
-        {/* During navigation, a directional arrow puck (flat markers rotate in
-            the map frame, so rotation=heading points along the road like
-            Google/Uber). Idle location is Google's own native blue dot. */}
+        {/* During navigation, an upright arrow. It is a billboard, so its
+            rotation is relative to the screen: heading minus the camera's own
+            heading. Following the road (driving view) that is ~0 and the arrow
+            points straight up; in north-up mode it turns to the heading.
+            Idle location is Google's own native blue dot. */}
         {props.userLocation && props.isActiveNavigation ? (
           <AnimatedNavPuck
             key="user-nav"
             lat={props.userLocation.lat}
             lng={props.userLocation.lng}
-            heading={props.heading}
+            heading={((((props.heading || 0) - (props.isFollowing ? navCamHeading : mapHeading)) % 360) + 360) % 360}
           />
         ) : null}
 
@@ -874,24 +905,20 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
         {spotMarkers}
 
         {/* Destination pin — teardrop whose tail tip sits on the coordinate */}
-        {dest ? (
+        {dest && destPin ? (
           <Marker
             key="destination"
             coordinate={{ latitude: dest.lat, longitude: dest.lng }}
-            anchor={{ x: 0.5, y: 1 }}
-            tracksViewChanges={track}
+            image={{ uri: destPin.uri }}
+            anchor={destPin.anchor}
+            tracksViewChanges={false}
             zIndex={9}
-          >
-            <View style={styles.destPinWrap}>
-              <View style={styles.destPinHead}><View style={styles.destPinInner} /></View>
-              <View style={styles.destPinTail} />
-            </View>
-          </Marker>
+          />
         ) : null}
       </MapView>
 
       {/* Google-style control cluster, bottom-right: compass, zoom, my-location */}
-      {!props.hideControls ? (
+      {!props.hideControls && !props.compact ? (
         <>
           {/* Compass — appears only when the map is turned or tilted, rotates
               with the camera, and resets BOTH rotation and tilt on tap. */}
@@ -905,7 +932,36 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
             <TouchableOpacity
               style={styles.mapCtrlHit}
               activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel={
+                props.isActiveNavigation
+                  ? navNorthUp ? 'Switch to driving view' : 'Switch to north up'
+                  : 'Reset map to north'
+              }
               onPress={() => {
+                if (props.isActiveNavigation) {
+                  // Navigation: toggle driving view <-> north-up, keeping the
+                  // tilt. The follow camera applies it on the next fix; this
+                  // moves it now so the tap feels immediate.
+                  const northUp = !navNorthUp;
+                  setNavNorthUp(northUp);
+                  const u = props.userLocation;
+                  if (u && mapRef.current) {
+                    markProgrammatic(450);
+                    suppressFollowUntil.current = Date.now() + 400;
+                    mapRef.current.animateCamera(
+                      {
+                        center: { latitude: u.lat, longitude: u.lng },
+                        zoom: NAV_ZOOM,
+                        pitch: NAV_PITCH,
+                        heading: northUp ? 0 : props.heading || 0,
+                      },
+                      { duration: 350 }
+                    );
+                  }
+                  if (!props.isFollowing) props.onRecenter?.();
+                  return;
+                }
                 markProgrammatic(500);
                 // Google's compass returns you to north-up AND flat. Resetting
                 // heading alone left the map tilted with a compass claiming it
@@ -939,7 +995,23 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
             </TouchableOpacity>
           </View>
 
-          {/* My Location / recenter */}
+          {/* Navigating: a "Re-center" text button, as in Google Maps. It only
+              appears once the driver has moved the map away — while the map
+              is following there is nothing to re-center. */}
+          {props.isActiveNavigation ? (
+            !props.isFollowing ? (
+              <TouchableOpacity
+                style={[styles.recenterPill, { bottom: props.controlsBottomOffset ?? 210 }]}
+                onPress={handleRecenter}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Re-center"
+              >
+                <Text style={styles.recenterPillText}>Re-center</Text>
+              </TouchableOpacity>
+            ) : null
+          ) : (
+          /* Browsing: Google's My Location button */
           <TouchableOpacity
             style={[styles.recenterBtn, { bottom: props.controlsBottomOffset ?? 210 }]}
             onPress={handleRecenter}
@@ -959,6 +1031,7 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
               color={props.isFollowing ? '#1a73e8' : '#5f6368'}
             />
           </TouchableOpacity>
+          )}
         </>
       ) : null}
     </View>
@@ -997,16 +1070,22 @@ const styles = StyleSheet.create({
   // Navigation arrow. The wrapper is square and the triangles are centred in
   // it, so the marker's 0.5/0.5 anchor lands on the arrow's own centre of
   // rotation — the arrow turns on the spot instead of orbiting a point.
-  navArrowWrap: { width: 56, height: 56, alignItems: 'center', justifyContent: 'center' },
-  // White casing, drawn first and slightly larger so it reads as an outline.
+  navPuckWrap: { width: NAV_PUCK_SIZE, height: NAV_PUCK_SIZE, alignItems: 'center', justifyContent: 'center' },
+  // Soft halo so the arrow stands out on both the light and the dark map.
+  navPuckHalo: {
+    position: 'absolute',
+    width: 60, height: 60, borderRadius: 30,
+    backgroundColor: 'rgba(66,133,244,0.22)',
+    borderWidth: 1.5, borderColor: 'rgba(66,133,244,0.45)',
+  },
+  // White casing, drawn first and larger so it reads as an outline. No
+  // elevation here — see AnimatedNavPuck.
   navArrowCasing: {
     position: 'absolute',
     width: 0, height: 0,
-    borderLeftWidth: 15, borderRightWidth: 15, borderBottomWidth: 34,
+    borderLeftWidth: 20, borderRightWidth: 20, borderBottomWidth: 45,
     borderLeftColor: 'transparent', borderRightColor: 'transparent',
     borderBottomColor: '#fff',
-    shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 4, shadowOffset: { width: 0, height: 2 },
-    elevation: 6,
   },
   // Google's puck blue, inset evenly inside the casing.
   //
@@ -1015,15 +1094,19 @@ const styles = StyleSheet.create({
   // thick at the base — because the two triangles' edges are not parallel
   // unless the inner one is both scaled AND pushed down. Half-width/height
   // held at 15/34 keeps the edges parallel; the 6px offset then sets the
-  // stroke to a uniform ~2.5px, which is Google's weight.
+  // stroke to a uniform ~2.5px, which is Google's weight. (All four numbers
+  // scaled by 4/3 from the original 15/34 casing so the arrow reads at a
+  // glance while driving; the proportions are unchanged.)
   navArrowCore: {
     position: 'absolute',
-    marginTop: 6,
+    marginTop: 8,
     width: 0, height: 0,
-    borderLeftWidth: 10.5, borderRightWidth: 10.5, borderBottomWidth: 24,
+    borderLeftWidth: 14, borderRightWidth: 14, borderBottomWidth: 32,
     borderLeftColor: 'transparent', borderRightColor: 'transparent',
     borderBottomColor: '#4285F4',
   },
+  recenterPill: { position: 'absolute', right: 16, height: 48, paddingHorizontal: 20, borderRadius: 24, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 6, shadowOffset: { width: 0, height: 3 }, elevation: 6 },
+  recenterPillText: { color: '#1a73e8', fontSize: 16, fontWeight: '700' },
   recenterBtn: { position: 'absolute', right: 16, width: 48, height: 48, borderRadius: 24, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 6, shadowOffset: { width: 0, height: 3 }, elevation: 6 },
   mapCtrlBtn: { position: 'absolute', right: 16, width: 46, height: 46, borderRadius: 23, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.22, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 6 },
   // The touchable now lives INSIDE the animated wrapper, so it has to fill it

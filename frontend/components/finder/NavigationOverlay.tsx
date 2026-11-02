@@ -1,9 +1,11 @@
 /**
  * NavigationOverlay — the driving screen shown over ParkStop's map.
  *
- *   top     next turn: arrow, distance to it, and the instruction
- *   bottom  time left, distance left, arrival time, and End
- *   arrived "You've arrived" with the check-in PIN for the owner
+ *   top     next turn: arrow, distance to it, the instruction, and a
+ *           "Then …" strip when another turn follows right after
+ *   side    voice on/off, and route overview
+ *   bottom  current speed, time left, distance left, arrival time, and End
+ *   arrived "You have arrived" with the check-in PIN for the owner
  *
  * Display only; all navigation state lives in useInAppNavigation.
  */
@@ -16,7 +18,7 @@ import type { NavProgress } from '../../hooks/useInAppNavigation';
 
 type IconName = React.ComponentProps<typeof MaterialCommunityIcons>['name'];
 
-function maneuverIcon(m?: string): IconName {
+export function maneuverIcon(m?: string): IconName {
   switch (m) {
     case 'TURN_LEFT': return 'arrow-left-top';
     case 'TURN_RIGHT': return 'arrow-right-top';
@@ -27,7 +29,7 @@ function maneuverIcon(m?: string): IconName {
     case 'UTURN_LEFT': return 'arrow-u-left-top';
     case 'UTURN_RIGHT': return 'arrow-u-right-top';
     case 'RAMP_LEFT':
-    case 'FORK_LEFT': return 'call-split';
+    case 'FORK_LEFT':
     case 'RAMP_RIGHT':
     case 'FORK_RIGHT': return 'call-split';
     case 'MERGE': return 'call-merge';
@@ -39,14 +41,14 @@ function maneuverIcon(m?: string): IconName {
   }
 }
 
-/** 1240 -> "1.2 km", 340 -> "340 m", 37 -> "40 m" */
+/** 1240 -> "1.2 km", 340 -> "350 m", 37 -> "40 m" */
 export function formatDistance(m: number): string {
   if (m >= 1000) return `${(m / 1000).toFixed(m >= 10000 ? 0 : 1)} km`;
-  if (m >= 100) return `${Math.round(m / 10) * 10} m`;
+  if (m >= 100) return `${Math.round(m / 50) * 50} m`;
   return `${Math.max(10, Math.round(m / 10) * 10)} m`;
 }
 
-function formatDuration(s: number): string {
+export function formatDuration(s: number): string {
   const mins = Math.max(1, Math.round(s / 60));
   if (mins < 60) return `${mins} min`;
   const h = Math.floor(mins / 60);
@@ -63,12 +65,21 @@ function arrivalClock(s: number): string {
   return `${h}:${m} ${ampm}`;
 }
 
+const tap = () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
 export function NavigationOverlay({
   phase,
   progress,
   rerouting,
   destinationTitle,
   otp,
+  speedKmh,
+  speedLimitKmh = null,
+  compact = false,
+  voiceAvailable,
+  muted,
+  onToggleMute,
+  onOverview,
   onEnd,
   onDone,
 }: {
@@ -78,10 +89,43 @@ export function NavigationOverlay({
   destinationTitle?: string;
   /** Check-in PIN, shown on arrival. Absent when navigating to a searched place. */
   otp?: string;
+  speedKmh: number | null;
+  /** Limit of the current road (km/h), or null when unknown. */
+  speedLimitKmh?: number | null;
+  /** Floating mini-map (picture-in-picture): show only the next turn. */
+  compact?: boolean;
+  voiceAvailable: boolean;
+  muted: boolean;
+  onToggleMute: () => void;
+  onOverview: () => void;
   onEnd: () => void;
   onDone: () => void;
 }) {
   const insets = useSafeAreaInsets();
+
+  // ── Mini-map: one small card, no buttons (the window is too small to tap) ──
+  if (compact) {
+    const n = progress?.nextStep;
+    return (
+      <View style={s.miniWrap} pointerEvents="none">
+        <View style={s.miniCard}>
+          {phase === 'arrived' ? (
+            <>
+              <MaterialCommunityIcons name="flag-checkered" size={22} color="#fff" />
+              <Text style={s.miniText} numberOfLines={1}>Arrived</Text>
+            </>
+          ) : (
+            <>
+              <MaterialCommunityIcons name={n ? maneuverIcon(n.maneuver) : 'map-marker'} size={24} color="#fff" />
+              <Text style={s.miniText} numberOfLines={1}>
+                {progress ? formatDistance(progress.distanceToNextM) : '…'}
+              </Text>
+            </>
+          )}
+        </View>
+      </View>
+    );
+  }
 
   if (phase === 'arrived') {
     return (
@@ -102,11 +146,7 @@ export function NavigationOverlay({
               <Text style={s.pinValue} selectable>{otp}</Text>
             </View>
           ) : null}
-          <TouchableOpacity
-            style={s.doneBtn}
-            activeOpacity={0.9}
-            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onDone(); }}
-          >
+          <TouchableOpacity style={s.doneBtn} activeOpacity={0.9} onPress={() => { tap(); onDone(); }}>
             <Text style={s.doneText}>Done</Text>
           </TouchableOpacity>
         </View>
@@ -115,8 +155,12 @@ export function NavigationOverlay({
   }
 
   const next = progress?.nextStep;
+  const then = progress?.thenStep;
   const instruction = next ? next.instruction : `Arrive at ${destinationTitle || 'your destination'}`;
   const icon: IconName = next ? maneuverIcon(next.maneuver) : 'map-marker';
+  const showSpeed = speedKmh != null && speedKmh >= 3;
+  // Small tolerance, as Google uses, so GPS noise at the limit doesn't flash red.
+  const overLimit = showSpeed && speedLimitKmh != null && (speedKmh as number) > speedLimitKmh + 5;
 
   return (
     <>
@@ -143,10 +187,55 @@ export function NavigationOverlay({
             </View>
           )}
         </View>
+        {then && !rerouting ? (
+          <View style={s.thenStrip}>
+            <Text style={s.thenText}>Then</Text>
+            <MaterialCommunityIcons name={maneuverIcon(then.maneuver)} size={22} color="#fff" />
+          </View>
+        ) : null}
+
+        {/* Side buttons: voice + overview */}
+        <View style={s.sideCol} pointerEvents="box-none">
+          {voiceAvailable ? (
+            <TouchableOpacity
+              style={s.roundBtn}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel={muted ? 'Turn voice guidance on' : 'Mute voice guidance'}
+              onPress={() => { tap(); onToggleMute(); }}
+            >
+              <MaterialCommunityIcons name={muted ? 'volume-off' : 'volume-high'} size={22} color={muted ? '#dc2626' : '#1f2937'} />
+            </TouchableOpacity>
+          ) : null}
+          <TouchableOpacity
+            style={s.roundBtn}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel="Show the whole route"
+            onPress={() => { tap(); onOverview(); }}
+          >
+            <MaterialCommunityIcons name="map-outline" size={22} color="#1f2937" />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Trip summary + End */}
       <View style={[s.bottomWrap, { paddingBottom: Math.max(insets.bottom, 12) + 8 }]} pointerEvents="box-none">
+        {showSpeed || speedLimitKmh != null ? (
+          <View style={s.speedRow}>
+            {showSpeed ? (
+              <View style={[s.speedBubble, overLimit && s.speedBubbleOver]}>
+                <Text style={[s.speedValue, overLimit && s.speedTextOver]}>{Math.round(speedKmh as number)}</Text>
+                <Text style={[s.speedUnit, overLimit && s.speedTextOver]}>km/h</Text>
+              </View>
+            ) : null}
+            {speedLimitKmh != null ? (
+              <View style={s.limitSign} accessibilityLabel={`Speed limit ${speedLimitKmh} kilometres per hour`}>
+                <Text style={s.limitValue}>{speedLimitKmh}</Text>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
         <View style={[s.card, s.tripRow]}>
           <View style={{ flex: 1 }}>
             <Text style={s.eta}>{progress ? formatDuration(progress.remainingS) : '—'}</Text>
@@ -170,28 +259,56 @@ export function NavigationOverlay({
   );
 }
 
+const shadow = {
+  shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 10, shadowOffset: { width: 0, height: 3 },
+};
+
 const s = StyleSheet.create({
   topWrap: { position: 'absolute', top: 0, left: 0, right: 0, paddingHorizontal: 12, zIndex: 2000 },
-  banner: {
-    backgroundColor: '#0b6b3a',
-    borderRadius: 18,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 12, shadowOffset: { width: 0, height: 4 },
-    elevation: 12,
-  },
+  banner: { backgroundColor: '#0b6b3a', borderRadius: 18, paddingVertical: 14, paddingHorizontal: 16, ...shadow, elevation: 12 },
   bannerRow: { flexDirection: 'row', alignItems: 'center', minHeight: 56 },
   turnDistance: { color: '#fff', fontSize: 28, fontWeight: '900', letterSpacing: -0.5 },
   instruction: { color: '#e8f5ee', fontSize: 17, fontWeight: '700', marginTop: 2 },
+  thenStrip: {
+    alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: '#07502b', borderBottomLeftRadius: 14, borderBottomRightRadius: 14,
+    paddingHorizontal: 14, paddingVertical: 7, marginLeft: 12, ...shadow, elevation: 11,
+  },
+  thenText: { color: '#d1fae5', fontSize: 15, fontWeight: '800' },
+  sideCol: { alignSelf: 'flex-end', marginTop: 12, gap: 10 },
+  roundBtn: {
+    width: 48, height: 48, borderRadius: 24, backgroundColor: '#fff',
+    alignItems: 'center', justifyContent: 'center', ...shadow, elevation: 8,
+  },
 
   bottomWrap: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 12, zIndex: 2000 },
+  speedRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10, marginLeft: 4 },
+  speedBubble: {
+    width: 62, height: 62, borderRadius: 31, backgroundColor: '#fff',
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: '#e5e7eb', ...shadow, elevation: 8,
+  },
+  speedBubbleOver: { backgroundColor: '#dc2626', borderColor: '#b91c1c' },
+  speedValue: { color: '#111827', fontSize: 22, fontWeight: '900', lineHeight: 24 },
+  speedUnit: { color: '#6b7280', fontSize: 10, fontWeight: '700' },
+  speedTextOver: { color: '#fff' },
+  // Indian speed-limit sign: white disc, thick red ring, black number.
+  limitSign: {
+    width: 54, height: 54, borderRadius: 27, backgroundColor: '#fff',
+    borderWidth: 5, borderColor: '#dc2626',
+    alignItems: 'center', justifyContent: 'center', ...shadow, elevation: 8,
+  },
+  limitValue: { color: '#111827', fontSize: 19, fontWeight: '900' },
+
+  miniWrap: { position: 'absolute', top: 6, left: 6, right: 6, zIndex: 2000 },
+  miniCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
+    backgroundColor: '#0b6b3a', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 6,
+  },
+  miniText: { color: '#fff', fontSize: 16, fontWeight: '900' },
   card: {
-    backgroundColor: '#0f172a',
-    borderRadius: 22,
-    padding: 18,
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)',
-    shadowColor: '#000', shadowOpacity: 0.4, shadowRadius: 16, shadowOffset: { width: 0, height: -2 },
-    elevation: 16,
+    backgroundColor: '#0f172a', borderRadius: 22, padding: 18,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.06)', ...shadow, elevation: 16,
   },
   tripRow: { flexDirection: 'row', alignItems: 'center' },
   eta: { color: '#22c55e', fontSize: 26, fontWeight: '900', letterSpacing: -0.5 },

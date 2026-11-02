@@ -9,7 +9,23 @@
  * screen decides what to tell the driver.
  */
 
+import { Platform } from 'react-native';
+
 const GOOGLE_MAPS_KEY = process.env.EXPO_PUBLIC_ANDROID_MAPS_KEY || '';
+
+/**
+ * Key lock. When the Google key is restricted to "Android apps" in Google
+ * Cloud, Google only accepts requests that name the app and its signing
+ * certificate. Sending these on every request lets the key be locked to
+ * ParkStop, so a key pulled out of the APK is useless anywhere else.
+ * The SHA-1 is not secret — it identifies the app, it does not unlock anything.
+ */
+const ANDROID_PACKAGE = 'com.smartparking.app';
+const ANDROID_CERT_SHA1 = (process.env.EXPO_PUBLIC_ANDROID_CERT_SHA1 || '').replace(/:/g, '').toUpperCase();
+const APP_IDENTITY_HEADERS: Record<string, string> =
+  Platform.OS === 'android' && ANDROID_CERT_SHA1
+    ? { 'X-Android-Package': ANDROID_PACKAGE, 'X-Android-Cert': ANDROID_CERT_SHA1 }
+    : {};
 const ROUTES_URL = 'https://routes.googleapis.com/directions/v2:computeRoutes';
 const FIELD_MASK = [
   'routes.distanceMeters',
@@ -20,6 +36,7 @@ const FIELD_MASK = [
   'routes.legs.steps.startLocation',
   'routes.legs.steps.endLocation',
   'routes.legs.steps.navigationInstruction',
+  'routes.travelAdvisory.speedReadingIntervals',
 ].join(',');
 
 export type LatLng = { latitude: number; longitude: number };
@@ -30,10 +47,19 @@ export interface NavStep {
   maneuver: string;
   /** Text to show, e.g. "Turn left onto MG Road". */
   instruction: string;
+  /** Extra note from Google, e.g. "Destination will be on the left". */
+  note?: string;
   /** Length of this step in metres. */
   distanceM: number;
   start: LatLng;
   end: LatLng;
+}
+
+/** A stretch of the route with slow traffic, by route-point index. */
+export interface TrafficInterval {
+  start: number;
+  end: number;
+  speed: 'SLOW' | 'TRAFFIC_JAM';
 }
 
 export interface NavRoute {
@@ -43,6 +69,8 @@ export interface NavRoute {
   /** Estimated duration in seconds (with live traffic). */
   durationS: number;
   steps: NavStep[];
+  /** Slow / jammed stretches (normal-speed stretches are left out). */
+  traffic: TrafficInterval[];
 }
 
 export type RouteResult =
@@ -124,7 +152,7 @@ function explainError(status: number, json: any): string {
       return 'Routes API is not enabled for this Google Cloud project.';
     }
     if (/API_KEY_ANDROID_APP_BLOCKED|android/i.test(msg)) {
-      return 'The Google Maps key only allows Android apps. Set "Application restrictions" to None for this key.';
+      return 'Google did not recognise this app for the locked key. Check the package name (com.smartparking.app) and SHA-1 fingerprint on the key in Google Cloud match EXPO_PUBLIC_ANDROID_CERT_SHA1 in frontend/.env.';
     }
     if (/blocked|restrict/i.test(msg)) {
       return 'The Google Maps key is not allowed to use the Routes API. Add "Routes API" to this key\'s API restrictions.';
@@ -154,6 +182,10 @@ export async function fetchRoute(
     destination: { location: { latLng: { latitude: toLat, longitude: toLng } } },
     travelMode: 'DRIVE',
     routingPreference: 'TRAFFIC_AWARE',
+    // Road-accurate line (the default is a simplified overview line that cuts
+    // corners) plus live traffic speeds along it.
+    polylineQuality: 'HIGH_QUALITY',
+    extraComputations: ['TRAFFIC_ON_POLYLINE'],
     computeAlternativeRoutes: false,
     languageCode: 'en-IN',
     units: 'METRIC',
@@ -167,6 +199,7 @@ export async function fetchRoute(
         'Content-Type': 'application/json',
         'X-Goog-Api-Key': GOOGLE_MAPS_KEY,
         'X-Goog-FieldMask': FIELD_MASK,
+        ...APP_IDENTITY_HEADERS,
       },
       body: JSON.stringify(body),
     });
@@ -201,15 +234,30 @@ export async function fetchRoute(
       const end = toLatLng(st.endLocation);
       if (!start || !end) continue;
       const maneuver: string = st.navigationInstruction?.maneuver || 'STRAIGHT';
-      const text: string = (st.navigationInstruction?.instructions || '').replace(/\s+/g, ' ').trim();
+      // Google packs extra notes onto later lines ("Turn right onto B Road\n
+      // Destination will be on the left"). The first line is the instruction.
+      const lines: string[] = String(st.navigationInstruction?.instructions || '')
+        .split('\n')
+        .map((l: string) => l.replace(/\s+/g, ' ').trim())
+        .filter(Boolean);
       steps.push({
         maneuver,
-        instruction: text || defaultInstruction(maneuver),
+        instruction: lines[0] || defaultInstruction(maneuver),
+        note: lines.slice(1).join('. ') || undefined,
         distanceM: Number(st.distanceMeters) || 0,
         start,
         end,
       });
     }
+  }
+
+  const traffic: TrafficInterval[] = [];
+  for (const iv of r.travelAdvisory?.speedReadingIntervals || []) {
+    const speed = iv.speed;
+    if (speed !== 'SLOW' && speed !== 'TRAFFIC_JAM') continue;
+    const start = Number(iv.startPolylinePointIndex) || 0; // proto3 omits 0
+    const end = Number(iv.endPolylinePointIndex);
+    if (Number.isFinite(end) && end > start && end < coords.length) traffic.push({ start, end, speed });
   }
 
   return {
@@ -219,6 +267,7 @@ export async function fetchRoute(
       distanceM: Number(r.distanceMeters) || 0,
       durationS: seconds(r.duration),
       steps,
+      traffic,
     },
   };
 }
