@@ -532,7 +532,7 @@
           </div>
           <${Field} label="Home address" id="ow-addr" hint="Your own address, as on your ID. You add each parking space's address later."><textarea id="ow-addr" class="input" rows="3" placeholder="House no., street, area, city, PIN code" value=${f.address} onInput=${(e) => set('address', e.target.value)}></textarea><//>
           <label class="check"><input type="checkbox" checked=${f.own} onChange=${(e) => set('own', e.target.checked)} /> <span>I own the parking space, or I have the owner's permission to rent it out.</span></label>
-          <label class="check"><input type="checkbox" checked=${f.terms} onChange=${(e) => set('terms', e.target.checked)} /> <span>I agree to the ParkStop <a href="/terms" target="_blank" rel="noopener">owner terms</a>, including the 20% platform fee on each parking.</span></label>
+          <label class="check"><input type="checkbox" checked=${f.terms} onChange=${(e) => set('terms', e.target.checked)} /> <span>I agree to the ParkStop <a href="/terms" target="_blank" rel="noopener">owner terms</a>, including ParkStop's platform fee on each parking (15–30% depending on the amount).</span></label>
           ${err && html`<p class="error">${err}</p>`}
           <button class="btn primary block" type="submit" disabled=${busy}>${busy ? 'Saving…' : needCode ? 'Continue' : 'Create my owner account'}</button>
         </form>`
