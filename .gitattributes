@@ -1,0 +1,27 @@
+# Keep line endings the same on every machine.
+#
+# ParkStop moves between a Mac and a Windows laptop. Without this file, a
+# file saved on Windows comes back with CRLF endings; git then marks every
+# line as changed, which hides the real edit and makes `git blame` useless.
+# (GoogleMapNative.tsx showed 2173 changed lines when only 315 were real.)
+#
+# text=auto  -> git decides what is text and what is binary
+# eol=lf     -> text is stored AND checked out with Unix endings everywhere
+* text=auto eol=lf
+
+# Binary files: never convert these.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.webp binary
+*.pdf  binary
+*.zip  binary
+*.pptx binary
+*.keystore binary
+*.jks  binary
+*.ttf  binary
+*.otf  binary
+*.woff binary
+*.woff2 binary
