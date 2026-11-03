@@ -34,12 +34,16 @@ const NO_ROUTE: Array<{ latitude: number; longitude: number }> = [];
 /**
  * How close counts as "at the spot", in km.
  *
- * Matches the rule already used to allow ending a session, so the app has one
- * idea of having arrived. Generous on purpose: GPS is poor beside buildings
- * and inside covered parking, and the cost of being slightly early here is
- * only which message the booked panel shows.
+ * Deliberately tighter than the 250 m used to allow ENDING a session: the two
+ * answer different questions. Ending is forgiving so a driver is never stuck
+ * unable to close a session. Arriving should be strict, because it decides
+ * whether the panel tells the driver to keep going or to wait for the owner —
+ * and at 250 m you can still be a street away.
+ *
+ * 75 m leaves room for ordinary GPS error (about 10-20 m outdoors, worse
+ * beside buildings) while still meaning "you are at the place".
  */
-const ARRIVED_KM = 0.25;
+const ARRIVED_KM = 0.075;
 
 export default function FinderDashboard() {
   const router = useRouter();
