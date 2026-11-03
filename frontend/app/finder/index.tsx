@@ -31,6 +31,15 @@ import { BookedPanel, PaymentPanel, ReceiptPanel } from '../../components/finder
 
 const { width } = Dimensions.get('window');
 const NO_ROUTE: Array<{ latitude: number; longitude: number }> = [];
+/**
+ * How close counts as "at the spot", in km.
+ *
+ * Matches the rule already used to allow ending a session, so the app has one
+ * idea of having arrived. Generous on purpose: GPS is poor beside buildings
+ * and inside covered parking, and the cost of being slightly early here is
+ * only which message the booked panel shows.
+ */
+const ARRIVED_KM = 0.25;
 
 export default function FinderDashboard() {
   const router = useRouter();
@@ -2240,6 +2249,12 @@ export default function FinderDashboard() {
               <View style={[BlueprintTheme.glassCard, isBottomPanelFull && { borderRadius: 0, borderTopLeftRadius: 32, borderTopRightRadius: 32, paddingBottom: 40 }]}>
                 {step === 'booking_confirm' && (() => {
                   const spot = spots.find(s => s.id === selectedSpotId);
+                  // How far the driver still is from the spot. The owner can
+                  // only check them in once they are actually there, so the
+                  // panel waits to say "waiting for the owner" until then.
+                  const distanceKm = spot && userLocation
+                    ? getDistanceKm(userLocation.lat, userLocation.lng, spot.lat, spot.lng)
+                    : null;
                   return (
                     <BookedPanel
                       spotTitle={spot?.title}
@@ -2248,6 +2263,8 @@ export default function FinderDashboard() {
                       otp={bookingDetails?.otp}
                       onNavigate={spot ? () => startNavigation({ lat: spot.lat, lng: spot.lng, title: spot.title }, true) : undefined}
                       navigating={nav.loading}
+                      distanceKm={distanceKm}
+                      atSpot={distanceKm != null && distanceKm <= ARRIVED_KM}
                       onCancel={handleCancelBooking}
                       cancelling={isCancelling}
                     />

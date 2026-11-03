@@ -26,7 +26,7 @@ const Row = ({ label, value, color = '#fff' }: { label: string; value: string; c
 
 /* ── Booked: waiting for the owner to check the driver in ───────────────── */
 
-export function BookedPanel({ spotTitle, slot, bookingId, otp, onNavigate, navigating = false, onCancel, cancelling }: {
+export function BookedPanel({ spotTitle, slot, bookingId, otp, onNavigate, navigating = false, atSpot = false, distanceKm = null, onCancel, cancelling }: {
   spotTitle?: string;
   slot: string;
   bookingId?: string;
@@ -35,10 +35,16 @@ export function BookedPanel({ spotTitle, slot, bookingId, otp, onNavigate, navig
   onNavigate?: () => void;
   /** True while the route is being fetched. */
   navigating?: boolean;
+  /** True once the driver is at the spot. Until then the owner cannot check them in. */
+  atSpot?: boolean;
+  /** How far the driver still has to go, in km. Null when the position is unknown. */
+  distanceKm?: number | null;
   /** Cancel the booking (allowed until the owner checks the driver in). */
   onCancel: () => void;
   cancelling: boolean;
 }) {
+  const away =
+    distanceKm == null ? null : distanceKm < 1 ? `${Math.round(distanceKm * 1000)} m away` : `${distanceKm.toFixed(1)} km away`;
   return (
     <View style={{ paddingVertical: 10 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
@@ -83,10 +89,24 @@ export function BookedPanel({ spotTitle, slot, bookingId, otp, onNavigate, navig
         <Text style={{ color: '#fff', fontSize: 16, fontWeight: '900' }}>{navigating ? 'Finding route…' : 'Navigate'}</Text>
       </TouchableOpacity>
 
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingVertical: 12, backgroundColor: 'rgba(99,102,241,0.06)', borderRadius: 16, borderWidth: 1, borderColor: 'rgba(99,102,241,0.12)' }}>
-        <ActivityIndicator size="small" color="#818cf8" />
-        <Text style={{ color: '#818cf8', fontWeight: '700', fontSize: 13 }}>Waiting for the owner to check you in…</Text>
-      </View>
+      {/* The owner can only check the driver in once the driver is actually
+          there, so a spinner saying "waiting for the owner" the moment a spot
+          is booked is wrong — it suggests something is happening while the
+          driver still has a drive ahead. Until arrival, say what to do next;
+          after arrival, show the wait. */}
+      {atSpot ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, paddingVertical: 12, backgroundColor: 'rgba(99,102,241,0.06)', borderRadius: 16, borderWidth: 1, borderColor: 'rgba(99,102,241,0.12)' }}>
+          <ActivityIndicator size="small" color="#818cf8" />
+          <Text style={{ color: '#818cf8', fontWeight: '700', fontSize: 13 }}>Waiting for the owner to check you in…</Text>
+        </View>
+      ) : (
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 12, backgroundColor: 'rgba(148,163,184,0.06)', borderRadius: 16, borderWidth: 1, borderColor: 'rgba(148,163,184,0.12)' }}>
+          <Ionicons name="car-outline" size={16} color="#94a3b8" />
+          <Text style={{ color: '#94a3b8', fontWeight: '700', fontSize: 13 }}>
+            {away ? `Head to the spot · ${away}` : 'Head to the spot'}
+          </Text>
+        </View>
+      )}
 
       <TouchableOpacity
         onPress={onCancel}
