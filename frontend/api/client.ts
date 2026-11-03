@@ -106,6 +106,26 @@ apiClient.interceptors.request.use(
     }
 
     try {
+      // Wait for Firebase to restore the signed-in user before deciding there
+      // isn't one.
+      //
+      // Firebase reloads the saved session from disk when the app starts, and
+      // that read is asynchronous — for the first moments after launch
+      // `auth.currentUser` is null even though the user IS signed in. Any
+      // request firing in that window went out with NO Authorization header,
+      // the server answered 401, and the 401 handler below signed the user
+      // out and showed "Session Expired. Please log in again." on a perfectly
+      // valid session. It looked random because it depended on whether a
+      // screen's first request beat Firebase's restore.
+      //
+      // authStateReady() resolves once that restore has finished, so by the
+      // line after it `currentUser` is trustworthy.
+      try {
+        await auth.authStateReady();
+      } catch {
+        // Older Firebase builds lack this; fall through to the check below.
+      }
+
       const currentUser = auth.currentUser;
       if (currentUser) {
         const token = await currentUser.getIdToken();
@@ -190,8 +210,53 @@ apiClient.interceptors.response.use(
         url.includes('/auth/register') ||
         url.includes('/auth/login');
 
+      // Nor does a 401 on a request that carried NO token.
+      //
+      // "Access denied. No token provided." means this request left before a
+      // token was available, not that the stored session is bad. Signing the
+      // user out here throws away a session that was probably fine. The
+      // request interceptor now waits for Firebase, so this should not
+      // happen — this is the backstop that keeps a stray race from logging
+      // someone out mid-drive.
+      const sentNoToken = !config?.headers?.Authorization;
+      if (sentNoToken) {
+        if (__DEV__) console.log(`[API] 401 on ${url} with no token attached — not signing out.`);
+        return Promise.reject(error);
+      }
+
       if (isHandshakeEndpoint) {
         if (__DEV__) console.log(`[API] 401 on ${url} during auth handshake — not signing out.`);
+        return Promise.reject(error);
+      }
+
+      // And OTP_REQUIRED is NOT an expired session — it is the opposite.
+      //
+      // The server returns it when a Firebase sign-in is valid but has not yet
+      // passed the emailed code. That is the normal state between signing in
+      // and typing the code. Any screen that fired a request in that gap
+      // (spotter bookings, the notification bell) got this 401, and this
+      // handler then called auth.signOut().
+      //
+      // That sign-out destroyed the very Firebase session the code was about
+      // to verify. The server records the token's `auth_time` when the code is
+      // accepted, so once the session was gone the code could never match:
+      // entering it appeared to end the session. The user was thrown back to
+      // login, signed in again, got a new `auth_time`, and the whole thing
+      // repeated — the loop in the server log, one OTP email per round.
+      //
+      // So: leave the session alone and let the login screen finish the code
+      // step it is already showing.
+      const code = (error?.response?.data as any)?.code;
+      if (code === 'OTP_REQUIRED') {
+        if (__DEV__) console.log(`[API] 401 OTP_REQUIRED on ${url} — code not entered yet, keeping the session.`);
+        return Promise.reject(error);
+      }
+
+      // Same for a Firebase user with no ParkStop row yet: they need to finish
+      // registering, and register.tsx drives that. Signing them out mid-way
+      // leaves them unable to complete it.
+      if (code === 'USER_NOT_REGISTERED') {
+        if (__DEV__) console.log(`[API] 401 USER_NOT_REGISTERED on ${url} — registration pending, keeping the session.`);
         return Promise.reject(error);
       }
 

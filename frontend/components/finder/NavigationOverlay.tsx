@@ -158,7 +158,10 @@ export function NavigationOverlay({
   const then = progress?.thenStep;
   const instruction = next ? next.instruction : `Arrive at ${destinationTitle || 'your destination'}`;
   const icon: IconName = next ? maneuverIcon(next.maneuver) : 'map-marker';
-  const showSpeed = speedKmh != null && speedKmh >= 3;
+  // Shown whenever the phone reports a speed at all. A stopped car reads 0
+  // (the hook floors GPS wander), which is honest — hiding the bubble at
+  // every red light would make it flicker in and out of view.
+  const showSpeed = speedKmh != null;
   // Small tolerance, as Google uses, so GPS noise at the limit doesn't flash red.
   const overLimit = showSpeed && speedLimitKmh != null && (speedKmh as number) > speedLimitKmh + 5;
 

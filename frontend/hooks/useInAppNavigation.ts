@@ -60,6 +60,22 @@ const REROUTE_MIN_GAP_MS = 12000;
 const SNAP_M = 25;
 /** Show "Then …" when the following turn is this close after the next one. */
 const THEN_M = 150;
+/**
+ * Below this, treat the car as stopped and report 0.
+ *
+ * A parked phone still reports 3-8 km/h: GPS wanders a few metres between
+ * fixes and the receiver reads that wander as movement, which made the speed
+ * bubble claim 6 km/h while standing still. Walking pace is about 5 km/h, so
+ * anything under this is not driving.
+ */
+const STOPPED_KMH = 8;
+/**
+ * Fixes combined to smooth the reading. The MIDDLE value is taken, not the
+ * average: GPS throws the odd wild figure, and an average carries that spike
+ * for several seconds (one bad fix turned a steady 40 into 57 in testing),
+ * while the middle value ignores it outright.
+ */
+const SPEED_WINDOW = 3;
 
 /* Flat-earth metres — accurate to well under 1% at city scale. */
 function metres(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
@@ -141,6 +157,7 @@ export function useInAppNavigation({
   const [rerouting, setRerouting] = useState(false);
   const [gpsHeading, setGpsHeading] = useState<number | null>(null);
   const [speedKmh, setSpeedKmh] = useState<number | null>(null);
+  const speedWindow = useRef<number[]>([]);
 
   // Refs so callbacks stay stable and never read stale state.
   const requestId = useRef(0);
@@ -162,6 +179,7 @@ export function useInAppNavigation({
     setRerouting(false);
     setGpsHeading(null);
     setSpeedKmh(null);
+    speedWindow.current = [];
   }, []);
 
   const start = useCallback(async (dest: NavDestination): Promise<StartResult> => {
@@ -225,7 +243,20 @@ export function useInAppNavigation({
             const { latitude, longitude, accuracy, heading, speed } = l.coords;
             // GPS course is far steadier than the compass once the car moves.
             if (speed != null && speed > 1.5 && heading != null && heading >= 0) setGpsHeading(heading);
-            setSpeedKmh(speed != null && speed >= 0 ? speed * 3.6 : null);
+            // Take the middle of the last few fixes, then floor anything
+            // slower than a walk to zero, so a parked car reads 0 rather
+            // than reporting GPS wander as 6 km/h.
+            if (speed == null || speed < 0) {
+              setSpeedKmh(null);
+            } else {
+              const w = speedWindow.current;
+              w.push(speed * 3.6);
+              if (w.length > SPEED_WINDOW) w.shift();
+              const sorted = [...w].sort((a, b) => a - b);
+              const mid = sorted.length >> 1;
+              const median = sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+              setSpeedKmh(median < STOPPED_KMH ? 0 : median);
+            }
             onFixRef.current?.({ lat: latitude, lng: longitude, accuracy: accuracy || 0, heading, speed });
           },
         );
