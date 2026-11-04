@@ -353,12 +353,66 @@ class Canvas {
     this.fillSdf(cx - r, cy - r, cx + r, cy + r, (px, py) => Math.hypot(px - cx * s, py - cy * s) - r * s, c);
   }
 
+  /** Flattened circle — used for the soft ground shadow under a pin. */
+  ellipse(cx: number, cy: number, rx: number, ry: number, c: RGBA) {
+    const s = this.s;
+    const CX = cx * s, CY = cy * s, RX = rx * s, RY = ry * s;
+    this.fillSdf(cx - rx, cy - ry, cx + rx, cy + ry, (px, py) => {
+      // Scale the y axis so the ellipse becomes a unit circle, then undo the
+      // scale on the distance, which keeps the edge one pixel wide either way.
+      const dx = (px - CX) / RX;
+      const dy = (py - CY) / RY;
+      return (Math.hypot(dx, dy) - 1) * Math.min(RX, RY);
+    }, c);
+  }
+
+  /**
+   * Google's map-pin outline: a round head flowing into a point.
+   *
+   * Built as ONE closed polygon — the arc over the top of the head, then the
+   * two straight sides running down to the tip — so the fill and its
+   * anti-aliasing are continuous. The sides meet the head exactly where a
+   * line from the tip grazes it (the tangent points), which is what makes
+   * the join seamless rather than a visible corner.
+   *
+   * An earlier version unioned a circle and a triangle by taking the nearer
+   * of two distance fields. The triangle's field got its sign wrong just
+   * outside the tangent points and painted two stray specks there.
+   */
+  teardrop(cx: number, cy: number, r: number, tipY: number, c: RGBA) {
+    const d = tipY - cy;
+    if (d <= r) { this.circle(cx, cy, r, c); return; } // tip inside the head
+
+    // Where a line from the tip grazes the head.
+    const ty = (r * r) / d;                                  // below the centre
+    const tx = r * Math.sqrt(Math.max(0, 1 - (r * r) / (d * d)));
+    const aLeft = Math.atan2(ty, -tx);
+    const aRight = Math.atan2(ty, tx) + Math.PI * 2;         // the long way, over the top
+
+    // Enough arc segments that the flat spots are under a pixel, and no more:
+    // every segment is tested against every pixel in the bounding box, so 64
+    // of them made this marker ten times slower than the rest.
+    const pts: Array<[number, number]> = [];
+    const STEPS = Math.max(14, Math.min(40, Math.round(r * this.s / 1.6)));
+    for (let i = 0; i <= STEPS; i++) {
+      const a = aLeft + ((aRight - aLeft) * i) / STEPS;
+      pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+    }
+    pts.push([cx, tipY]);
+    this.polygon(pts, c);
+  }
+
   /**
    * Any simple polygon (dp points). Edges are smoothed from the distance to
    * the nearest edge — one inside test per pixel, which matters on phones
    * (Hermes has no JIT; 16-sample supersampling took ~0.5 s for the arrow).
+   *
+   * `round` (dp) rounds the corners, by growing the shape outward by that
+   * much: a point `round` outside the straight edge still counts as inside,
+   * which fillets every corner to that radius. Give the polygon itself
+   * correspondingly smaller coordinates so the finished size is unchanged.
    */
-  polygon(pts: Array<[number, number]>, c: RGBA) {
+  polygon(pts: Array<[number, number]>, c: RGBA, round = 0) {
     const s = this.s;
     const n = pts.length;
     const X = new Float64Array(n);
@@ -372,10 +426,11 @@ class Canvas {
       if (Y[i] < minY) minY = Y[i];
       if (Y[i] > maxY) maxY = Y[i];
     }
-    const ax = Math.max(0, Math.floor(minX) - 1);
-    const bx = Math.min(this.w - 1, Math.ceil(maxX) + 1);
-    const ay = Math.max(0, Math.floor(minY) - 1);
-    const by = Math.min(this.h - 1, Math.ceil(maxY) + 1);
+    const pad = Math.ceil(round * s) + 1;
+    const ax = Math.max(0, Math.floor(minX) - pad);
+    const bx = Math.min(this.w - 1, Math.ceil(maxX) + pad);
+    const ay = Math.max(0, Math.floor(minY) - pad);
+    const by = Math.min(this.h - 1, Math.ceil(maxY) + pad);
     for (let y = ay; y <= by; y++) {
       const py = y + 0.5;
       for (let x = ax; x <= bx; x++) {
@@ -394,7 +449,8 @@ class Canvas {
           if (d2 < best) best = d2;
         }
         const d = Math.sqrt(best);
-        const cov = inside ? 0.5 + d : 0.5 - d;
+        const signed = inside ? -d : d; // negative inside
+        const cov = 0.5 - (signed - round * s);
         if (cov > 0) this.blend(x, y, c, cov);
       }
     }
@@ -564,18 +620,27 @@ export function destinationPinImage(): MarkerImage {
   const key = `dest|${s}`;
   const hit = imageCache.get(key);
   if (hit) return hit;
-  const W = 36;
-  const H = 46;
+  // Google's marker: a red teardrop with a white hole, standing on its point,
+  // with a small ground shadow so it reads as lifted off the map.
+  const W = 40;
+  const H = 52;
+  const cx = W / 2;
+  const headY = 15.5;   // centre of the round head
+  const headR = 12.5;
+  const tipY = 48;      // the point, which sits on the coordinate
   const cv = new Canvas(W, H, s);
-  const red = hex('#EA4335');
-  // soft shadow under the head
-  cv.circle(18, 18, 17, [0, 0, 0, 0.18]);
-  cv.circle(18, 16.5, 16, WHITE);
-  cv.polygon([[10, 26], [26, 26], [18, 44]], WHITE);
-  cv.circle(18, 16.5, 13.5, red);
-  cv.polygon([[11.8, 25], [24.2, 25], [18, 41]], red);
-  cv.circle(18, 16.5, 4.8, WHITE);
-  const img = { uri: dataUri(cv.toPng()), anchor: { x: 0.5, y: 43.5 / H } };
+
+  // Ground shadow: a squashed ellipse at the tip. Drawn as two flattened
+  // circles rather than one, so it fades outward instead of ending hard.
+  cv.ellipse(cx, tipY - 1.5, 7.5, 2.6, [0, 0, 0, 0.13]);
+  cv.ellipse(cx, tipY - 1.5, 4.5, 1.7, [0, 0, 0, 0.16]);
+
+  cv.teardrop(cx, headY, headR, tipY, hex('#EA4335'));
+  // Google darkens the lower half slightly; one soft inner arc is enough to
+  // stop the red reading as flat.
+  cv.circle(cx, headY, 4.6, WHITE);
+
+  const img = { uri: dataUri(cv.toPng()), anchor: { x: 0.5, y: (tipY - 0.5) / H } };
   imageCache.set(key, img);
   return img;
 }
@@ -590,15 +655,32 @@ export function navArrowImage(): MarkerImage {
   const key = `arrow|${s}`;
   const hit = imageCache.get(key);
   if (hit) return hit;
-  const S = 60;
+  // Google's navigation puck: a blue chevron with a white rim, standing on a
+  // pale blue accuracy disc. The chevron's corners are rounded, which is what
+  // stops it reading as a sharp paper dart.
+  const S = 72;
   const c = S / 2;
   const cv = new Canvas(S, S, s);
-  cv.circle(c, c, 27, [26, 115, 232, 0.16]);
-  const chevron = (k: number, dy = 0): Array<[number, number]> =>
-    [[0, -19], [15, 17], [0, 9], [-15, 17]].map(([x, y]) => [c + x * k, c + 1 + y * k + dy] as [number, number]);
-  cv.polygon(chevron(1.22, 2), [0, 0, 0, 0.28]); // shadow
-  cv.polygon(chevron(1.22), WHITE); // outline
-  cv.polygon(chevron(1), hex('#1A73E8')); // body
+
+  // Accuracy disc — two rings, faint and fainter, so the edge dissolves
+  // instead of drawing a hard circle on the map.
+  cv.circle(c, c, 33, [66, 133, 244, 0.10]);
+  cv.circle(c, c, 25, [66, 133, 244, 0.16]);
+
+  // Chevron, pointing up. Coordinates are inset by the corner radius, which
+  // polygon() then grows back, so the finished arrow is the size below.
+  const R = 2.6;
+  const chevron = (grow: number, dy = 0): Array<[number, number]> =>
+    ([[0, -16.5], [11.4, 12.4], [0, 5.6], [-11.4, 12.4]] as Array<[number, number]>)
+      .map(([x, y]) => {
+        const k = 1 + grow / 14; // widen slightly for the rim and the shadow
+        return [c + x * k, c + 1.5 + y * k + dy] as [number, number];
+      });
+
+  cv.polygon(chevron(2.6, 1.6), [0, 0, 0, 0.22], R + 2.6); // shadow
+  cv.polygon(chevron(2.4), WHITE, R + 2.4);                // white rim
+  cv.polygon(chevron(0), hex('#1A73E8'), R);               // blue body
+
   const img = { uri: dataUri(cv.toPng()), anchor: { x: 0.5, y: 0.5 } };
   imageCache.set(key, img);
   return img;
