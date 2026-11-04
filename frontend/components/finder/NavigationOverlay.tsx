@@ -74,7 +74,6 @@ export function NavigationOverlay({
   destinationTitle,
   otp,
   speedKmh,
-  speedLimitKmh = null,
   compact = false,
   voiceAvailable,
   muted,
@@ -90,8 +89,6 @@ export function NavigationOverlay({
   /** Check-in PIN, shown on arrival. Absent when navigating to a searched place. */
   otp?: string;
   speedKmh: number | null;
-  /** Limit of the current road (km/h), or null when unknown. */
-  speedLimitKmh?: number | null;
   /** Floating mini-map (picture-in-picture): show only the next turn. */
   compact?: boolean;
   voiceAvailable: boolean;
@@ -162,8 +159,6 @@ export function NavigationOverlay({
   // (the hook floors GPS wander), which is honest — hiding the bubble at
   // every red light would make it flicker in and out of view.
   const showSpeed = speedKmh != null;
-  // Small tolerance, as Google uses, so GPS noise at the limit doesn't flash red.
-  const overLimit = showSpeed && speedLimitKmh != null && (speedKmh as number) > speedLimitKmh + 5;
 
   return (
     <>
@@ -224,19 +219,10 @@ export function NavigationOverlay({
 
       {/* Trip summary + End */}
       <View style={[s.bottomWrap, { paddingBottom: Math.max(insets.bottom, 12) + 8 }]} pointerEvents="box-none">
-        {showSpeed || speedLimitKmh != null ? (
-          <View style={s.speedRow}>
-            {showSpeed ? (
-              <View style={[s.speedBubble, overLimit && s.speedBubbleOver]}>
-                <Text style={[s.speedValue, overLimit && s.speedTextOver]}>{Math.round(speedKmh as number)}</Text>
-                <Text style={[s.speedUnit, overLimit && s.speedTextOver]}>km/h</Text>
-              </View>
-            ) : null}
-            {speedLimitKmh != null ? (
-              <View style={s.limitSign} accessibilityLabel={`Speed limit ${speedLimitKmh} kilometres per hour`}>
-                <Text style={s.limitValue}>{speedLimitKmh}</Text>
-              </View>
-            ) : null}
+        {showSpeed ? (
+          <View style={s.speedBubble}>
+            <Text style={s.speedValue}>{Math.round(speedKmh as number)}</Text>
+            <Text style={s.speedUnit}>km/h</Text>
           </View>
         ) : null}
         <View style={[s.card, s.tripRow]}>
@@ -285,23 +271,13 @@ const s = StyleSheet.create({
   },
 
   bottomWrap: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: 12, zIndex: 2000 },
-  speedRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10, marginLeft: 4 },
   speedBubble: {
-    width: 62, height: 62, borderRadius: 31, backgroundColor: '#fff',
-    alignItems: 'center', justifyContent: 'center',
+    alignSelf: 'flex-start', width: 62, height: 62, borderRadius: 31, backgroundColor: '#fff',
+    alignItems: 'center', justifyContent: 'center', marginBottom: 10, marginLeft: 4,
     borderWidth: 1, borderColor: '#e5e7eb', ...shadow, elevation: 8,
   },
-  speedBubbleOver: { backgroundColor: '#dc2626', borderColor: '#b91c1c' },
   speedValue: { color: '#111827', fontSize: 22, fontWeight: '900', lineHeight: 24 },
   speedUnit: { color: '#6b7280', fontSize: 10, fontWeight: '700' },
-  speedTextOver: { color: '#fff' },
-  // Indian speed-limit sign: white disc, thick red ring, black number.
-  limitSign: {
-    width: 54, height: 54, borderRadius: 27, backgroundColor: '#fff',
-    borderWidth: 5, borderColor: '#dc2626',
-    alignItems: 'center', justifyContent: 'center', ...shadow, elevation: 8,
-  },
-  limitValue: { color: '#111827', fontSize: 19, fontWeight: '900' },
 
   miniWrap: { position: 'absolute', top: 6, left: 6, right: 6, zIndex: 2000 },
   miniCard: {

@@ -24,7 +24,6 @@ import { Spot, PricingBreakdown, AppStep } from '../../types/finder';
 import SkeletonCard from '../../components/SkeletonCard';
 import { useInAppNavigation, NavDestination } from '../../hooks/useInAppNavigation';
 import { useVoiceGuidance, voiceAvailable } from '../../hooks/useVoiceGuidance';
-import { useSpeedLimit } from '../../hooks/useSpeedLimit';
 import { useNavBackground } from '../../hooks/useNavBackground';
 import { NavigationOverlay } from '../../components/finder/NavigationOverlay';
 import { BookedPanel, PaymentPanel, ReceiptPanel } from '../../components/finder/SessionPanels';
@@ -74,7 +73,6 @@ export default function FinderDashboard() {
   const [calculatedPrice, setCalculatedPrice] = useState<number | null>(null);
   const [isCalculatingPrice, setIsCalculatingPrice] = useState(false);
   const [slotData, setSlotData] = useState<Array<{ name: string; status: string }>>([]);
-  const [mapStyleConfig, setMapStyleConfig] = useState<{ styleUrl?: string; apiKey?: string; provider?: string }>({});
   const ignoreNextQueryChange = useRef(false);
 
 
@@ -194,8 +192,6 @@ export default function FinderDashboard() {
     destinationTitle: nav.destination?.title,
     isBookedSpot: navToBookedSpot,
   });
-  // Speed limit of the current road (Ola Maps via our server).
-  const speedLimit = useSpeedLimit({ active: nav.phase === 'navigating', location: nav.puckLocation });
   // Floating mini-map + "ParkStop is navigating" notification.
   const { inPip } = useNavBackground({
     active: navActive,
@@ -393,17 +389,6 @@ export default function FinderDashboard() {
     const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
     return () => backHandler.remove();
   }, [step, searchQuery, nav.active]);
-
-  // Fetch map style config (Ola Maps vector tiles or Carto fallback)
-  useEffect(() => {
-    apiClient.get('/maps/style')
-      .then((res: any) => {
-        if (res.data.success && res.data.data) {
-          setMapStyleConfig(res.data.data);
-        }
-      })
-      .catch(() => {}); // silently fallback to Carto defaults
-  }, []);
 
   // Load the remembered viewport before anything else, so the map's very first
   // paint is the user's area rather than the whole of India.
@@ -1792,8 +1777,6 @@ export default function FinderDashboard() {
             locationAccuracy={locationAccuracy}
             isFollowing={isFollowing}
             onMapInteraction={() => setIsFollowing(false)}
-            mapStyleUrl={mapStyleConfig.provider === 'ola' ? mapStyleConfig.styleUrl : undefined}
-            mapApiKey={mapStyleConfig.provider === 'ola' ? mapStyleConfig.apiKey : undefined}
             onMarkerPress={(id: string) => {
               const spot = spots.find(s => s.id === id);
               if (spot && !spot.available) {
@@ -1845,7 +1828,6 @@ export default function FinderDashboard() {
           destinationTitle={nav.destination?.title}
           otp={navToBookedSpot && step === 'booking_confirm' ? bookingDetails?.otp : undefined}
           speedKmh={nav.speedKmh}
-          speedLimitKmh={speedLimit}
           compact={inPip}
           voiceAvailable={voiceAvailable}
           muted={voiceMuted}
