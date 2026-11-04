@@ -377,9 +377,16 @@ class Booking {
           // Fully prepaid and within the booked window: nothing left to collect,
           // so the settlement path can pay the owner out immediately instead of
           // waiting on a checkout payment that will never come.
-          payment_status: outstanding === 0 && Number(booking.amount_paid) > 0
-            ? 'paid'
-            : booking.payment_status,
+          //
+          // Overstaying is the opposite case and must NOT stay 'paid'. Both
+          // payment routes refuse a booking that is already paid, so the driver
+          // was told to pay the extra time and then physically could not — while
+          // the owner was credited on the higher figure, out of money that was
+          // never collected. 'pending' reopens payment for the difference, and
+          // holds the owner credit until it actually arrives.
+          payment_status: outstanding > 0
+            ? 'pending'
+            : (Number(booking.amount_paid) > 0 ? 'paid' : booking.payment_status),
           updated_at: new Date()
         }
       });

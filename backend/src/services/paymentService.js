@@ -15,7 +15,16 @@ class PaymentService {
    *   arrears = the finder's unpaid dues from earlier bookings (negative balance)
    */
   static computePayable(booking, user) {
-    const base = Number(booking?.total_price || 0) + Number(booking?.advance_fee || 0);
+    // What this booking costs, LESS whatever has already been collected for it.
+    //
+    // The subtraction is what makes a second payment possible. A driver who
+    // overstays has total_price raised to the time they actually used, but they
+    // have already paid for the window they booked. Without this, the top-up
+    // charge would be the whole new total on top of what they paid.
+    // For a booking that has never been paid, amount_paid is 0 and nothing changes.
+    const gross = Number(booking?.total_price || 0) + Number(booking?.advance_fee || 0);
+    const collected = Math.max(0, Number(booking?.amount_paid || 0));
+    const base = Math.max(0, Math.round((gross - collected) * 100) / 100);
     const balance = Number(user?.balance || 0);
     const arrears = balance < 0 ? Math.abs(balance) : 0;
     return { base, arrears, total: Math.round((base + arrears) * 100) / 100 };
