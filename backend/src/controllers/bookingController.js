@@ -248,7 +248,15 @@ class BookingController {
       if (booking.user_id !== req.user.id) {
         return res.status(403).json({ success: false, message: 'Unauthorized' });
       }
-      if (booking.status === 'completed' || booking.payment_status === 'paid') {
+      // Judge "already closed" by the session, not by the money.
+      //
+      // This used to refuse any booking whose payment_status was 'paid'. That
+      // was safe while payment could only happen at checkout, but the owner's
+      // QR screen can collect at any time, including before the car leaves. A
+      // driver whose booking was paid early then tapped End Session and was
+      // told "This session is already closed" -- with no way out until the
+      // two-hour sweep closed it for them.
+      if (booking.status === 'completed') {
         return res.status(400).json({ success: false, message: 'This session is already closed' });
       }
 
