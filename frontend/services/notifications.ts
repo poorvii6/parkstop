@@ -31,20 +31,6 @@ if (!isExpoGo) {
   }
 }
 
-/**
- * Resolve the EAS project ID from every place Expo may store it. After you run
- * `eas init`, it lands in app.json under expo.extra.eas.projectId and is read
- * here automatically — no need to duplicate it into .env.
- */
-function getProjectId(): string | undefined {
-  return (
-    (Constants.expoConfig as any)?.extra?.eas?.projectId ||
-    (Constants as any)?.easConfig?.projectId ||
-    process.env.EXPO_PUBLIC_PROJECT_ID ||
-    undefined
-  );
-}
-
 // Remember this device's most recent token so we can hand it to /auth/logout
 // (lets the backend detach it, so a shared phone stops old notifications).
 let currentPushToken: string | null = null;
@@ -164,15 +150,17 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
     return null;
   }
 
-  const projectId = getProjectId();
-  if (!projectId) {
-    console.log('[Push] No EAS projectId found. Run `eas init` (writes expo.extra.eas.projectId in app.json), then rebuild the app.');
-    return null;
-  }
-
   try {
-    const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
-    console.log('[Push] Expo push token obtained.');
+    // The DEVICE token, not an Expo one: this is the address Firebase Cloud
+    // Messaging itself uses, and our backend sends straight to FCM. Asking
+    // Expo for a token instead would route every notification through their
+    // servers, which the app no longer does.
+    const token = (await Notifications.getDevicePushTokenAsync()).data;
+    if (typeof token !== 'string' || !token) {
+      console.log('[Push] No device push token returned. Is google-services.json present in this build?');
+      return null;
+    }
+    console.log('[Push] FCM device token obtained.');
     await sendTokenToBackend(token);
     attachTokenListenersOnce();
     return token;

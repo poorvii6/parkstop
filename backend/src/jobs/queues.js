@@ -43,15 +43,11 @@ if (useMockQueue) {
       logger.info(`[Mock Queue] Adding notification job: ${name}`);
       const NotificationService = require('../services/notificationService');
       try {
-        if (name === 'check-receipts') {
-          await NotificationService.checkReceipts(data.receiptIdToToken);
-        } else {
-          await NotificationService.sendPushNotification(data.userId, {
-            title: data.title,
-            body: data.body,
-            data: data.data
-          });
-        }
+        await NotificationService.sendPushNotification(data.userId, {
+          title: data.title,
+          body: data.body,
+          data: data.data
+        });
       } catch (err) {
         logger.error(`[Mock Queue] Error processing notification: ${err.message}`);
       }
@@ -97,10 +93,10 @@ if (useMockQueue) {
   // Notification Worker
   new Worker('notifications', async job => {
     const NotificationService = require('../services/notificationService');
-    if (job.name === 'check-receipts') {
-      await NotificationService.checkReceipts(job.data.receiptIdToToken);
-      return;
-    }
+    // 'check-receipts' jobs belonged to the old Expo push service. FCM
+    // reports dead tokens in the send response, so there is nothing to poll.
+    // Any such job still queued from before the switch is simply ignored.
+    if (job.name === 'check-receipts') return;
     const { userId, title, body, data } = job.data;
     await NotificationService.sendPushNotification(userId, { title, body, data });
   }, { connection });

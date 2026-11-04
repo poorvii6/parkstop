@@ -1,9 +1,11 @@
 const { initializeApp, cert } = require('firebase-admin/app');
 const { getAuth } = require('firebase-admin/auth');
+const { getMessaging } = require('firebase-admin/messaging');
 const logger = require('../utils/logger');
 
 let adminApp = null;
 let auth = null;
+let messaging = null;
 
 try {
   let serviceAccount = null;
@@ -29,6 +31,9 @@ try {
       credential: cert(serviceAccount)
     });
     auth = getAuth(adminApp);
+    // Push notifications go straight to Firebase Cloud Messaging with this
+    // same service account — no separate push provider and no extra key.
+    messaging = getMessaging(adminApp);
     logger.info('🔥 Firebase Admin SDK initialized successfully');
   }
 
@@ -78,5 +83,6 @@ try {
 
 module.exports = {
   adminApp,
-  auth
+  auth,
+  messaging
 };

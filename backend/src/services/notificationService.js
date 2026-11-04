@@ -1,6 +1,7 @@
 const logger = require('../utils/logger');
 const { emitToUser } = require('../config/socket');
 const prisma = require('../config/prisma');
+const firebase = require('../config/firebase');
 
 class NotificationService {
   /**
@@ -16,7 +17,7 @@ class NotificationService {
   }
 
   /**
-   * Collect every valid Expo push token for a user (all their devices).
+   * Collect every valid push token for a user (all their devices).
    * Falls back to the legacy users.push_token if the device_tokens table has
    * nothing yet (e.g. right after deploy, before the app re-registers).
    */
@@ -41,8 +42,15 @@ class NotificationService {
       if (user?.push_token) tokens = [user.push_token];
     }
 
-    // De-duplicate and keep only well-formed Expo tokens.
-    return [...new Set(tokens)].filter((t) => typeof t === 'string' && t.startsWith('ExponentPushToken['));
+    // De-duplicate, then drop any token left over from the Expo push
+    // service. Those are Expo's own identifiers, meaningless to Firebase, so
+    // they are deleted here rather than sent and rejected: every device
+    // registers a real FCM token the next time the app opens, so the change
+    // of provider heals itself without a migration.
+    const unique = [...new Set(tokens)].filter((t) => typeof t === 'string' && t.length > 0);
+    const stale = unique.filter((t) => t.startsWith('ExponentPushToken[') || t.startsWith('ExpoPushToken['));
+    for (const t of stale) await this.pruneToken(t);
+    return unique.filter((t) => !stale.includes(t));
   }
 
   /** Save a notification to history so the user can see missed ones in-app. */
@@ -85,7 +93,7 @@ class NotificationService {
     }
   }
 
-  /** Delete a token that Expo told us is no longer valid (uninstalled app, etc.). */
+  /** Delete a token Firebase reports as dead (app uninstalled, data cleared). */
   static async pruneToken(token) {
     try {
       await prisma.device_tokens.deleteMany({ where: { token } });
@@ -105,75 +113,17 @@ class NotificationService {
   }
 
   /**
-   * POST JSON to Expo with ONE retry on a transient failure (network blip,
-   * Expo hiccup). Without this a single failed fetch silently dropped the push.
-   */
-  static async expoPost(url, payload) {
-    let lastErr;
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        return await res.json();
-      } catch (e) {
-        lastErr = e;
-        if (attempt === 0) await new Promise((r) => setTimeout(r, 1000)); // brief backoff, then retry once
-      }
-    }
-    throw lastErr;
-  }
-
-  /**
-   * Durably schedule a receipt check. Expo receipts may not be ready for several
-   * minutes, and a bare setTimeout dies if the server restarts — so when a real
-   * (BullMQ) queue is available we enqueue a DELAYED job; otherwise we fall back
-   * to an in-process timer.
-   */
-  static scheduleReceiptCheck(receiptIdToToken) {
-    if (!receiptIdToToken || Object.keys(receiptIdToToken).length === 0) return;
-    try {
-      const { notificationQueue, queueMode } = require('../jobs/queues');
-      if (queueMode === 'bullmq' && notificationQueue?.add) {
-        notificationQueue.add('check-receipts', { receiptIdToToken }, { delay: 90000 }).catch(() => {});
-        return;
-      }
-    } catch (_) {
-      // queue not available — fall through to the timer
-    }
-    setTimeout(() => { this.checkReceipts(receiptIdToToken).catch(() => {}); }, 15000);
-  }
-
-  /**
-   * Poll Expo push receipts and prune any tokens that come back as
-   * DeviceNotRegistered. Ticket-level errors are already handled at send time;
-   * this catches failures that only surface later.
-   */
-  static async checkReceipts(receiptIdToToken) {
-    const ids = Object.keys(receiptIdToToken || {});
-    if (ids.length === 0) return;
-    try {
-      // getReceipts accepts up to 1000 ids per request.
-      for (const idChunk of this.chunk(ids, 1000)) {
-        const json = await this.expoPost('https://exp.host/--/api/v2/push/getReceipts', { ids: idChunk });
-        const receipts = json?.data || {};
-        for (const [receiptId, receipt] of Object.entries(receipts)) {
-          if (receipt?.status === 'error' && receipt?.details?.error === 'DeviceNotRegistered') {
-            await this.pruneToken(receiptIdToToken[receiptId]);
-          }
-        }
-      }
-    } catch (e) {
-      logger.warn(`Receipt check failed: ${e.message}`);
-    }
-  }
-
-  /**
-   * Send a push notification to ALL of a user's devices via Expo Push Service.
-   * Chunks at Expo's 100-per-request limit, retries transient send failures,
-   * and prunes dead tokens (ticket + receipt level) so delivery stays clean.
+   * Send a push notification to ALL of a user's devices via Firebase Cloud
+   * Messaging.
+   *
+   * FCM is the only route to an Android phone, so this talks to it directly
+   * rather than through a middleman: fewer parties handling the message, one
+   * less service that can be down, and no extra credential — the same Firebase
+   * service account that verifies sign-ins sends these.
+   *
+   * Unlike the receipt-polling it replaces, FCM reports a dead token in the
+   * send response, so pruning happens immediately and there is nothing to
+   * follow up later.
    */
   static async sendPushNotification(userId, { title, body, data }) {
     try {
@@ -193,47 +143,55 @@ class NotificationService {
         return;
       }
 
+      const messaging = firebase.messaging;
+      if (!messaging) {
+        logger.warn(`Firebase messaging unavailable — push to user ${userId} skipped (saved to history).`);
+        return;
+      }
+
+      // FCM requires every data value to be a string.
+      const payload = {};
+      for (const [k, v] of Object.entries(data || {})) {
+        payload[k] = typeof v === 'string' ? v : JSON.stringify(v);
+      }
+
       logger.info(`Sending push to user ${userId} across ${tokens.length} device(s)...`);
 
-      const receiptIdToToken = {};
-      // Expo accepts up to 100 messages per request — chunk to stay within it.
-      for (const tokenChunk of this.chunk(tokens, 100)) {
-        const messages = tokenChunk.map((to) => ({
-          to,
-          title,
-          body,
-          data: data || {},
-          sound: 'default',
-          priority: 'high',
-          channelId: 'default',
-        }));
-
-        let result;
+      // FCM accepts up to 500 tokens per multicast.
+      for (const tokenChunk of this.chunk(tokens, 500)) {
+        let res;
         try {
-          result = await this.expoPost('https://exp.host/--/api/v2/push/send', messages);
+          res = await messaging.sendEachForMulticast({
+            tokens: tokenChunk,
+            notification: { title, body },
+            data: payload,
+            android: {
+              priority: 'high',
+              notification: { channelId: 'default', sound: 'default' },
+            },
+          });
         } catch (e) {
-          logger.error(`Expo push send failed for user ${userId} after retry: ${e.message}`);
+          logger.error(`FCM send failed for user ${userId}: ${e.message}`);
           continue; // don't let one failed chunk abort the rest
         }
 
-        // Expo returns a ticket per message, in the same order we sent them.
-        const tickets = Array.isArray(result?.data) ? result.data : [];
-        for (let i = 0; i < tickets.length; i++) {
-          const ticket = tickets[i];
-          const token = tokenChunk[i];
-          if (ticket?.status === 'error') {
-            logger.warn(`Push ticket error for user ${userId}: ${ticket?.message}`);
-            if (ticket?.details?.error === 'DeviceNotRegistered') {
-              await this.pruneToken(token); // token is dead — stop sending to it
-            }
-          } else if (ticket?.status === 'ok' && ticket?.id) {
-            receiptIdToToken[ticket.id] = token;
+        // One response per token, in the order sent.
+        for (let i = 0; i < res.responses.length; i++) {
+          const r = res.responses[i];
+          if (r.success) continue;
+          const code = r.error?.code || 'unknown';
+          logger.warn(`Push failed for user ${userId} (${code}): ${r.error?.message || ''}`);
+          // These mean the token will never work again, as opposed to a
+          // transient failure worth retrying on the next notification.
+          if (
+            code === 'messaging/registration-token-not-registered' ||
+            code === 'messaging/invalid-registration-token' ||
+            code === 'messaging/invalid-argument'
+          ) {
+            await this.pruneToken(tokenChunk[i]);
           }
         }
       }
-
-      // Durable follow-up to catch failures that surface after the ticket.
-      this.scheduleReceiptCheck(receiptIdToToken);
     } catch (error) {
       logger.error(`Error sending push notification to user ${userId}:`, error);
     }
