@@ -51,7 +51,6 @@ const config = {
   razorpay: {
     keyId: process.env.RAZORPAY_KEY_ID,
     keySecret: process.env.RAZORPAY_KEY_SECRET,
-    accountNumber: process.env.RAZORPAY_ACCOUNT_NUMBER,
   },
 
   // Rate Limiting
@@ -92,7 +91,6 @@ function validateEnv() {
     { name: 'GOOGLE_MAPS_API_KEY', feature: 'Google Places search (primary; falls back to Ola/Nominatim)' },
     { name: 'OLA_MAPS_API_KEY', feature: 'Maps search/routing (falls back to Nominatim/OSRM)' },
     { name: 'STRIPE_SECRET_KEY', feature: 'Stripe payments' },
-    { name: 'RAZORPAY_ACCOUNT_NUMBER', feature: 'Razorpay payouts' },
     { name: 'SPOTTER_DUES_LIMIT', feature: 'Max unpaid dues (INR) before a spotter is blocked from going online (default 200)' },
     { name: 'RAZORPAY_WEBHOOK_SECRET', feature: 'Razorpay webhook payment confirmation (server-to-server settlement)' },
     { name: 'REDIS_URL', feature: 'Durable payout/notification queues (falls back to inline execution with NO retry)' },

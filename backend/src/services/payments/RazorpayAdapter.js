@@ -157,31 +157,6 @@ class RazorpayAdapter {
   }
 
   /**
-   * CREATE TRANSFER (Route system for splitting revenue)
-   * Sends the spotter's share to their linked Razorpay account.
-   */
-  async splitAndTransfer(paymentId, spotterAmount, spotterAccountId) {
-    try {
-      const transfer = await razorpay.payments.transfer(paymentId, {
-        transfers: [
-          {
-            account: spotterAccountId,
-            amount: Math.round(Number(spotterAmount) * 100),
-            currency: 'INR',
-            notes: {
-              info: 'Parking spotter payout'
-            }
-          }
-        ]
-      });
-      return transfer;
-    } catch (error) {
-      logger.error('Razorpay Transfer Error:', error);
-      throw error;
-    }
-  }
-
-  /**
    * REFUND
    * Full or partial refund for a completed payment.
    */
@@ -199,5 +174,6 @@ class RazorpayAdapter {
   }
 }
 
+// The adapter only. The raw SDK instance used to be exported alongside it,
+// which let any caller reach past every check in this file.
 module.exports = new RazorpayAdapter();
-module.exports.razorpayInstance = razorpay;
