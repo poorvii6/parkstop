@@ -233,7 +233,16 @@ model payouts {
   users              users     @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@index([user_id])
-  @@index([booking_id])
+  // One payout per booking, enforced by the database.
+  //
+  // PayoutService.processBookingPayout already locks the booking row and
+  // checks for an existing payout before crediting, but that is application
+  // code: a second code path, a bad migration or a hand-written INSERT could
+  // still credit an owner twice, and money paid twice does not come back.
+  // booking_id is nullable and Postgres allows many NULLs under a unique
+  // index, so payouts not tied to a booking are unaffected.
+  // Replaces @@index([booking_id]) -- a unique constraint indexes the column.
+  @@unique([booking_id])
   @@index([status])
 }
 
