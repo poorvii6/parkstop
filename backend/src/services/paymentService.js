@@ -338,10 +338,21 @@ class PaymentService {
       // Razorpay is the only gateway.
       const refundId = await razorpayAdapter.refund(booking.payment_id, amount);
 
+      // Say which kind of refund it was.
+      //
+      // The cancellation ladder hands back 70% or 50%, never the lot, so
+      // writing 'refunded' for every one of them meant a booking that returned
+      // 280 of 400 read in every report as fully refunded -- and the 120 the
+      // owner and the platform actually kept was invisible. An amount of
+      // undefined means Razorpay refunds the whole payment.
+      const collected = Number(booking.amount_paid || 0);
+      const returned = amount === undefined || amount === null ? collected : Number(amount);
+      const fully = !(collected > 0) || returned >= collected;
+
       await prisma.bookings.update({
         where: { id: parseInt(bookingId) },
         data: {
-          payment_status: 'refunded',
+          payment_status: fully ? 'refunded' : 'partially_refunded',
           updated_at: new Date()
         }
       });

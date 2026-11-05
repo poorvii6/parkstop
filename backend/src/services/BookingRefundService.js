@@ -75,7 +75,7 @@ async function claimForRefund(bookingId, amount, reason) {
  * together — a crash between them would otherwise leave an owner paid for a
  * refund that never happened, or a refund with nobody credited.
  */
-async function settleWithheld(tx, { booking, spot, withheldSpotFee }) {
+async function settleWithheld(tx, { booking, spot, withheldSpotFee, reason }) {
   const settlement = Policy.settlementFor({
     // The rate belongs to the booking, not to the fraction being settled.
     spotFeeTotal: Number(booking.amount_paid) - Number(booking.advance_fee || 0),
@@ -85,10 +85,34 @@ async function settleWithheld(tx, { booking, spot, withheldSpotFee }) {
   });
 
   if (spot?.spotter_id && settlement.ownerAmount > 0) {
-    await tx.users.update({
-      where: { id: spot.spotter_id },
-      data: { balance: { increment: settlement.ownerAmount } },
-    });
+    // Record it, then credit it -- in that order, in this transaction.
+    //
+    // This used to move the balance and write nothing down. The owner saw
+    // their wallet rise with no matching line in Earnings (which reads the
+    // payouts table), and there was no trail on our side either: no way to
+    // answer "where did this money come from", and nothing tying the credit
+    // to the booking that produced it. Every other owner credit writes a row;
+    // this one is the same money and now does too.
+    const already = await tx.payouts.findFirst({ where: { booking_id: parseInt(booking.id) } });
+    if (!already) {
+      await tx.payouts.create({
+        data: {
+          user_id: spot.spotter_id,
+          booking_id: parseInt(booking.id),
+          amount: settlement.ownerAmount,
+          status: 'balance_credited',
+          mode: 'balance',
+          purpose: reason === 'no_show' ? 'no_show_settlement' : 'cancellation_settlement',
+          narration: reason === 'no_show'
+            ? `ParkStop earnings - no-show on booking #${booking.id}`
+            : `ParkStop earnings - cancelled booking #${booking.id}`,
+        },
+      });
+      await tx.users.update({
+        where: { id: spot.spotter_id },
+        data: { balance: { increment: settlement.ownerAmount } },
+      });
+    }
   }
 
   return settlement;
@@ -149,7 +173,7 @@ async function refundBooking(booking, spot, { reason = 'finder_cancelled', force
   }
 
   const settlement = await prisma.$transaction(async (tx) => {
-    const s = await settleWithheld(tx, { booking, spot, withheldSpotFee });
+    const s = await settleWithheld(tx, { booking, spot, withheldSpotFee, reason });
 
     await tx.bookings.update({
       where: { id: parseInt(booking.id) },
