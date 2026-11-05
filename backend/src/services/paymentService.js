@@ -137,6 +137,18 @@ class PaymentService {
     if (!booking) throw new Error('Booking not found');
     if (booking.payment_status === 'paid') throw new Error('This booking is already paid');
 
+    // A booking that never happened must not be collectable.
+    //
+    // This had no status check at all, so an owner could type the id of a
+    // cancelled or expired booking into the QR screen and take money for
+    // parking that never took place -- and because a QR credits ParkStop, the
+    // refund would come out of ParkStop. The order route
+    // (paymentController.createRazorpayOrder) has always refused these; the QR
+    // route is the same money by another door and now refuses them too.
+    if (['cancelled', 'expired'].includes(String(booking.status))) {
+      throw new Error(`This booking is ${booking.status} and cannot be paid.`);
+    }
+
     // Only the booking's finder or the spot's spotter may generate its QR.
     const isFinder = booking.user_id === requesterId;
     const isSpotter = booking.parking_spots && booking.parking_spots.spotter_id === requesterId;
