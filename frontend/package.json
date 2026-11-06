@@ -11,6 +11,7 @@
     "web": "npx expo start --web"
   },
   "dependencies": {
+    "@expo/vector-icons": "^15.0.3",
     "@expo/metro-runtime": "~6.1.2",
     "@maplibre/maplibre-react-native": "^11.0.1",
     "@react-native-async-storage/async-storage": "2.2.0",
