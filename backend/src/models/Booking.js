@@ -1,7 +1,6 @@
 const prisma = require('../config/prisma');
 const logger = require('../utils/logger');
 const PricingService = require('../services/PricingService');
-const CommissionService = require('../services/CommissionService');
 const ParkingSpot = require('./ParkingSpot');
 const BookingRefundPolicy = require('../services/BookingRefundPolicy');
 
@@ -141,13 +140,25 @@ class Booking {
       }
 
       const total_price = Number((hours * pricing.finalPrice).toFixed(2));
-      const commission = CommissionService.calculateCommission(total_price, spot.location_type || 'urban');
 
       // Booking well ahead takes a bay out of circulation while it sits empty.
       // The flat fee compensates the owner for that, which is what makes them
       // willing to accept advance bookings at all. Cash never reaches the
       // threshold because it cannot be booked more than an hour out.
       const advance_fee = BookingRefundPolicy.advanceFeeFor(start, new Date(), payment_mode);
+
+      // Provisional, and normally replaced by complete() once the real time is
+      // known -- but not always: if the booking is paid before it ends (the
+      // owner's QR screen), _finalizeClaimedBooking pays the owner whatever
+      // spotter_earning says at that moment. So it is worked out by the same
+      // function the final split uses, advance fee included, rather than by
+      // commissioning the parking alone and leaving the owner's share of the
+      // fee out of it.
+      const commission = BookingRefundPolicy.completionSplitFor({
+        spotFee: total_price,
+        advanceFee: advance_fee,
+        locationType: spot.location_type || 'urban'
+      });
 
       // Online bookings are paid in full at booking time; cash is collected at
       // the spot, so nothing is banked yet. amount_paid is the floor used at
@@ -357,13 +368,17 @@ class Booking {
       // window they sold. Overstaying still bills the difference.
       const { total: finalPrice, outstanding } = BookingRefundPolicy.finalChargeFor({
         amountPaid: Number(booking.amount_paid) || 0,
-        actualCharge
+        actualCharge,
+        advanceFee: Number(booking.advance_fee) || 0
       });
 
-      const commission = CommissionService.calculateCommission(
-        finalPrice,
-        booking.parking_spots.location_type || 'urban'
-      );
+      // One definition of the split, shared with BookingSettlementService.
+      // finalPrice is parking alone; the advance fee splits by its own ratio.
+      const commission = BookingRefundPolicy.completionSplitFor({
+        spotFee: finalPrice,
+        advanceFee: Number(booking.advance_fee) || 0,
+        locationType: booking.parking_spots.location_type || 'urban'
+      });
 
       const updated = await tx.bookings.update({
         where: { id: parseInt(bookingId) },

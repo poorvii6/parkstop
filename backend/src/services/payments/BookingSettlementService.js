@@ -1,5 +1,5 @@
 const prisma = require('../../config/prisma');
-const CommissionService = require('../CommissionService');
+const BookingRefundPolicy = require('../BookingRefundPolicy');
 const logger = require('../../utils/logger');
 
 /**
@@ -34,10 +34,15 @@ class BookingSettlementService {
       return { spotterEarning: 0, platformFee: 0, settled: false };
     }
 
-    const { spotterEarning, platformFee } = CommissionService.calculateCommission(
-      booking.total_price,
-      spot.location_type
-    );
+    // The same split Booking.complete just wrote, from the same function.
+    // This used to call CommissionService on total_price by itself, which
+    // overwrote what complete() had worked out -- so the advance fee was
+    // commissioned as parking here no matter what complete() did.
+    const { spotterEarning, platformFee } = BookingRefundPolicy.completionSplitFor({
+      spotFee: booking.total_price,
+      advanceFee: Number(booking.advance_fee) || 0,
+      locationType: spot.location_type,
+    });
 
     try {
       await prisma.bookings.update({

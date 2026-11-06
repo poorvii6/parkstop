@@ -212,14 +212,59 @@ function settlementFor({ spotFeeTotal, spotFeeWithheld, advanceFee = 0, location
  * which for a prepaid booking would quietly hand money back to a finder who
  * left early.
  */
-function finalChargeFor({ amountPaid = 0, actualCharge = 0 }) {
+function finalChargeFor({ amountPaid = 0, actualCharge = 0, advanceFee = 0 }) {
   const paid = Math.max(0, Number(amountPaid) || 0);
   const actual = Math.max(0, Number(actualCharge) || 0);
+  const fee = Math.max(0, Number(advanceFee) || 0);
+
+  // Compare like with like.
+  //
+  // amountPaid is the spot fee AND the advance fee; actualCharge is parking
+  // alone. Comparing them directly mixed the two, and whichever won became
+  // total_price. For a prepaid booking that stayed inside its window the paid
+  // figure won, so the advance fee was folded into total_price -- then
+  // commissioned as if it were parking, and charged a second time by
+  // computePayable, which adds advance_fee on top of total_price. Stripping it
+  // first keeps total_price meaning the parking and nothing else.
+  const paidForParking = Math.max(0, paid - fee);
+  const total = round2(Math.max(paidForParking, actual));
 
   return {
-    total: round2(Math.max(paid, actual)),
-    // Anything above the prepaid floor still has to be collected at checkout.
-    outstanding: round2(Math.max(0, actual - paid)),
+    // Parking only. The advance fee is carried in its own column.
+    total,
+    // Everything the booking costs, less everything collected so far.
+    outstanding: round2(Math.max(0, total + fee - paid)),
+  };
+}
+
+/**
+ * Split a completed booking between the owner and the platform.
+ *
+ * The one definition of that split. Booking.complete and
+ * BookingSettlementService both called CommissionService directly, and the
+ * second overwrote the first, so changing one of them did nothing at all.
+ *
+ * Parking is commissioned at the normal rate. The advance fee is not parking
+ * revenue -- it pays the owner for holding a bay empty -- so it splits by its
+ * own fixed ratio, exactly as settlementFor already does for a cancellation.
+ * Those were the same fee settled two different ways.
+ *
+ * @param {number} args.spotFee  the parking charge alone (booking.total_price)
+ * @param {number} args.advanceFee
+ */
+function completionSplitFor({ spotFee, advanceFee = 0, locationType = 'urban' }) {
+  const parking = Math.max(0, Number(spotFee) || 0);
+  const fee = Math.max(0, Number(advanceFee) || 0);
+
+  const { commissionRate, platformFee, spotterEarning } =
+    CommissionService.calculateCommission(parking, locationType);
+
+  const advanceToOwner = round2(fee * ADVANCE_FEE_OWNER_SHARE);
+
+  return {
+    commissionRate,
+    spotterEarning: round2(spotterEarning + advanceToOwner),
+    platformFee: round2(platformFee + (fee - advanceToOwner)),
   };
 }
 
@@ -229,6 +274,7 @@ module.exports = {
   refundFor,
   settlementFor,
   finalChargeFor,
+  completionSplitFor,
   ADVANCE_FEE,
   GRACE_MS,
   MAX_LEAD_MS,
