@@ -290,9 +290,18 @@ export default function FinderDashboard() {
         }
       } catch (err: any) {
         console.warn('Dynamic price API failed, using local estimate', err?.response?.status);
-        // Local fallback: base rate × hours (no surge)
-        if (spot?.price_per_hour) {
-          setCalculatedPrice(Number((spot.price_per_hour * hours).toFixed(2)));
+        // Local fallback: base rate × hours. No surge, so this can quote UNDER
+        // what /bookings/calculate-price would have charged — the server price
+        // is authoritative and is re-fetched before the booking is created.
+        //
+        // Reads `price`, not `price_per_hour`: every site that builds a Spot
+        // (resumeBooking, the initial nearby fetch, fetchNearbySpots) maps the
+        // API's price_per_hour onto `price` with an explicit field list and no
+        // spread, so `price_per_hour` does not exist on a Spot at runtime. This
+        // branch was guarded on it and therefore never ran once — an API
+        // failure silently left the previous spot's price on screen.
+        if (spot?.price) {
+          setCalculatedPrice(Number((spot.price * hours).toFixed(2)));
         }
       } finally {
         setIsCalculatingPrice(false);

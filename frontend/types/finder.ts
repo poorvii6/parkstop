@@ -10,6 +10,20 @@ export type Spot = {
   available: boolean;
   location_type?: string;
   available_slots?: number;
+  /**
+   * KNOWN BUG, logged 6 Nov 2026, deliberately not fixed yet: declared
+   * `number`, but a string at runtime. Both nearby-fetch sites in
+   * `app/finder/index.tsx` build it with
+   * `sp.distance ? parseFloat(sp.distance).toFixed(1) : undefined`, and
+   * `.toFixed()` returns a string. tsc does not catch it because those map
+   * callbacks are typed `(sp: any)`, so the built object is never checked
+   * against Spot.
+   *
+   * Fixing it is a decision, not a typo: either keep the 1-decimal rounding
+   * and type this `string`, or store the raw number and round at the render
+   * site. Check every reader of `distance` before changing it — arithmetic on
+   * what is currently a string would start silently coercing.
+   */
   distance?: number;
   images?: string[];
 };

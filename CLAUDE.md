@@ -95,6 +95,18 @@ cd backend  && npx prisma migrate status
 cd frontend && ./node_modules/.bin/tsc --noEmit
 ```
 
-The type-check has 19 known errors, all strict-null findings in
-`components/MapLibreView.native.tsx` and `app/finder/index.tsx`. Live code,
-worth fixing, not noise.
+The type-check is clean. Keep it that way — a zero means something now.
+
+It used to list 19 known errors, described here as live strict-null findings.
+That was wrong, and the way it was wrong is worth remembering. 16 of the 19
+were inside `MapLibreView.native.tsx` below an unconditional
+`return <GoogleMapNative .../>`, so roughly 490 lines of the component could
+never run. **TypeScript does not narrow types in unreachable code**, so correct
+guards that were already written there — a `destination ? ... : ...` ternary, an
+`if (!userLocation) return`, a `{etaDisplay && ...}` — were all reported as
+possible-null anyway. The errors were an artifact of the dead code, not bugs.
+Fixed by deleting the block on 6 Nov 2026.
+
+The lesson: a cluster of strict-null errors on lines that visibly *are* guarded
+means the compiler thinks the code is unreachable. Look upward for a `return`
+before adding a single `?.`.
