@@ -13,6 +13,10 @@
  * LineLayer -> Layer). Reviving native MapLibre means writing against the v11
  * API, not restoring that code. It is in git history if you want to read it.
  *
+ * As of 6 Nov 2026 this file does not import @maplibre/maplibre-react-native
+ * at all. Nothing in the app does. (That is the native package — `maplibre-gl`
+ * is a different dependency and MapLibreView.web.tsx still needs it.)
+ *
  * Note the licensing constraint before adding any non-Google basemap back:
  * Google Maps Platform Terms 3.2.3(e) forbid showing Google Maps Content —
  * which includes Routes API results — over a non-Google basemap.
@@ -22,27 +26,44 @@ import React from 'react';
 import { View, StyleSheet, Text } from 'react-native';
 import GoogleMapNative from './GoogleMapNative';
 
-// Try to load native MapLibre
-let MapLibreGL: any = null;
-let NATIVE_AVAILABLE = false;
+// Sanity-probe react-native-maps, the library that actually draws every map in
+// this app (through GoogleMapNative). Until 6 Nov 2026 this probed
+// @maplibre/maplibre-react-native, which had not rendered anything for months.
+//
+// WHAT THIS GATE CANNOT DO, so nobody mistakes it for a safety net: this file
+// imports GoogleMapNative statically, and GoogleMapNative imports
+// react-native-maps statically. Both are evaluated when this module is first
+// required — before the probe below runs, and long before anything renders. If
+// react-native-maps were missing, or its native module failed to link, that
+// import would already have thrown and taken the screen (or the app) with it.
+// We would never reach the branch that shows our message. A gate placed after a
+// static import cannot rescue a broken library.
+//
+// WHAT IT ACTUALLY CATCHES is narrower: the module loads, but does not export
+// what GoogleMapNative destructures from it — a major-version rename, a dropped
+// PROVIDER_GOOGLE, a half-written install. Unguarded, that surfaces as
+// "type is invalid" from deep inside render. Guarded, the user gets a sentence
+// they can act on. That is the whole of the benefit. It costs one cached
+// require, so it stays.
+//
+// The four checks mirror GoogleMapNative.tsx:21 exactly. Verified against
+// react-native-maps 1.20.1: MapView is the DEFAULT export (there is no named
+// MapView), Marker and Polyline are named, PROVIDER_GOOGLE is the string
+// 'google'. Do not probe PROVIDER_DEFAULT — it is exported as `undefined`.
+// If you change what GoogleMapNative imports, change this list to match.
+let MAPS_AVAILABLE = false;
 try {
-  MapLibreGL = require('@maplibre/maplibre-react-native');
-  if (MapLibreGL?.default) MapLibreGL = MapLibreGL.default;
-  // MapLibre needs no access token, and v10+ removed setAccessToken entirely.
-  if (typeof MapLibreGL.setAccessToken === 'function') {
-    MapLibreGL.setAccessToken(null);
-  }
-  // This probe no longer picks a renderer — GoogleMapNative draws every map in
-  // the app. All it still decides is whether we render a map at all, via the
-  // NATIVE_AVAILABLE branch below. v11 renamed MapView -> Map, so accept either.
-  //
-  // CAUTION: that leaves the Google map gated on a dependency nothing else
-  // uses. Dropping @maplibre/maplibre-react-native from package.json would
-  // make this false and show "Map unavailable" on a device whose Google map
-  // works perfectly. Decide what this gate is for before removing the package.
-  NATIVE_AVAILABLE = !!(MapLibreGL && (MapLibreGL.Map || MapLibreGL.MapView));
+  const Maps: any = require('react-native-maps');
+  // Accept a default or named MapView: which one Metro hands back depends on
+  // interop, and wrongly blacking out a working map is a worse failure than
+  // letting a broken one reach render.
+  const MapViewExport = Maps?.default ?? Maps?.MapView;
+  MAPS_AVAILABLE = !!MapViewExport && !!Maps?.Marker && !!Maps?.Polyline && !!Maps?.PROVIDER_GOOGLE;
 } catch (e) {
-  console.warn('[MapLibre] Native module not available — map features will be limited:', (e as any)?.message);
+  // Practically unreachable: the static import above resolves the same module
+  // first, so a throw here would have happened there. Belt and braces.
+  MAPS_AVAILABLE = false;
+  console.warn('[map] react-native-maps did not load:', (e as any)?.message);
 }
 
 export interface MapProps {
@@ -93,9 +114,10 @@ export interface MapProps {
 // `<MapLibreView ref={...}>` call site a type error — on a component whose ref
 // (animateCamera) is how the whole map is driven. Let forwardRef infer it.
 const MapLibreView = React.forwardRef((props: MapProps, ref: any) => {
-  // If the native map module didn't load we show a plain message. There is
-  // deliberately no Carto/Ola WebView fallback: the WebViewFallback component
-  // that provided one was deleted on 6 Nov 2026.
+  // react-native-maps loaded but isn't the shape GoogleMapNative needs, so show
+  // a plain message. See the probe above for what this can and cannot catch.
+  // There is deliberately no Carto/Ola WebView fallback: the WebViewFallback
+  // component that provided one was deleted on 6 Nov 2026.
   //
   // LICENSING, not preference: Google Maps Platform Terms 3.2.3(e) ("No Use
   // With Non-Google Maps") prohibits displaying Google Maps Content — which
@@ -103,7 +125,7 @@ const MapLibreView = React.forwardRef((props: MapProps, ref: any) => {
   // fallback rendered Carto tiles while still receiving routeCoords derived
   // from the Google Routes API, which is exactly that. Nothing referenced it
   // by the end, but it shipped in the APK. Do not reintroduce one.
-  if (!NATIVE_AVAILABLE) {
+  if (!MAPS_AVAILABLE) {
     return (
       <View style={[StyleSheet.absoluteFill, styles.mapUnavailable, props.style]}>
         <Text style={styles.mapUnavailableTitle}>Map unavailable</Text>
