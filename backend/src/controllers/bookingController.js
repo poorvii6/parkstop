@@ -446,17 +446,18 @@ class BookingController {
         return res.status(403).json({ success: false, message: 'Not your booking' });
       }
 
-      // Lock-in the quoted price from booking time
-      const basePrice = Number(booking.total_price || 0);
-
-      // Fetch Finder's arrears safely
-      let arrears = 0;
-      if (booking.user_id) {
-        const finder = await require('../config/prisma').users.findUnique({
-          where: { id: booking.user_id }
-        });
-        arrears = finder && finder.balance < 0 ? Math.abs(Number(finder.balance)) : 0;
-      }
+      // Quote exactly what the driver will be charged.
+      //
+      // This read total_price and added arrears by hand, which no longer
+      // matches what the payment routes take. PaymentService.computePayable
+      // also adds the advance fee, which lives in its own column, and takes
+      // off anything already collected -- so after an overstay this screen
+      // showed the whole new price while the QR charged only the difference.
+      // One definition, shared with the order and QR routes.
+      const finder = booking.user_id
+        ? await require('../config/prisma').users.findUnique({ where: { id: booking.user_id } })
+        : null;
+      const { base: basePrice, arrears, total } = PaymentService.computePayable(booking, finder);
 
       // The owner is told the total to collect, but not the breakdown.
       //
@@ -471,13 +472,13 @@ class BookingController {
               booking_id: booking.id,
               base_price: basePrice,
               arrears,
-              total_amount: basePrice + arrears
+              total_amount: total
             }
           : {
               booking_id: booking.id,
               base_price: basePrice,
               includes_arrears: arrears > 0,
-              total_amount: basePrice + arrears
+              total_amount: total
             }
       });
 

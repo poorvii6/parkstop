@@ -94,6 +94,11 @@ const askDriverToPay = async (completed, title, body) => {
 /**
  * Paid bookings whose owner was never credited (a crash, a queue outage).
  * processBookingPayout is idempotent, so retrying is always safe.
+ *
+ * Any payment mode. This used to require payment_mode = 'online', which was
+ * written when cash existed as a separate path; a cash booking whose owner
+ * credit failed was then never retried and the owner simply lost it. What
+ * matters is that the money came in (payment_status = 'paid'), not how.
  */
 const recoverUnsettledPayouts = async (now) => {
   const rows = await prisma.$queryRaw`
@@ -104,7 +109,6 @@ const recoverUnsettledPayouts = async (now) => {
     WHERE p.id IS NULL
       AND b.status = 'completed'
       AND b.payment_status = 'paid'
-      AND b.payment_mode = 'online'
       AND b.spotter_earning > 0
       AND b.updated_at >= ${RECOVERY_SWEEP_FROM}
       AND b.updated_at < ${new Date(now.getTime() - 5 * 60 * 1000)}

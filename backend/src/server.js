@@ -97,6 +97,12 @@ const limiter = rateLimit({
   // Never rate limit the health check — it is how we diagnose the service, and
   // it must not fail because a user was busy.
   skip: (req) => req.path === '/health' ||
+    // Razorpay's webhook is not a user. It arrives from a small pool of
+    // Razorpay IPs shared by every merchant, so a busy spell elsewhere can
+    // spend this budget, and a 429 to Razorpay means a payment confirmation
+    // is retried later instead of settling now. Signature-checked on arrival,
+    // so it needs no flood protection from here.
+    req.path === '/api/v1/payments/webhook' ||
     (process.env.NODE_ENV !== 'production' && process.env.IGNORE_RATE_LIMITS === 'true')
 });
 
