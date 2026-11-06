@@ -7,8 +7,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "start": "npx prisma db push && node src/server.js",
-    "dev": "npx prisma db push && nodemon src/server.js",
+    "start": "npx prisma migrate deploy && node src/server.js",
+    "dev": "npx prisma migrate dev && nodemon src/server.js",
     "dev:push": "npx prisma db push --accept-data-loss && nodemon src/server.js",
     "migrate:create": "npx prisma migrate dev",
     "migrate:deploy": "npx prisma migrate deploy",
