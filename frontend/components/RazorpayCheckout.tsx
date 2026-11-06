@@ -1,5 +1,11 @@
 import React, { useState } from 'react';
-import { Modal, StyleSheet, View, Text, TouchableOpacity, ActivityIndicator, SafeAreaView, Platform, Linking, Alert } from 'react-native';
+import { Modal, StyleSheet, View, Text, TouchableOpacity, ActivityIndicator, Platform, Linking, Alert } from 'react-native';
+// react-native's own SafeAreaView is deprecated and was iOS-only, so on Android
+// this modal drew under the status bar. The safe-area-context one is a native
+// view that applies the insets itself, with no SafeAreaProvider needed above
+// it -- which matters here, because a react-native Modal renders outside the
+// normal tree and would not reach a provider anyway.
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
 
