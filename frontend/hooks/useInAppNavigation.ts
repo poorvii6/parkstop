@@ -76,6 +76,29 @@ const STOPPED_KMH = 8;
  * while the middle value ignores it outright.
  */
 const SPEED_WINDOW = 3;
+/**
+ * Uncertainty above which a fix is treated as poor, in metres.
+ *
+ * Deliberately the same 35m as the finder's own watcher, which has gated on
+ * accuracy for a while — see the handling in app/finder/index.tsx. Navigation
+ * had no gate at all, so it trusted every reading, and that is what let the
+ * arrow jump ~700m while the car stood still.
+ */
+const ACC_REJECT_M = 35;
+/** How recent a clearly better fix must be to justify rejecting a poor one. */
+const ACC_RECENT_MS = 10000;
+/**
+ * How long we go without proof of movement before reporting a standstill.
+ *
+ * This gates SPEED ONLY, and it is deliberately a time window rather than a
+ * per-fix test. Proof of movement arrives sparsely — at 20 km/h with 25m
+ * accuracy the position only clears its own uncertainty radius every ~5s — so
+ * judging each fix on its own and zeroing the rest put a 0 into the speed
+ * window about four times out of five. Simulated over 60 fixes that read 0 for
+ * 97% of a steady 20 km/h, which is far worse than the wander it was meant to
+ * suppress: a driver in traffic needs that number to be right.
+ */
+const STILL_MS = 10000;
 
 /* Flat-earth metres — accurate to well under 1% at city scale. */
 function metres(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
@@ -158,6 +181,27 @@ export function useInAppNavigation({
   const [gpsHeading, setGpsHeading] = useState<number | null>(null);
   const [speedKmh, setSpeedKmh] = useState<number | null>(null);
   const speedWindow = useRef<number[]>([]);
+  /** Accuracy and timestamp of the last fix we accepted. */
+  const lastFixQuality = useRef<{ acc: number; t: number } | null>(null);
+  /**
+   * The last position we actually committed to — NOT simply the previous fix.
+   *
+   * Movement is measured from here, and the anchor does not move unless a fix
+   * is believed. That is what bounds the error: a stationary phone's wander
+   * circles this point forever instead of accumulating, which is how a parked
+   * car drifted hundreds of metres down the road. Real movement outruns the
+   * accuracy radius within a second or two and the anchor follows it.
+   */
+  const anchor = useRef<{ lat: number; lng: number } | null>(null);
+  /**
+   * When the anchor last MOVED — i.e. when we last had proof of motion.
+   *
+   * Starts at -Infinity so a car that has not moved since navigation began
+   * reads a standstill rather than passing the receiver's wander through for
+   * the first few seconds. Establishing the very first anchor does not count:
+   * that fixes a starting point, it does not demonstrate movement.
+   */
+  const anchorMovedAt = useRef(-Infinity);
 
   // Refs so callbacks stay stable and never read stale state.
   const requestId = useRef(0);
@@ -180,6 +224,12 @@ export function useInAppNavigation({
     setGpsHeading(null);
     setSpeedKmh(null);
     speedWindow.current = [];
+    // A new trip must not inherit the last one's anchor, or its first fixes
+    // would be measured against a position possibly miles away and believed
+    // for that reason alone.
+    lastFixQuality.current = null;
+    anchor.current = null;
+    anchorMovedAt.current = -Infinity;
   }, []);
 
   const start = useCallback(async (dest: NavDestination): Promise<StartResult> => {
@@ -241,8 +291,51 @@ export function useInAppNavigation({
           { accuracy: Location.Accuracy.BestForNavigation, timeInterval: 1000, distanceInterval: 2 },
           (l) => {
             const { latitude, longitude, accuracy, heading, speed } = l.coords;
-            // GPS course is far steadier than the compass once the car moves.
-            if (speed != null && speed > 1.5 && heading != null && heading >= 0) setGpsHeading(heading);
+
+            // ── 1. Fix quality ────────────────────────────────────────────
+            // `|| 99`, not `|| 0`. A platform that declines to report accuracy
+            // is saying it does not know, which is the opposite of perfect —
+            // and this value is passed on as the off-route threshold, where
+            // claiming 0 made rerouting maximally twitchy on exactly the fixes
+            // least worth trusting.
+            const acc = accuracy || 99;
+            const q = lastFixQuality.current;
+            // Drop a poor reading when a clearly better one landed recently.
+            // Fails OPEN by design: with no recent better fix this accepts
+            // whatever arrives, so navigation never freezes on a stale
+            // position just because the sky is bad.
+            if (acc > ACC_REJECT_M && q && q.acc < acc / 2 && Date.now() - q.t < ACC_RECENT_MS) return;
+            lastFixQuality.current = { acc, t: Date.now() };
+
+            // ── 2. Is this evidence of movement? ──────────────────────────
+            // A fix whose uncertainty radius exceeds the distance travelled
+            // since the last committed position proves nothing: at 30m
+            // accuracy, a 5m step is indistinguishable from the receiver
+            // wandering. The median+floor filter could not catch this, because
+            // the bad readings were a sustained bias well above STOPPED_KMH
+            // rather than the lone outliers the median removes.
+            const here = { lat: latitude, lng: longitude };
+            const anchorPos = anchor.current;
+            const moved = anchorPos ? metres(anchorPos, here) : Infinity;
+            if (moved >= acc) {
+              // The first anchor only establishes a starting point; it is not
+              // evidence that anything moved.
+              const establishing = !anchorPos;
+              anchor.current = here;
+              if (!establishing) anchorMovedAt.current = Date.now();
+            }
+
+            // Have we had proof of movement recently? This governs the speed
+            // readout and the GPS course, while the anchor above governs the
+            // arrow. Keeping them separate matters: proof arrives sparsely, so
+            // a per-fix test is right for position and wrong for speed.
+            const standingStill = Date.now() - anchorMovedAt.current > STILL_MS;
+
+            // GPS course is far steadier than the compass once the car moves —
+            // but only once it actually does. The old `speed > 1.5` guard is
+            // exactly what the bad readings sailed through.
+            if (!standingStill && speed != null && speed > 1.5 && heading != null && heading >= 0) setGpsHeading(heading);
+
             // Take the middle of the last few fixes, then floor anything
             // slower than a walk to zero, so a parked car reads 0 rather
             // than reporting GPS wander as 6 km/h.
@@ -250,14 +343,24 @@ export function useInAppNavigation({
               setSpeedKmh(null);
             } else {
               const w = speedWindow.current;
-              w.push(speed * 3.6);
+              // Feed 0 while there is no recent proof of movement, rather than
+              // the reported figure — that is what a parked phone reporting
+              // 17 km/h deserves. Once the position has genuinely cleared its
+              // own uncertainty radius, the reading is passed through
+              // untouched, so traffic speeds stay accurate.
+              w.push(standingStill ? 0 : speed * 3.6);
               if (w.length > SPEED_WINDOW) w.shift();
               const sorted = [...w].sort((a, b) => a - b);
               const mid = sorted.length >> 1;
               const median = sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
               setSpeedKmh(median < STOPPED_KMH ? 0 : median);
             }
-            onFixRef.current?.({ lat: latitude, lng: longitude, accuracy: accuracy || 0, heading, speed });
+
+            // Report the ANCHOR, not the raw fix, so the arrow holds still
+            // while the readings wander. The accuracy is still the live one —
+            // position is what we are withholding, not the uncertainty.
+            const pos = anchor.current || here;
+            onFixRef.current?.({ lat: pos.lat, lng: pos.lng, accuracy: acc, heading, speed });
           },
         );
         if (cancelled) s.remove(); // navigation ended while subscribing
