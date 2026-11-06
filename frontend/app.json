@@ -37,7 +37,9 @@
         "ACCESS_COARSE_LOCATION"
       ],
       "blockedPermissions": [
-        "android.permission.ACCESS_BACKGROUND_LOCATION"
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.SYSTEM_ALERT_WINDOW"
       ],
       "config": {
         "googleMaps": {
