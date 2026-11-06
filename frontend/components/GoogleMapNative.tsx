@@ -253,6 +253,15 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
   // camera and know whether it should be visible at all.
   const [mapHeading, setMapHeading] = useState(0);
   const [mapPitch, setMapPitch] = useState(0);
+  // Same value as `mapHeading`, kept as a ref for effects to READ.
+  //
+  // mapHeading has to stay state because three things render from it: the
+  // compass's own visibility, the user puck's rotation and the needle's
+  // transform. But an effect that lists it as a dependency is rebuilt on every
+  // heading read, and heading reads happen continuously while the camera
+  // animates — so effects read this instead. currentZoom is a plain ref for
+  // the same reason; this closes that asymmetry.
+  const mapHeadingRef = useRef(0);
 
   // Compass ("heading-up") browsing mode — the third state of Google's My
   // Location button. Only meaningful outside navigation.
@@ -488,6 +497,23 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
     return () => clearInterval(iv);
   }, [props.isFollowing, props.isActiveNavigation, props.destination, props.searchedPlace]);
 
+  // What the follow camera should re-run for when the heading changes.
+  //
+  // `props.heading` CANNOT be a dependency of the follow effect. Outside
+  // navigation the finder passes the raw device compass, and it calls
+  // setDeviceHeading on every magnetometer tick — about every 45ms. With
+  // props.heading in the dependency list, the follow effect re-ran at that
+  // rate and started a fresh 1000ms animateCamera each time, from the same
+  // coordinates: the map slid and rotated for seconds after opening the
+  // finder, while the position had not changed at all.
+  //
+  // Outside navigation the heading does not steer this camera (headingMode
+  // reads deviceHeading from a ref), so it is pinned to 0 and compass ticks
+  // cannot retrigger anything. While navigating the camera genuinely is
+  // heading-up, so it is live — quantised to whole degrees so sub-degree
+  // course noise cannot restart the animation either.
+  const followHeadingKey = props.isActiveNavigation ? Math.round(props.heading ?? 0) : 0;
+
   // ── Camera follow ─────────────────────────────────────────────
   useEffect(() => {
     if (!props.isFollowing || !props.userLocation || !mapRef.current) return;
@@ -517,7 +543,7 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
         { duration: FOLLOW_EASE_MS }
       );
     }
-  }, [props.userLocation, props.isFollowing, props.isActiveNavigation, props.heading, headingMode, navNorthUp]);
+  }, [props.userLocation, props.isFollowing, props.isActiveNavigation, followHeadingKey, headingMode, navNorthUp]);
 
   // In heading-up mode the map must turn as the phone turns, not only when a
   // new GPS fix lands — standing still and rotating on the spot is exactly when
@@ -530,13 +556,16 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
       if (Date.now() < suppressFollowUntil.current) return;
       // Only move for a turn big enough to see; below that it is compass noise
       // and animating it just makes the map shimmer.
-      const delta = Math.abs((((deviceHeading.current - mapHeading + 540) % 360) - 180));
+      const delta = Math.abs((((deviceHeading.current - mapHeadingRef.current + 540) % 360) - 180));
       if (delta < 3) return;
       markProgrammatic(400);
       mapRef.current.animateCamera({ heading: deviceHeading.current }, { duration: 300 });
     }, 250);
     return () => clearInterval(iv);
-  }, [headingMode, props.isActiveNavigation, props.isFollowing, mapHeading]);
+    // mapHeading deliberately absent: it is read from mapHeadingRef above, so
+    // this interval is built once per mode change instead of being torn down
+    // and rebuilt on every heading read.
+  }, [headingMode, props.isActiveNavigation, props.isFollowing]);
 
   // ── Entering navigation: snap to the driving camera ──────────
   // The follow effect only moves the camera when one of its inputs changes, so
@@ -708,8 +737,19 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
     if (now - lastHeadingRead.current < 90) return;
     lastHeadingRead.current = now;
     mapRef.current?.getCamera?.().then((cam: any) => {
-      if (cam && typeof cam.heading === 'number') setMapHeading(cam.heading);
-      if (cam && typeof cam.pitch === 'number') setMapPitch(cam.pitch);
+      // Re-render ONLY when the compass would visibly move. onRegionChange
+      // fires continuously while the camera animates, so setting state
+      // unconditionally here re-rendered the whole map on every frame of every
+      // camera move — including the moves this handler's own state changes
+      // provoked. The updater form returning the same value makes React bail
+      // out without rendering. 0.5deg matches the compass's visibility test.
+      if (cam && typeof cam.heading === 'number') {
+        mapHeadingRef.current = cam.heading;
+        setMapHeading((h) => (Math.abs(h - cam.heading) > 0.5 ? cam.heading : h));
+      }
+      if (cam && typeof cam.pitch === 'number') {
+        setMapPitch((p) => (Math.abs(p - cam.pitch) > 0.5 ? cam.pitch : p));
+      }
       if (cam && typeof cam.zoom === 'number') currentZoom.current = cam.zoom;
     }).catch(() => {});
   };
