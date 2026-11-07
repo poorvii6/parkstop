@@ -64,15 +64,15 @@ class PaymentController {
       if (['cancelled', 'expired'].includes(String(booking.status))) {
         return res.status(409).json({ success: false, message: `This booking is ${booking.status} and cannot be paid.` });
       }
-      // Same rule as the QR route: no money before the car arrives. Both are
-      // the same payment through different doors, so both refuse a booking
-      // that is still only a held bay.
-      if (String(booking.status) === 'reserved') {
-        return res.status(409).json({
-          success: false,
-          message: 'This booking has not started yet. It can be paid once the owner checks you in.',
-        });
-      }
+      // Deliberately open for the whole life of a live booking: reserved,
+      // active, checkout_pending and completed all pay here. A driver should
+      // never be unable to settle what they owe -- that is how a booking gets
+      // stuck, and a stuck booking blocks the account from booking again.
+      //
+      // This is the only early-payment route. The owner's QR is restricted to
+      // 'completed' (see PaymentService.createBookingQr), so money collected
+      // before the end always arrives through ParkStop's own checkout rather
+      // than face to face at the spot.
 
       // Spot fee + advance fee + any old unpaid dues. The verify step checks the
       // payment against this exact order, and clears only the dues recorded here.

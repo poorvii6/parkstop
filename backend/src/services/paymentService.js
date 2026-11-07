@@ -149,16 +149,20 @@ class PaymentService {
       throw new Error(`This booking is ${booking.status} and cannot be paid.`);
     }
 
-    // Nothing is collected before the car is actually there.
+    // The owner's QR is a CHECKOUT instrument, nothing else.
     //
-    // A 'reserved' booking is a held bay and nothing more: the owner has not
-    // checked anyone in, and the driver may never arrive. Taking money at that
-    // point means ParkStop is holding a payment for parking that has not
-    // happened, and every no-show turns into a refund out of ParkStop's own
-    // account. It also lets an owner lean on a driver to pay up front.
-    // Payment opens once the owner's check-in OTP moves this to 'active'.
-    if (String(booking.status) === 'reserved') {
-      throw new Error('This booking has not started yet. Check the driver in first, then take payment.');
+    // It exists for the moment the driver is standing there at the end: the
+    // session is over, the owner has confirmed it, and the bill is final. Any
+    // earlier and the owner is collecting against a figure that can still
+    // change -- a driver who stays longer owes more, one who cancels is owed a
+    // refund -- and an owner with a QR in hand can lean on a driver to pay
+    // before they have parked.
+    //
+    // A driver who wants to pay earlier still can, through the app's own
+    // Razorpay checkout. That keeps one direction of travel: money reaches
+    // ParkStop first, and ParkStop pays the owner once the session completes.
+    if (String(booking.status) !== 'completed') {
+      throw new Error('This session is not finished yet. Confirm the driver has left, then take payment.');
     }
 
     // Only the booking's finder or the spot's spotter may generate its QR.
