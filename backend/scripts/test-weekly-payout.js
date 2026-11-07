@@ -53,6 +53,10 @@ async function cleanup(ids) {
       const u = await prisma.users.create({
         data: {
           email: `${TAG}-${name}@test.invalid`,
+          // `name` is required on users; `full_name` is the optional one the
+          // app actually displays. Both are set so a test owner looks like a
+          // real row to anything the job touches.
+          name: `test ${name}`,
           full_name: `test ${name}`,
           role: 'SPOTTER',
           firebase_uid: `${TAG}-${name}`,
