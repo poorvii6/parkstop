@@ -79,10 +79,14 @@ async function payoutReadiness(userId) {
   });
   if (!user) return { ready: false, reason: 'User not found', user: null };
   if (user.verification_status !== 'approved') {
-    return { ready: false, reason: 'Complete owner verification before requesting a payout.', user };
+    return { ready: false, reason: 'Finish owner verification to be included in the weekly payout.', user };
   }
-  if (!user.bank_account_number || !user.bank_ifsc) {
-    return { ready: false, reason: 'Verify your bank account in owner verification first.', user };
+  // These are the SAME three fields weeklyPayoutService requires. They must
+  // stay in step: if this check is the looser one, the app tells an owner they
+  // are in Saturday's run and Saturday quietly leaves them out, which is the
+  // one failure an owner cannot see or fix.
+  if (!user.bank_account_number || !user.bank_ifsc || !user.bank_account_name) {
+    return { ready: false, reason: 'Add your bank account number, IFSC and the name on the account to be paid.', user };
   }
   return { ready: true, reason: null, user };
 }

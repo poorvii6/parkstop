@@ -60,6 +60,17 @@ async function payOneOwner(user) {
       });
       // Re-read rather than trust the row the sweep selected: minutes may have
       // passed, and a refund could have taken the balance back down.
+
+      // The sweep's filter is `not: null`, which lets an empty string through
+      // -- and an empty string is exactly what a half-filled form saves. The
+      // app's own eligibility check uses plain truthiness, so without this the
+      // two disagree: the owner is told they are in the run and the run hands
+      // an admin a row with no name or no IFSC to send to. Checked here with
+      // the same truthiness the app uses.
+      if (!fresh.bank_account_number || !fresh.bank_ifsc || !fresh.bank_account_name) {
+        return { skipped: 'bank details incomplete' };
+      }
+
       const amount = Math.floor(Number(fresh.balance || 0) * 100) / 100;
       if (amount < MIN_PAYOUT) return { skipped: `below ₹${MIN_PAYOUT}` };
 
@@ -97,8 +108,14 @@ async function runWeeklyPayouts() {
   const owners = await prisma.users.findMany({
     where: {
       verification_status: 'approved',
+      // All three, not just the account number. A transfer needs the IFSC to
+      // reach the branch and the holder's name to pass the bank's name check --
+      // a mismatch is the usual reason a payout bounces. An owner missing any
+      // of them is skipped and keeps their balance, rather than being handed to
+      // an admin as a row that cannot be sent.
       bank_account_number: { not: null },
       bank_ifsc: { not: null },
+      bank_account_name: { not: null },
       balance: { gte: MIN_PAYOUT },
     },
     select: { id: true, balance: true },
