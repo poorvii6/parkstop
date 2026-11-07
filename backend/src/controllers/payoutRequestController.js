@@ -46,6 +46,25 @@ const view = (r) => ({
   processed_at: r.processed_at,
 });
 
+/**
+ * When the next weekly run happens, as an ISO timestamp.
+ *
+ * Saturday 09:00 India, matching services/weeklyPayoutService.js. Computed
+ * here rather than imported so reading the screen never depends on the job
+ * being scheduled -- the app should still show a date if the worker is down.
+ * If you move the schedule, move this with it.
+ */
+function nextPayoutAt() {
+  // 09:00 IST is 03:30 UTC.
+  const now = new Date();
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 3, 30, 0, 0));
+  // 6 = Saturday. If today is Saturday and the run has already gone, next week.
+  const daysAhead = (6 - d.getUTCDay() + 7) % 7;
+  if (daysAhead === 0 && now.getTime() >= d.getTime()) d.setUTCDate(d.getUTCDate() + 7);
+  else d.setUTCDate(d.getUTCDate() + daysAhead);
+  return d.toISOString();
+}
+
 /** Can this owner be paid? Verified owner + a verified bank account on file. */
 async function payoutReadiness(userId) {
   const user = await prisma.users.findUnique({
@@ -82,67 +101,18 @@ async function myRequests(req, res) {
     return ok(res, {
       requests: rows.map(view),
       open_request: rows.find((r) => r.status === 'requested') ? view(rows.find((r) => r.status === 'requested')) : null,
-      can_request: ready,
+      // `eligible` is not "may they ask" any more -- nobody asks. It is
+      // whether next Saturday's run will include them, so the app can tell an
+      // owner why they are about to be skipped while there is still time to
+      // fix it.
+      eligible: ready,
       blocked_reason: reason,
       min_amount: MIN_PAYOUT,
+      next_payout_at: nextPayoutAt(),
     });
   } catch (err) {
     logger.error('List payout requests error:', err);
     return fail(res, 500, 'Could not load your payouts.');
-  }
-}
-
-/** POST /payouts/request — move the whole wallet balance into a payout request. */
-async function requestPayout(req, res) {
-  try {
-    const { ready, reason } = await payoutReadiness(req.user.id);
-    if (!ready) return fail(res, 403, reason);
-
-    const created = await prisma.$transaction(async (tx) => {
-      // Lock the owner's row: the balance check and the deduction must not
-      // race a second tap or an incoming earning.
-      await tx.$executeRaw`SELECT id FROM users WHERE id = ${req.user.id} FOR UPDATE`;
-
-      const open = await tx.payout_requests.findFirst({
-        where: { user_id: req.user.id, status: 'requested' },
-      });
-      if (open) throw Object.assign(new Error('You already have a payout on its way.'), { status: 409 });
-
-      const user = await tx.users.findUnique({
-        where: { id: req.user.id },
-        select: { balance: true, bank_account_number: true, bank_ifsc: true, bank_account_name: true },
-      });
-      const amount = Math.floor(Number(user.balance || 0) * 100) / 100;
-      if (amount < MIN_PAYOUT) {
-        throw Object.assign(new Error(`You need at least ₹${MIN_PAYOUT} to request a payout.`), { status: 400 });
-      }
-
-      await tx.users.update({
-        where: { id: req.user.id },
-        data: { balance: { decrement: amount } },
-      });
-
-      return tx.payout_requests.create({
-        data: {
-          user_id: req.user.id,
-          amount,
-          status: 'requested',
-          bank_account_name: user.bank_account_name,
-          bank_account_last4: String(user.bank_account_number).slice(-4),
-          bank_ifsc: user.bank_ifsc,
-        },
-      });
-    });
-
-    notifyAdmins('Payout requested', `₹${toNumber(created.amount)} requested by owner #${req.user.id}.`, {
-      type: 'payout_requested', requestId: created.id,
-    });
-
-    return ok(res, view(created), `₹${toNumber(created.amount)} requested. It will reach your bank within 2 working days.`);
-  } catch (err) {
-    if (err.status) return fail(res, err.status, err.message);
-    logger.error('Request payout error:', err);
-    return fail(res, 500, 'Could not request the payout. Please try again.');
   }
 }
 
@@ -249,4 +219,4 @@ async function adminReject(req, res) {
   }
 }
 
-module.exports = { myRequests, requestPayout, adminList, adminMarkPaid, adminReject, MIN_PAYOUT };
+module.exports = { myRequests, adminList, adminMarkPaid, adminReject, MIN_PAYOUT, nextPayoutAt };

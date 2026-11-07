@@ -11,9 +11,14 @@ router.get('/account-status', authenticate, authorize('SPOTTER'), PayoutControll
 // Owner: per-booking earnings credited to the wallet.
 router.get('/history', authenticate, authorize('FINDER', 'SPOTTER'), PayoutController.getPayoutHistory);
 
-// Owner: ask for the wallet balance to be sent to the verified bank account.
+// Owner: their payout history and when the next run is.
+//
+// There is no POST /request any more. Owners used to ask to be paid, which
+// moved their whole balance out of the wallet on the spot and then waited on
+// an admin -- with no admin, no owner-side cancel and nothing sweeping
+// payout_requests, that money was simply stuck. Payouts now run every
+// Saturday for everyone at once (services/weeklyPayoutService.js).
 router.get('/requests', authenticate, authorize('SPOTTER'), PayoutRequests.myRequests);
-router.post('/request', authenticate, authorize('SPOTTER'), PayoutRequests.requestPayout);
 
 // Admin: send the transfer by hand, then mark it paid (or reject it).
 router.get('/admin/requests', authenticate, authorize('ADMIN'), PayoutRequests.adminList);

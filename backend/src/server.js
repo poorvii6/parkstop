@@ -18,6 +18,7 @@ const spotRoutes = require('./routes/spots');
 const bookingRoutes = require('./routes/bookings');
 const locationRoutes = require('./routes/locations');
 const startBookingExpiryJob = require('./services/bookingExpiryService');
+const startWeeklyPayoutJob = require('./services/weeklyPayoutService');
 const analyticsRoutes = require('./routes/analytics'); 
 const paymentRoutes = require('./routes/payments');
 const mapRoutes = require('./routes/maps');
@@ -245,6 +246,7 @@ if (process.env.NODE_ENV !== 'test') {
     }
 
     startBookingExpiryJob();
+    startWeeklyPayoutJob();
   });
 }
 

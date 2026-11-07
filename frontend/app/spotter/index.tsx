@@ -71,11 +71,12 @@ export default function SpotterDashboard() {
     }
   };
 
-  // Payouts: the owner asks, an admin sends the bank transfer by hand.
-  const [isRequesting, setIsRequesting] = useState(false);
+  // Payouts are never requested. Every Saturday morning the weekly run sweeps
+  // each eligible owner's wallet; this is only what the owner is shown.
   const [payoutInfo, setPayoutInfo] = useState<{
     open_request: { id: number; amount: number; bank_account_last4?: string; created_at: string } | null;
-    can_request: boolean;
+    eligible: boolean;
+    next_payout_at: string | null;
     blocked_reason: string | null;
     min_amount: number;
   } | null>(null);
@@ -87,35 +88,27 @@ export default function SpotterDashboard() {
   };
   useEffect(() => { loadPayoutInfo(); }, [dashboardData.balance]);
 
-  const handleRequestPayout = () => {
+  // Payouts are not requested. Every Saturday morning the weekly run sweeps
+  // every eligible owner's wallet and an admin sends the transfers. Tapping
+  // the card explains that, and sends anyone not yet eligible to the step
+  // that is blocking them -- the only thing they can actually act on.
+  const explainPayout = () => {
+    const when = payoutInfo?.next_payout_at
+      ? new Date(payoutInfo.next_payout_at).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short' })
+      : 'Saturday';
+    if (!payoutInfo?.eligible) {
+      Alert.alert('Verify your bank account',
+        payoutInfo?.blocked_reason || 'Complete owner verification to be paid.', [
+          { text: 'Later', style: 'cancel' },
+          { text: 'Open verification', onPress: () => router.push('/spotter/verification' as any) },
+        ]);
+      return;
+    }
     const bal = Number(dashboardData.balance || 0);
-    if (!payoutInfo?.can_request) {
-      Alert.alert('Verify your bank account', payoutInfo?.blocked_reason || 'Complete owner verification first.', [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Open verification', onPress: () => router.push('/spotter/verification' as any) },
-      ]);
-      return;
-    }
-    if (bal < (payoutInfo?.min_amount || 100)) {
-      Alert.alert('Not enough yet', `You can request a payout once you have ₹${payoutInfo?.min_amount || 100}.`);
-      return;
-    }
-    Alert.alert('Request payout', `Send ₹${bal.toFixed(2)} to your verified bank account? It usually arrives within 2 working days.`, [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Request', onPress: async () => {
-        setIsRequesting(true);
-        try {
-          const r = await apiClient.post('/payouts/request');
-          setToast({ msg: r.data?.message || 'Payout requested', kind: 'success' });
-          fetchDashboardData();
-          loadPayoutInfo();
-        } catch (e: any) {
-          Alert.alert('Could not request payout', e.response?.data?.message || 'Please try again.');
-        } finally {
-          setIsRequesting(false);
-        }
-      }},
-    ]);
+    const min = payoutInfo?.min_amount || 100;
+    Alert.alert('Weekly payout', bal < min
+      ? `Payouts go out every ${when}. You need \u20b9${min} to be included \u2014 anything less stays in your wallet and goes with a later payout.`
+      : `\u20b9${bal.toFixed(2)} will be sent to your bank account on ${when}. It usually arrives within 2 working days.`);
   };
 
   if (loading) {
@@ -358,23 +351,24 @@ export default function SpotterDashboard() {
                   <Ionicons name="wallet" size={20} color="#10b981" style={{ marginRight: 8 }} />
                   <View style={{ flex: 1 }}>
                     <Text style={{ color: '#10b981', fontWeight: '800', fontSize: 14 }}>Available to pay out</Text>
-                    <Text style={{ color: '#34d399', fontSize: 12 }}>Your earnings, safe in your ParkStop wallet.</Text>
+                    <Text style={{ color: '#34d399', fontSize: 12 }}>Your 80% share, paid out every Saturday.</Text>
                   </View>
                   <Text style={{ color: '#10b981', fontWeight: '900', fontSize: 18 }}>₹{Number(dashboardData.balance).toFixed(2)}</Text>
                 </View>
                 <TouchableOpacity
-                  onPress={handleRequestPayout}
-                  disabled={isRequesting || !!payoutInfo?.open_request}
-                  style={{ marginTop: 12, backgroundColor: '#10b981', borderRadius: RAD.md, paddingVertical: 12, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, opacity: payoutInfo?.open_request ? 0.5 : 1 }}
+                  onPress={explainPayout}
+                  style={{ marginTop: 12, backgroundColor: 'rgba(16,185,129,0.15)', borderRadius: RAD.md, paddingVertical: 12, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, borderWidth: 1, borderColor: 'rgba(16,185,129,0.3)' }}
                   accessibilityRole="button"
-                  accessibilityLabel={`Request payout of ${Number(dashboardData.balance).toFixed(2)} rupees to your bank account`}
+                  accessibilityLabel={`Next payout ${payoutInfo?.next_payout_at ? new Date(payoutInfo.next_payout_at).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' }) : 'on Saturday'}. Tap for details.`}
                 >
-                  {isRequesting ? <ActivityIndicator color="#fff" /> : (
-                    <>
-                      <Ionicons name="cash-outline" size={16} color="#fff" />
-                      <Text style={{ color: '#fff', fontWeight: '900', fontSize: 14 }}>Request payout</Text>
-                    </>
-                  )}
+                  <Ionicons name="calendar-outline" size={16} color="#10b981" />
+                  <Text style={{ color: '#10b981', fontWeight: '800', fontSize: 13 }}>
+                    {payoutInfo?.open_request
+                      ? 'Payout on its way'
+                      : `Next payout ${payoutInfo?.next_payout_at
+                          ? new Date(payoutInfo.next_payout_at).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })
+                          : 'Saturday'}`}
+                  </Text>
                 </TouchableOpacity>
               </View>
             ) : (
