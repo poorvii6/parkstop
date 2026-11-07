@@ -184,18 +184,38 @@ async function runWeeklyPayouts() {
 }
 
 const startWeeklyPayoutJob = () => {
-  cron.schedule(SCHEDULE, async () => {
-    try {
-      await runWeeklyPayouts();
-    } catch (err) {
-      // A thrown run means nobody was paid this week. It is logged loudly
-      // rather than retried: the next run is seven days away, and a partial
-      // retry against a half-swept batch is worse than a late one.
-      logger.error('Weekly payout run failed:', err);
-    }
-  }, { timezone: TZ });
+  // Scheduling is wrapped, not just the run.
+  //
+  // node-cron throws on an expression or timezone it cannot parse, and this
+  // runs inside the server.listen callback -- so a typo in WEEKLY_PAYOUT_CRON
+  // would be an uncaught exception during boot and the whole API would fail to
+  // start. That is exactly how the prisma db push outage happened: one startup
+  // step threw and took the server with it.
+  //
+  // A payout job that is not scheduled costs a week. An API that will not boot
+  // costs everything, so the server always comes up and the problem is logged
+  // where it can be seen and fixed.
+  try {
+    cron.schedule(SCHEDULE, async () => {
+      try {
+        await runWeeklyPayouts();
+      } catch (err) {
+        // A thrown run means nobody was paid this week. It is logged loudly
+        // rather than retried: the next run is seven days away, and a partial
+        // retry against a half-swept batch is worse than a late one.
+        logger.error('Weekly payout run failed:', err);
+      }
+    }, { timezone: TZ });
 
-  logger.info(`Weekly payout job scheduled: ${SCHEDULE} (${TZ}), minimum ₹${MIN_PAYOUT}`);
+    logger.info(`Weekly payout job scheduled: ${SCHEDULE} (${TZ}), minimum ₹${MIN_PAYOUT}`);
+  } catch (err) {
+    logger.error(
+      `Weekly payout job NOT scheduled -- check WEEKLY_PAYOUT_CRON ("${SCHEDULE}") and ` +
+      `WEEKLY_PAYOUT_TZ ("${TZ}"). No owner will be paid until this is fixed and the ` +
+      `server restarted. The API is running normally otherwise:`,
+      err
+    );
+  }
 };
 
 module.exports = startWeeklyPayoutJob;
