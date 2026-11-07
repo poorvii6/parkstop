@@ -149,6 +149,18 @@ class PaymentService {
       throw new Error(`This booking is ${booking.status} and cannot be paid.`);
     }
 
+    // Nothing is collected before the car is actually there.
+    //
+    // A 'reserved' booking is a held bay and nothing more: the owner has not
+    // checked anyone in, and the driver may never arrive. Taking money at that
+    // point means ParkStop is holding a payment for parking that has not
+    // happened, and every no-show turns into a refund out of ParkStop's own
+    // account. It also lets an owner lean on a driver to pay up front.
+    // Payment opens once the owner's check-in OTP moves this to 'active'.
+    if (String(booking.status) === 'reserved') {
+      throw new Error('This booking has not started yet. Check the driver in first, then take payment.');
+    }
+
     // Only the booking's finder or the spot's spotter may generate its QR.
     const isFinder = booking.user_id === requesterId;
     const isSpotter = booking.parking_spots && booking.parking_spots.spotter_id === requesterId;

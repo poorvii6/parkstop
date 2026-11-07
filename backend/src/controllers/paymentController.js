@@ -64,6 +64,15 @@ class PaymentController {
       if (['cancelled', 'expired'].includes(String(booking.status))) {
         return res.status(409).json({ success: false, message: `This booking is ${booking.status} and cannot be paid.` });
       }
+      // Same rule as the QR route: no money before the car arrives. Both are
+      // the same payment through different doors, so both refuse a booking
+      // that is still only a held bay.
+      if (String(booking.status) === 'reserved') {
+        return res.status(409).json({
+          success: false,
+          message: 'This booking has not started yet. It can be paid once the owner checks you in.',
+        });
+      }
 
       // Spot fee + advance fee + any old unpaid dues. The verify step checks the
       // payment against this exact order, and clears only the dues recorded here.
