@@ -102,6 +102,31 @@ async function payOneOwner(user) {
 async function runWeeklyPayouts() {
   const started = Date.now();
 
+  // Do nothing at all unless somebody can finish the job.
+  //
+  // This run does not send money. It moves the balance out of the owner's
+  // wallet and leaves a 'requested' row for an admin to pay by hand. Only a
+  // user with role ADMIN can mark one paid or reject it back into the wallet,
+  // so with no admin account the rows can be neither paid nor returned: every
+  // eligible owner's wallet reads zero, their app says the money is on its
+  // way, and nothing can move it either direction.
+  //
+  // That is the same trap the old Request Payout button set, sprung
+  // automatically on everyone at once instead of one owner at a time. So the
+  // run refuses to start. Balances stay where they are, owners keep seeing
+  // their real earnings, and next Saturday picks it all up once an admin
+  // exists. Doing nothing is recoverable; draining wallets into rows nobody
+  // can action is not.
+  const adminCount = await prisma.users.count({ where: { role: 'ADMIN' } });
+  if (adminCount === 0) {
+    logger.error(
+      'Weekly payout run ABORTED: no ADMIN account exists, so nothing could be paid out ' +
+      'or returned. No balance has been touched. Create an admin user and the next run ' +
+      'will include everyone who is owed.'
+    );
+    return { paid: 0, skipped: 0, failed: 0, total: 0, aborted: 'no admin account' };
+  }
+
   // Only owners who can actually be paid: verified, with a bank account that
   // passed the Cashfree name match, and enough in the wallet to be worth a
   // transfer. Everyone else simply rolls over to next week.

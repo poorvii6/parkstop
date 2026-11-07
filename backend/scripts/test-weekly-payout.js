@@ -49,6 +49,31 @@ async function cleanup(ids) {
   let failures = 0;
 
   try {
+    // The run refuses to start with no ADMIN account, because the rows it
+    // writes can then be neither paid nor returned. Report the real state of
+    // the database first -- that is the thing worth knowing before Saturday --
+    // then give the test its own admin so the paying path is exercised either
+    // way. The test admin is cleaned up with everything else.
+    const realAdmins = await prisma.users.count({ where: { role: 'ADMIN' } });
+    if (realAdmins === 0) {
+      console.log('\n  !! No ADMIN account exists in this database.');
+      console.log('     The real Saturday run will ABORT and pay nobody until you create one.');
+      console.log('     (This test makes a temporary admin so it can still check the payout logic.)');
+    } else {
+      console.log(`\n  ${realAdmins} admin account(s) found — the real run can proceed.`);
+    }
+
+    const admin = await prisma.users.create({
+      data: {
+        email: `${TAG}-admin@test.invalid`,
+        name: 'test admin',
+        full_name: 'test admin',
+        role: 'ADMIN',
+        firebase_uid: `${TAG}-admin`,
+      },
+    });
+    made.push({ id: admin.id, name: 'ADMIN (helper)', before: 0, expect: 'KEPT' });
+
     for (const [name, fields, expect] of CASES) {
       const u = await prisma.users.create({
         data: {
@@ -74,6 +99,7 @@ async function cleanup(ids) {
     console.log('  ' + '-'.repeat(58));
 
     for (const t of made) {
+      if (t.name === 'ADMIN (helper)') continue;
       const after = Number((await prisma.users.findUnique({ where: { id: t.id }, select: { balance: true } })).balance);
       const row = await prisma.payout_requests.findFirst({ where: { user_id: t.id } });
       const paid = row ? Number(row.amount) : 0;
