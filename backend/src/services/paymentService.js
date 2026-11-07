@@ -121,11 +121,25 @@ class PaymentService {
     // would send real money out of the business for a booking the finder can
     // still cancel, and the refund would have nothing to claw back from.
     // The owner is paid when the session actually completes.
-    const isPrepaidReservation = updatedBooking?.status === 'reserved';
+    // The owner is paid when the SESSION is over, never before.
+    //
+    // This used to defer only for a 'reserved' booking, back when that was the
+    // one way to pay early. A driver can now settle at any point in a live
+    // booking, and paying while 'active' credited the owner there and then --
+    // on a figure that was not final. If the driver then overstayed, the bill
+    // rose, the driver paid the difference, and the owner got none of it:
+    // payouts.booking_id is UNIQUE and processBookingPayout had already run.
+    // A 1-hour booking used for 3 left the owner on 85 of the 240 they had
+    // earned, with ParkStop holding the rest.
+    //
+    // Waiting for 'completed' means spotter_earning has been recomputed
+    // against the time actually used, and the top-up payment itself lands
+    // here with the booking completed, which is what triggers the credit.
+    const sessionOver = updatedBooking?.status === 'completed';
 
-    if (isPrepaidReservation) {
+    if (!sessionOver) {
       logger.info(
-        `Booking ${bookingId} prepaid while still reserved — payout deferred until the session completes`
+        `Booking ${bookingId} paid while ${updatedBooking?.status} — payout deferred until the session completes`
       );
     } else {
       try {
