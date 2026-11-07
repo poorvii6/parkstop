@@ -64,24 +64,25 @@ class PaymentController {
       if (['cancelled', 'expired'].includes(String(booking.status))) {
         return res.status(409).json({ success: false, message: `This booking is ${booking.status} and cannot be paid.` });
       }
-      // Money changes hands once, at the end, and only then.
+      // Open for the whole life of a live booking: reserved, active,
+      // checkout_pending and completed all pay here.
       //
-      // Same rule as the owner's QR (PaymentService.createBookingQr): a
-      // booking is payable when the driver has ended the session and the
-      // owner has confirmed it. Before that the bill is not final -- a driver
-      // who stays longer owes more -- so anything collected earlier would
-      // have to be topped up or refunded.
+      // Collecting nothing until the end was tried and reverted. It made an
+      // expired or cancelled booking cost the owner a held bay for nothing --
+      // the refund ladder hands them a share of what was withheld, and with
+      // nothing collected there is nothing to share. A driver who books a
+      // slot and never arrives should not be free.
       //
-      // Collecting nothing up front removes a whole class of problems: an
-      // expired reservation has no money to argue about, a cancellation needs
-      // no refund, and a driver can never be out of pocket for a session that
-      // did not happen.
-      if (String(booking.status) !== 'completed') {
-        return res.status(409).json({
-          success: false,
-          message: 'This session is not finished yet. You can pay once the owner confirms your checkout.',
-        });
-      }
+      // The risk it reintroduces is narrow and understood: a reserved booking
+      // expires on the CHECK-IN OTP window, and that OTP is the owner's, so
+      // an expiry cannot distinguish "the driver never came" from "the owner
+      // never checked them in". A driver who paid up front and was let down
+      // by the owner loses the no-show rate. Check-in is mandatory and
+      // near-universal in practice, so this is accepted rather than unseen.
+      //
+      // The owner's QR stays restricted to 'completed'
+      // (PaymentService.createBookingQr). Early money arrives through
+      // ParkStop's own checkout, never face to face at the spot.
 
       // Spot fee + advance fee + any old unpaid dues. The verify step checks the
       // payment against this exact order, and clears only the dues recorded here.

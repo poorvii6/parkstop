@@ -1,6 +1,7 @@
 const razorpayAdapter = require('./payments/RazorpayAdapter');
 const prisma = require('../config/prisma');
 const logger = require('../utils/logger');
+const NotificationService = require('./notificationService');
 
 class PaymentService {
 
@@ -89,6 +90,27 @@ class PaymentService {
         data: { balance: { increment: arrearsToClear } }
       });
       logger.info(`Cleared ₹${arrearsToClear} arrears for user ${updatedBooking.user_id} during checkout of booking ${bookingId}`);
+    }
+
+    // Tell the owner their money has arrived.
+    //
+    // Placed here because this is the ONE point every payment passes through
+    // -- the app's verify call, the Razorpay webhook and a scanned QR all end
+    // up in this function -- and because it is after the atomic claim, so a
+    // retry or a second caller that loses the race sends nothing.
+    //
+    // It matters most for a payment made mid-booking: without it, an owner
+    // reaches the end of the session with no idea they have been paid and
+    // raises their QR. Best effort, never blocking the settlement.
+    try {
+      const paidSpot = updatedBooking?.parking_spots;
+      if (paidSpot?.spotter_id) {
+        await NotificationService.notifyBookingPaid(
+          paidSpot.spotter_id, updatedBooking, paidSpot, paidForThisBooking,
+        );
+      }
+    } catch (notifyErr) {
+      logger.warn(`Paid-notification failed for booking ${bookingId}: ${notifyErr?.message}`);
     }
 
     // Trigger online payout to Spotter.

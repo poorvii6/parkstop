@@ -224,6 +224,69 @@ class NotificationService {
   }
 
   /**
+   * Tell the owner a booking has been PAID.
+   *
+   * The owner needs this for two reasons. First, it is their money arriving
+   * and they should not have to go looking for it. Second, it stops a double
+   * charge: a driver can settle in the app at any point in a live booking,
+   * and an owner who does not know that will hold up their own QR at the end.
+   * createBookingQr does refuse an already-paid booking, but the two can race
+   * -- a QR raised just before the app payment lands stays scannable, and the
+   * second payment is money taken against a booking that has nothing left to
+   * pay. Knowing early is what stops the QR being raised at all.
+   *
+   * @param {object} booking  needs id, total_price, advance_fee, hours,
+   *                          start_time, end_time, slot_name
+   * @param {object} spot     for the title
+   * @param {number} amount   what was actually collected, in rupees
+   */
+  static async notifyBookingPaid(spotterId, booking, spot, amount) {
+    if (!spotterId) return;
+
+    const paid = Number(amount || 0).toFixed(2);
+    const where = [spot?.title, booking?.slot_name].filter(Boolean).join(' · ') || 'your spot';
+
+    // The window they are being paid for, in the owner's own terms.
+    const fmt = (d) => {
+      if (!d) return null;
+      try {
+        return new Date(d).toLocaleString('en-IN', {
+          day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', hour12: true,
+        });
+      } catch { return null; }
+    };
+    const from = fmt(booking?.start_time);
+    const to = fmt(booking?.actual_end_time || booking?.end_time);
+    const when = from && to ? `${from} to ${to}` : from || '';
+
+    try {
+      emitToUser(spotterId, 'booking:paid', {
+        bookingId: booking?.id,
+        amount: Number(paid),
+        slot_name: booking?.slot_name || null,
+        spot_title: spot?.title || null,
+        start_time: booking?.start_time || null,
+        end_time: booking?.actual_end_time || booking?.end_time || null,
+      });
+    } catch (e) {
+      logger.warn(`booking:paid emit failed for booking ${booking?.id}: ${e?.message}`);
+    }
+
+    await this.sendNotification(spotterId, {
+      title: 'Payment received',
+      message: `\u20b9${paid} paid for ${where}${when ? ` (${when})` : ''}. Do not ask for payment again.`,
+      type: 'booking_paid',
+      data: { bookingId: booking?.id, amount: Number(paid) },
+    });
+
+    await this.sendPushNotification(spotterId, {
+      title: `Paid \u20b9${paid} \ud83d\udcb0`,
+      body: `${where}${when ? ` · ${when}` : ''} is settled. No need to collect anything.`,
+      data: { bookingId: booking?.id, type: 'booking_paid', amount: Number(paid) },
+    });
+  }
+
+  /**
    * Notify finder that booking is confirmed
    */
   static async notifyBookingConfirmed(finderId, booking) {
