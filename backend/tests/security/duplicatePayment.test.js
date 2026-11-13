@@ -17,6 +17,9 @@ jest.mock('../../src/config/prisma', () => ({
   users: { update: jest.fn(), findMany: jest.fn() },
   payouts: { findFirst: jest.fn(), create: jest.fn() },
   $transaction: jest.fn(),
+  // The payments ledger: every captured payment gets a row, written in the
+  // same transaction as the atomic claim.
+  payments: { findUnique: jest.fn(), create: jest.fn(), count: jest.fn() },
 }));
 jest.mock('../../src/services/payments/RazorpayAdapter', () => ({
   verifyPaymentSignature: jest.fn(),
@@ -67,6 +70,13 @@ const refundCalls = () => rzp.refund.mock.calls.map((c) => [c[0], c[1]]);
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // Ledger defaults: nothing recorded yet, and $transaction runs its
+  // callback against the same mocks.
+  prisma.payments.findUnique.mockResolvedValue(null);
+  prisma.payments.create.mockResolvedValue({});
+  prisma.payments.count.mockResolvedValue(1);
+  prisma.$transaction.mockImplementation(async (fn) =>
+    typeof fn === 'function' ? fn(prisma) : Promise.all(fn));
   prisma.bookings.findUnique.mockResolvedValue(PAID);
   prisma.bookings.findFirst.mockResolvedValue(null);
   // The booking is already paid, so the atomic claim finds nothing to claim.
@@ -121,8 +131,15 @@ describe('a duplicate arriving on the owner QR', () => {
     expect(loud).toContain('110');
   });
 
-  test('the same payment arriving again is a retry, not a duplicate', async () => {
-    // Razorpay redelivers the very payment that settled the booking.
+  test('a payment already in the ledger is a retry, not a duplicate', async () => {
+    // Razorpay redelivers a payment that settled this booking. What makes it a
+    // retry is that the LEDGER has it, not that it matches the booking's
+    // payment_id — that column holds only the most recent payment, so an
+    // overstay top-up would have overwritten an earlier legitimate one.
+    prisma.payments.findUnique.mockResolvedValue({
+      id: 1, booking_id: 1, razorpay_payment_id: ORIGINAL, amount: 110, arrears_cleared: 0,
+    });
+
     const r = await PaymentService.settleFromQrCredit(
       { ...DUP_PAYMENT, id: ORIGINAL }, QR_ENTITY
     );
