@@ -157,6 +157,20 @@ class RazorpayAdapter {
   }
 
   /**
+   * LIST REFUNDS on a payment, newest first as Razorpay returns them.
+   * Used when reconciling a refund whose first attempt timed out.
+   */
+  async fetchRefunds(paymentId) {
+    try {
+      const res = await razorpay.payments.fetchMultipleRefund(paymentId);
+      return Array.isArray(res?.items) ? res.items : [];
+    } catch (error) {
+      logger.error('Razorpay Fetch Refunds Error:', error);
+      throw error;
+    }
+  }
+
+  /**
    * REFUND
    * Full or partial refund for a completed payment.
    */

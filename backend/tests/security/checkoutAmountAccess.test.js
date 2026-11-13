@@ -13,6 +13,10 @@ jest.mock('../../src/config/prisma', () => ({
 jest.mock('../../src/models/Booking', () => ({ findById: jest.fn() }));
 jest.mock('../../src/models/ParkingSpot', () => ({ findById: jest.fn() }));
 jest.mock('../../src/services/notificationService', () => ({}));
+// requireActual(paymentService) below loads the adapter, which builds a live
+// Razorpay client at import and throws without RAZORPAY_KEY_ID. Nothing here
+// talks to the gateway, so the adapter is stubbed and the suite runs anywhere.
+jest.mock('../../src/services/payments/RazorpayAdapter', () => ({}));
 // The endpoint quotes through PaymentService.computePayable -- the same
 // function the order and QR routes charge by -- so the real one is used here.
 jest.mock('../../src/services/paymentService', () => ({

@@ -11,15 +11,28 @@
  * that runs twice is money out of the business with no way to get it back, and
  * refunds are exactly the code path people retry — a timeout, a double tap, a
  * queue redelivery.
+ *
+ * Refund lifecycle (bookings.refund_status):
+ *   null           nothing owed yet
+ *   'claimable'    a no-show the finder may still claim
+ *   'processing'   claimed; the gateway call is in flight
+ *   'processed'    money returned
+ *   'failed'       a network or 5xx error; retried by the sweep and by a claim
+ *   'needs_review' Razorpay refused it (4xx) or the ledger does not add up;
+ *                  never retried automatically — an admin has to look
  */
 
 const prisma = require('../config/prisma');
 const logger = require('../utils/logger');
 const PaymentService = require('./paymentService');
+const NotificationService = require('./notificationService');
 const Policy = require('./BookingRefundPolicy');
 
 /** Statuses from which no further refund may be started. */
-const TERMINAL_REFUND_STATUSES = ['processing', 'processed'];
+const TERMINAL_REFUND_STATUSES = ['processing', 'processed', 'needs_review'];
+
+/** A failed refund waits this long before the sweep tries it again. */
+const RETRY_AFTER_MS = 15 * 60 * 1000;
 
 /**
  * Work out what a booking is owed without changing anything.
@@ -29,17 +42,19 @@ const TERMINAL_REFUND_STATUSES = ['processing', 'processed'];
  * implementation in the frontend that drifts.
  */
 function quote(booking, { reason = 'finder_cancelled', now = new Date() } = {}) {
-  const spotFee = Number(booking.amount_paid) - Number(booking.advance_fee || 0);
-
   return Policy.refundFor({
     // Only money actually collected can come back. For a cash booking nothing
     // was banked, so the whole ladder resolves to zero — correctly.
-    spotFee: Math.max(0, spotFee),
+    spotFee: Math.max(0, spotFeeOf(booking)),
     advanceFee: Number(booking.advance_fee) || 0,
     startTime: booking.start_time,
     now,
     reason,
   });
+}
+
+function spotFeeOf(booking) {
+  return Number(booking.amount_paid) - Number(booking.advance_fee || 0);
 }
 
 /**
@@ -49,13 +64,19 @@ function quote(booking, { reason = 'finder_cancelled', now = new Date() } = {}) 
  * state, so of two concurrent callers exactly one proceeds. Everything after
  * this point is safe to do exactly once.
  *
+ * @param {object} [opts]
+ * @param {string} [opts.onlyFrom]  additionally require this current status.
+ *   A retry passes 'failed', so it can never pick up a row that is still
+ *   claimable, or one a first attempt is about to write.
  * @returns {Promise<boolean>} whether this caller won the claim
  */
-async function claimForRefund(bookingId, amount, reason) {
+async function claimForRefund(bookingId, amount, reason, { onlyFrom } = {}) {
+  const guard = { OR: [{ refund_status: null }, { refund_status: { notIn: TERMINAL_REFUND_STATUSES } }] };
+
   const claimed = await prisma.bookings.updateMany({
     where: {
       id: parseInt(bookingId),
-      OR: [{ refund_status: null }, { refund_status: { notIn: TERMINAL_REFUND_STATUSES } }],
+      AND: onlyFrom ? [guard, { refund_status: onlyFrom }] : [guard],
     },
     data: {
       refund_status: 'processing',
@@ -69,6 +90,24 @@ async function claimForRefund(bookingId, amount, reason) {
 }
 
 /**
+ * Is this gateway error one that retrying will never fix?
+ *
+ * The Razorpay SDK rejects with { statusCode, error: { code, description } }.
+ * A 4xx means Razorpay looked at the request and refused it — the payment is
+ * already fully refunded, the amount is wrong, the payment is too old — and
+ * asking again gets the same answer. Network errors (no status) and 5xx are
+ * worth another go.
+ *
+ * 408 and 429 are 4xx in name only: a timeout and a rate limit. Both clear on
+ * their own, so they are treated as temporary.
+ */
+function isPermanentGatewayError(err) {
+  const status = Number(err?.statusCode ?? err?.status ?? err?.response?.status);
+  if (!Number.isFinite(status)) return false;
+  return status >= 400 && status < 500 && status !== 408 && status !== 429;
+}
+
+/**
  * Pay the owner and the platform their share of whatever was not refunded.
  *
  * Runs in the caller's transaction so the credit and the booking record move
@@ -78,7 +117,7 @@ async function claimForRefund(bookingId, amount, reason) {
 async function settleWithheld(tx, { booking, spot, withheldSpotFee, reason }) {
   const settlement = Policy.settlementFor({
     // The rate belongs to the booking, not to the fraction being settled.
-    spotFeeTotal: Number(booking.amount_paid) - Number(booking.advance_fee || 0),
+    spotFeeTotal: spotFeeOf(booking),
     spotFeeWithheld: withheldSpotFee,
     advanceFee: Number(booking.advance_fee) || 0,
     locationType: spot?.location_type || 'urban',
@@ -119,6 +158,109 @@ async function settleWithheld(tx, { booking, spot, withheldSpotFee, reason }) {
 }
 
 /**
+ * The refund is done (now, or by an earlier attempt that timed out): credit
+ * the owner their share and mark the booking processed, together.
+ */
+async function recordProcessed(booking, spot, { amount, reason, refundId }) {
+  const { withheldSpotFee } = Policy.withheldFor({
+    spotFee: spotFeeOf(booking),
+    advanceFee: Number(booking.advance_fee) || 0,
+    refundAmount: amount,
+  });
+
+  const settlement = await prisma.$transaction(async (tx) => {
+    const s = await settleWithheld(tx, { booking, spot, withheldSpotFee, reason });
+
+    await tx.bookings.update({
+      where: { id: parseInt(booking.id) },
+      data: {
+        refund_status: 'processed',
+        refund_amount: amount,
+        refund_id: typeof refundId === 'string' ? refundId : null,
+        refunded_at: new Date(),
+        cancellation_reason: reason,
+        updated_at: new Date(),
+      },
+    });
+
+    return s;
+  });
+
+  logger.info(
+    `Booking ${booking.id} refunded ₹${amount} (${reason}); ` +
+    `owner credited ₹${settlement.ownerAmount}, platform kept ₹${settlement.platformAmount}`
+  );
+
+  return settlement;
+}
+
+/** Tell every admin a refund needs a human. Never throws. */
+async function notifyAdminsNeedsReview(booking, amount, why) {
+  try {
+    const admins = await prisma.users.findMany({ where: { role: 'ADMIN' }, select: { id: true } });
+    if (!admins.length) {
+      logger.error(`Refund for booking ${booking.id} needs review but there is no admin account to tell`);
+      return;
+    }
+    await Promise.all(admins.map((a) => NotificationService.sendPushNotification(a.id, {
+      title: 'Refund needs review',
+      body: `Booking #${booking.id}: ₹${amount} refund could not be paid automatically. ${why}`,
+      data: { type: 'refund_needs_review', bookingId: parseInt(booking.id) },
+    })));
+  } catch (err) {
+    logger.warn(`Admin refund-review notice failed for booking ${booking.id}: ${err?.message}`);
+  }
+}
+
+/** Hand a booking to a human. It is never retried automatically after this. */
+async function markNeedsReview(booking, amount, why) {
+  logger.error(`Refund for booking ${booking.id} needs review: ${why}`);
+  await prisma.bookings.update({
+    where: { id: parseInt(booking.id) },
+    data: { refund_status: 'needs_review', updated_at: new Date() },
+  });
+  await notifyAdminsNeedsReview(booking, amount, why);
+}
+
+/**
+ * Leave the booking for the retry sweep. updated_at is what the sweep's
+ * 15-minute wait is measured from, so it is always refreshed here.
+ */
+async function markFailed(booking) {
+  await prisma.bookings.update({
+    where: { id: parseInt(booking.id) },
+    data: { refund_status: 'failed', updated_at: new Date() },
+  });
+}
+
+/**
+ * Call the gateway for a booking this caller has already claimed, then record
+ * the outcome. Shared by the first attempt and by every retry.
+ */
+async function payClaimed(booking, spot, { amount, reason }) {
+  let refundId = null;
+  if (amount > 0) {
+    try {
+      refundId = await PaymentService.processRefund(booking.id, amount);
+    } catch (err) {
+      if (isPermanentGatewayError(err)) {
+        const desc = err?.error?.description || err?.message || 'refused by Razorpay';
+        await markNeedsReview(booking, amount, `Razorpay refused it: ${desc}`);
+        return { status: 'needs_review', refunded: false, error: desc };
+      }
+      // Hand it back so the sweep or a claim can pick it up. Leaving it at
+      // 'processing' would strand it forever behind the idempotency guard.
+      logger.error(`Gateway refund failed for booking ${booking.id}:`, err);
+      await markFailed(booking);
+      return { status: 'failed', refunded: false, error: err?.message };
+    }
+  }
+
+  const settlement = await recordProcessed(booking, spot, { amount, reason, refundId });
+  return { status: 'processed', refunded: true, settlement, refundId };
+}
+
+/**
  * Refund a booking according to the ladder, and settle what is withheld.
  *
  * @param {object} booking  must include amount_paid, advance_fee, start_time, payment_id
@@ -128,6 +270,12 @@ async function settleWithheld(tx, { booking, spot, withheldSpotFee, reason }) {
  * @param {boolean} opts.force  process even if the ladder says it needs a claim
  */
 async function refundBooking(booking, spot, { reason = 'finder_cancelled', force = false, now = new Date() } = {}) {
+  // A refund that already failed once has a figure on it. Re-quoting now could
+  // pay a different one, so it goes down the retry path instead.
+  if (booking.refund_status === 'failed') {
+    return retryRefund(booking, spot, { notifyDriver: false });
+  }
+
   const q = quote(booking, { reason, now });
 
   // A no-show refund is deliberately not automatic — the finder has to ask. The
@@ -151,56 +299,114 @@ async function refundBooking(booking, spot, { reason = 'finder_cancelled', force
     return { ...q, status: 'already_handled', refunded: false };
   }
 
-  const withheldSpotFee = Math.max(
-    0,
-    Number(booking.amount_paid) - Number(booking.advance_fee || 0) - q.refundAmount
-  );
+  const outcome = await payClaimed(booking, spot, { amount: q.refundAmount, reason });
+  return { ...q, ...outcome };
+}
 
-  let refundId = null;
-  if (q.refundAmount > 0) {
+/**
+ * Try a 'failed' refund again.
+ *
+ * Two rules make this safe, and both have tests that fail if they are removed:
+ *
+ *  1. Ask Razorpay first. A refund call can time out after Razorpay has
+ *     already accepted it. Calling refund again would pay it twice — and since
+ *     Razorpay only stops a refund that exceeds what is left on the payment, a
+ *     50% claim retried blindly goes through and returns 100%.
+ *
+ *  2. Pay the refund_amount already stored on the booking. Re-quoting later
+ *     can move the booking to a worse tier, 70% down to 50%, and the finder
+ *     was already told the first figure.
+ *
+ * @param {object} opts
+ * @param {boolean} [opts.notifyDriver=true]  push the driver on success. The
+ *   claim endpoint turns this off — the driver is looking at the answer.
+ */
+async function retryRefund(booking, spot, { notifyDriver = true } = {}) {
+  const amount = Number(booking.refund_amount);
+  const reason = booking.cancellation_reason || 'finder_cancelled';
+  const { withheldAmount } = Policy.withheldFor({
+    spotFee: spotFeeOf(booking),
+    advanceFee: Number(booking.advance_fee) || 0,
+    refundAmount: amount,
+  });
+  const base = { refundAmount: amount, withheldAmount, retried: true };
+
+  if (!(amount > 0)) {
+    // A failed refund with no figure on it should not exist. Do not invent one.
+    const won = await claimForRefund(booking.id, booking.refund_amount, reason, { onlyFrom: 'failed' });
+    if (!won) return { ...base, status: 'already_handled', refunded: false };
+    await markNeedsReview(booking, 0, 'No refund amount is stored on the booking.');
+    return { ...base, status: 'needs_review', refunded: false };
+  }
+
+  const won = await claimForRefund(booking.id, amount, reason, { onlyFrom: 'failed' });
+  if (!won) {
+    logger.info(`Retry for booking ${booking.id} lost the claim; someone else has it`);
+    return { ...base, status: 'already_handled', refunded: false };
+  }
+
+  if (!booking.payment_id) {
+    await markNeedsReview(booking, amount, 'The booking has no payment id to refund against.');
+    return { ...base, status: 'needs_review', refunded: false };
+  }
+
+  // Rule 1: did the earlier attempt actually go through?
+  let state;
+  try {
+    state = await PaymentService.fetchRefundState(booking.payment_id);
+  } catch (err) {
+    if (isPermanentGatewayError(err)) {
+      const desc = err?.error?.description || err?.message;
+      await markNeedsReview(booking, amount, `Could not read the payment from Razorpay: ${desc}`);
+      return { ...base, status: 'needs_review', refunded: false, error: desc };
+    }
+    logger.warn(`Could not check payment for booking ${booking.id} before retrying: ${err?.message}`);
+    await markFailed(booking);
+    return { ...base, status: 'failed', refunded: false, error: err?.message };
+  }
+
+  const coverage = Policy.refundCoverage({ owed: amount, refundedPaise: state.refundedPaise });
+  let outcome;
+
+  if (coverage === 'full') {
+    // It went through last time. Record it; do not call refund.
+    logger.warn(`Booking ${booking.id}: earlier refund of ₹${amount} had succeeded; recording it`);
+    await PaymentService.markPaymentRefunded(booking, amount);
+    const settlement = await recordProcessed(booking, spot, { amount, reason, refundId: state.refundId });
+    outcome = { status: 'processed', refunded: true, reconciled: true, settlement, refundId: state.refundId };
+  } else if (coverage !== 'none') {
+    const rupees = (state.refundedPaise / 100).toFixed(2);
+    await markNeedsReview(
+      booking, amount,
+      `Razorpay shows ₹${rupees} already refunded against ₹${amount} owed.`
+    );
+    return { ...base, status: 'needs_review', refunded: false };
+  } else {
+    // Rule 2: the stored figure, not a fresh quote.
+    outcome = await payClaimed(booking, spot, { amount, reason });
+  }
+
+  if (outcome.status === 'processed' && notifyDriver && booking.user_id) {
     try {
-      refundId = await PaymentService.processRefund(booking.id, q.refundAmount);
-    } catch (err) {
-      // Hand it back so a human or a retry can pick it up. Leaving it at
-      // 'processing' would strand it forever behind the idempotency guard.
-      logger.error(`Gateway refund failed for booking ${booking.id}:`, err);
-      await prisma.bookings.update({
-        where: { id: parseInt(booking.id) },
-        data: { refund_status: 'failed', updated_at: new Date() },
+      await NotificationService.sendPushNotification(booking.user_id, {
+        title: 'Your refund is on its way',
+        body: `₹${amount} for booking #${booking.id} is being returned to your original payment method.`,
+        data: { type: 'refund_processed', bookingId: parseInt(booking.id) },
       });
-      return { ...q, status: 'failed', refunded: false, error: err.message };
+    } catch (err) {
+      logger.warn(`Refund-success push failed for booking ${booking.id}: ${err?.message}`);
     }
   }
 
-  const settlement = await prisma.$transaction(async (tx) => {
-    const s = await settleWithheld(tx, { booking, spot, withheldSpotFee, reason });
-
-    await tx.bookings.update({
-      where: { id: parseInt(booking.id) },
-      data: {
-        refund_status: 'processed',
-        refund_amount: q.refundAmount,
-        refund_id: typeof refundId === 'string' ? refundId : null,
-        refunded_at: new Date(),
-        cancellation_reason: reason,
-        updated_at: new Date(),
-      },
-    });
-
-    return s;
-  });
-
-  logger.info(
-    `Booking ${booking.id} refunded ₹${q.refundAmount} (${q.tier}); ` +
-    `owner credited ₹${settlement.ownerAmount}, platform kept ₹${settlement.platformAmount}`
-  );
-
-  return { ...q, status: 'processed', refunded: true, settlement, refundId };
+  return { ...base, ...outcome };
 }
 
 module.exports = {
   quote,
   refundBooking,
+  retryRefund,
   claimForRefund,
+  isPermanentGatewayError,
   TERMINAL_REFUND_STATUSES,
+  RETRY_AFTER_MS,
 };

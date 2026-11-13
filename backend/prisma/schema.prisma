@@ -49,7 +49,8 @@ model bookings {
   //   'claimable'  a no-show the finder may still claim
   //   'processing' handed to the gateway
   //   'processed'  money returned
-  //   'failed'     gateway refused; needs a human
+  //   'failed'     network or 5xx error; retried by the sweep and by a claim
+  //   'needs_review' Razorpay refused it (4xx) or amounts disagree; needs a human
   refund_amount       Decimal?  @db.Decimal(10, 2)
   refund_status       String?   @db.VarChar(20)
   refund_id           String?   @db.VarChar(100)
