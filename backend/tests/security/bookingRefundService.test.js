@@ -12,13 +12,14 @@ jest.mock('../../src/config/prisma', () => ({
   users: { update: jest.fn(), findMany: jest.fn() },
   payouts: { findFirst: jest.fn(), create: jest.fn() },
   $transaction: jest.fn(),
+  $queryRaw: jest.fn(),
 }));
 jest.mock('../../src/services/paymentService', () => ({
   processRefund: jest.fn(),
   fetchRefundState: jest.fn(),
   markPaymentRefunded: jest.fn(),
 }));
-jest.mock('../../src/services/notificationService', () => ({ sendPushNotification: jest.fn() }));
+jest.mock('../../src/services/notificationService', () => ({ sendPushNotification: jest.fn(), notifyNoShowCredit: jest.fn() }));
 jest.mock('../../src/utils/logger', () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }));
 // For the sweep and controller tests further down.
 jest.mock('node-cron', () => ({ schedule: jest.fn() }));
@@ -32,7 +33,7 @@ const prisma = require('../../src/config/prisma');
 const PaymentService = require('../../src/services/paymentService');
 const NotificationService = require('../../src/services/notificationService');
 const RefundService = require('../../src/services/BookingRefundService');
-const { retryFailedRefunds } = require('../../src/services/bookingExpiryService');
+const { retryFailedRefunds, settleClaimableNoShows, remindUnclaimedRefunds } = require('../../src/services/bookingExpiryService');
 const Booking = require('../../src/models/Booking');
 const ParkingSpot = require('../../src/models/ParkingSpot');
 const BookingController = require('../../src/controllers/bookingController');
@@ -46,6 +47,9 @@ const makeBooking = (over = {}) => ({
   spot_id: 9,
   amount_paid: 450,
   advance_fee: 50,
+  // Written in the same update as amount_paid, so a booking with money on it
+  // always carries this. Owner settlement is gated on it.
+  payment_status: 'paid',
   start_time: new Date(Date.now() + 4 * HOUR),
   payment_id: 'pay_abc123',
   ...over,
@@ -137,10 +141,10 @@ describe('when the gateway fails', () => {
   });
 });
 
-describe('no-shows have to be claimed', () => {
-  const noShow = () => makeBooking({ start_time: new Date(Date.now() - 2 * HOUR) });
+describe('no-shows: the driver claims, the owner is paid anyway', () => {
+  const noShow = (over = {}) => makeBooking({ start_time: new Date(Date.now() - 2 * HOUR), ...over });
 
-  test('the sweep marks it claimable and pays nothing', async () => {
+  test('the driver is not refunded until they ask', async () => {
     const r = await RefundService.refundBooking(noShow(), spot, { reason: 'no_show' });
 
     expect(r.status).toBe('claimable');
@@ -148,15 +152,193 @@ describe('no-shows have to be claimed', () => {
     expect(PaymentService.processRefund).not.toHaveBeenCalled();
   });
 
-  test('the claim endpoint forces it through', async () => {
-    const r = await RefundService.refundBooking(noShow(), spot, { reason: 'no_show', force: true });
+  test('the owner IS credited at expiry, without waiting for a claim', async () => {
+    // The whole point. A driver who vanishes never claims, and the owner held
+    // the bay empty regardless, so their share of the withheld money is theirs
+    // now. Owner: 80% of the ₹200 withheld, plus half the ₹50 advance fee.
+    const r = await RefundService.refundBooking(noShow(), spot, { reason: 'no_show' });
+
+    expect(prisma.payouts.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          user_id: 7,
+          booking_id: 100,
+          amount: 185,
+          purpose: 'no_show_settlement',
+          mode: 'balance',
+        }),
+      })
+    );
+    expect(prisma.users.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 7 }, data: { balance: { increment: 185 } } })
+    );
+    expect(prisma.users.update).toHaveBeenCalledTimes(1);
+    expect(r.settlement.ownerAmount).toBe(185);
+  });
+
+  test('no gateway call is made to credit the owner', async () => {
+    // Owner payouts are manual: this is a wallet credit, never a Razorpay call.
+    await RefundService.refundBooking(noShow(), spot, { reason: 'no_show' });
+    expect(PaymentService.processRefund).not.toHaveBeenCalled();
+  });
+
+  test('the payouts row, the credit and the booking update are ONE transaction', async () => {
+    const order = [];
+    prisma.$transaction.mockImplementation(async (fn) => fn({
+      users: { update: () => { order.push('credit'); return Promise.resolve({}); } },
+      bookings: { update: () => { order.push('booking'); return Promise.resolve({}); } },
+      payouts: {
+        findFirst: () => Promise.resolve(null),
+        create: () => { order.push('payout_row'); return Promise.resolve({}); },
+      },
+    }));
+
+    await RefundService.refundBooking(noShow(), spot, { reason: 'no_show' });
+
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    // Recorded before the balance moves, and the booking marked with them.
+    expect(order).toEqual(['payout_row', 'credit', 'booking']);
+    // Nothing was written outside the transaction.
+    expect(prisma.bookings.update).not.toHaveBeenCalled();
+    expect(prisma.users.update).not.toHaveBeenCalled();
+  });
+
+  test('an unpaid no-show is marked claimable but credits nobody', async () => {
+    // An owner is never credited before the money is in.
+    const r = await RefundService.refundBooking(
+      noShow({ amount_paid: 0, advance_fee: 0, payment_status: 'pending' }), spot, { reason: 'no_show' }
+    );
+
+    expect(r.status).toBe('claimable');
+    expect(prisma.payouts.create).not.toHaveBeenCalled();
+    expect(prisma.users.update).not.toHaveBeenCalled();
+    // Still claimable, so the driver keeps whatever right they had.
+    expect(prisma.bookings.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ refund_status: 'claimable' }) })
+    );
+  });
+
+  test('money recorded but not yet confirmed paid credits nobody', async () => {
+    // The gate is the ONLY thing stopping this one: amount_paid is set, so the
+    // withheld figure is non-zero and the settlement would otherwise pay out.
+    // An owner is never credited before the money is in.
+    const r = await RefundService.refundBooking(
+      noShow({ payment_status: 'pending' }), spot, { reason: 'no_show' }
+    );
+
+    expect(r.status).toBe('claimable');
+    expect(prisma.payouts.create).not.toHaveBeenCalled();
+    expect(prisma.users.update).not.toHaveBeenCalled();
+  });
+
+  test('a later claim refunds the DRIVER and does not credit the owner twice', async () => {
+    // Expiry already settled the owner, so the payouts row is there.
+    prisma.payouts.findFirst.mockResolvedValue({ id: 55, booking_id: 100, amount: 185 });
+
+    const r = await RefundService.refundBooking(
+      noShow({ refund_status: 'claimable', refund_amount: 200 }),
+      spot,
+      { reason: 'no_show', force: true }
+    );
 
     expect(r.status).toBe('processed');
-    expect(PaymentService.processRefund).toHaveBeenCalledWith(100, 200);
-    // Owner: 80% of the ₹200 withheld, plus half the fee.
+    expect(PaymentService.processRefund).toHaveBeenCalledWith(100, 200); // driver paid
+    expect(prisma.payouts.create).not.toHaveBeenCalled();               // no second row
+    expect(prisma.users.update).not.toHaveBeenCalled();                 // no second credit
+  });
+});
+
+describe('backfilling no-shows left claimable before expiry paid owners', () => {
+  const claimableRow = (over = {}) => ({
+    id: 100,
+    user_id: 5,
+    spot_id: 9,
+    amount_paid: 450,
+    advance_fee: 50,
+    refund_amount: 200,
+    refund_status: 'claimable',
+    payment_status: 'paid',
+    cancellation_reason: 'no_show',
+    ...over,
+  });
+
+  beforeEach(() => {
+    prisma.$queryRaw.mockResolvedValue([{ id: 100 }]);
+    prisma.bookings.findUnique.mockResolvedValue(claimableRow());
+    prisma.parking_spots.findUnique.mockResolvedValue(spot);
+  });
+
+  test('credits the owner their share, once', async () => {
+    const n = await settleClaimableNoShows();
+
+    expect(n).toBe(1);
+    expect(prisma.payouts.create).toHaveBeenCalledTimes(1);
     expect(prisma.users.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { balance: { increment: 185 } } })
+      expect.objectContaining({ where: { id: 7 }, data: { balance: { increment: 185 } } })
     );
+    // A backfill must not move the driver's money.
+    expect(PaymentService.processRefund).not.toHaveBeenCalled();
+  });
+
+  test('it pays the stored refund_amount, not a fresh quote', async () => {
+    // A re-quote on a long-expired booking would produce a different withheld
+    // figure, and the driver was already told the stored one.
+    prisma.bookings.findUnique.mockResolvedValue(claimableRow({ refund_amount: 100 }));
+
+    await settleClaimableNoShows();
+
+    // Withheld is now ₹300: 80% of it is ₹240, plus ₹25 of the fee.
+    expect(prisma.users.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { balance: { increment: 265 } } })
+    );
+  });
+
+  test('a second sweep over the same booking credits nothing', async () => {
+    // Guard 2: the row written by the first sweep is found inside the
+    // transaction, even if the query still hands the booking over.
+    prisma.payouts.findFirst.mockResolvedValue({ id: 55, booking_id: 100 });
+
+    await settleClaimableNoShows();
+
+    expect(prisma.payouts.create).not.toHaveBeenCalled();
+    expect(prisma.users.update).not.toHaveBeenCalled();
+  });
+
+  test('the query itself excludes bookings that already have a payout', async () => {
+    // Guard 1. Asserted on the SQL because it is the guard that keeps the
+    // batch moving forward instead of re-reading settled rows every minute.
+    await settleClaimableNoShows();
+
+    const sql = prisma.$queryRaw.mock.calls[0][0].join('?');
+    expect(sql).toMatch(/LEFT JOIN payouts/i);
+    expect(sql).toMatch(/p\.id IS NULL/i);
+    expect(sql).toMatch(/refund_status = 'claimable'/i);
+    // An owner is never credited before the money is in.
+    expect(sql).toMatch(/payment_status = 'paid'/i);
+    // Skips bookings that withhold nothing, which would never write a row and
+    // so would be re-selected forever.
+    expect(sql).toMatch(/refund_amount < b\.amount_paid/i);
+  });
+
+  test('an unpaid booking handed over anyway is still not credited', async () => {
+    prisma.bookings.findUnique.mockResolvedValue(claimableRow({ payment_status: 'pending' }));
+
+    await settleClaimableNoShows();
+
+    expect(prisma.payouts.create).not.toHaveBeenCalled();
+    expect(prisma.users.update).not.toHaveBeenCalled();
+  });
+
+  test('one bad row does not stop the rest of the batch', async () => {
+    prisma.$queryRaw.mockResolvedValue([{ id: 100 }, { id: 101 }]);
+    prisma.bookings.findUnique
+      .mockRejectedValueOnce(new Error('spot deleted'))
+      .mockResolvedValueOnce(claimableRow({ id: 101 }));
+
+    const n = await settleClaimableNoShows();
+
+    expect(n).toBe(2);
+    expect(prisma.payouts.create).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -471,5 +653,109 @@ describe('policy helpers used by the retry', () => {
     const w = Policy.withheldFor({ spotFee: 400, advanceFee: 50, refundAmount: q.refundAmount });
     expect(w.withheldAmount).toBe(q.withheldAmount);
     expect(w.withheldSpotFee).toBe(120);
+  });
+});
+
+describe('the owner is told about a no-show credit', () => {
+  // The money lands in their wallet with no booking to explain it, so the
+  // only thing standing between that and "where did this come from" is this
+  // notification.
+  const claimableBooking = (over = {}) => ({
+    id: 100, user_id: 5, spot_id: 9,
+    amount_paid: 450, advance_fee: 50, payment_status: 'paid',
+    start_time: new Date(Date.now() + 4 * 3600000),
+    ...over,
+  });
+
+  test('a credit at expiry is announced to the owner, once, with the amount', async () => {
+    prisma.payouts.findFirst.mockResolvedValue(null);
+    await RefundService.settleNoShowWithheld(claimableBooking(), spot, {
+      refundAmount: 200, markClaimable: true,
+    });
+
+    expect(NotificationService.notifyNoShowCredit).toHaveBeenCalledTimes(1);
+    const [ownerId, , , amount] = NotificationService.notifyNoShowCredit.mock.calls[0];
+    expect(ownerId).toBe(spot.spotter_id);
+    expect(amount).toBe(185);   // 80% of the 200 withheld + half the 50 fee
+  });
+
+  test('a booking already settled says nothing: no second announcement', async () => {
+    // The later claim runs the same settlement. Telling them again would read
+    // as a second payment.
+    prisma.payouts.findFirst.mockResolvedValue({ id: 1, booking_id: 100 });
+    await RefundService.settleNoShowWithheld(claimableBooking(), spot, { refundAmount: 200 });
+
+    expect(NotificationService.notifyNoShowCredit).not.toHaveBeenCalled();
+  });
+
+  test('nothing collected, nothing credited, nothing announced', async () => {
+    prisma.payouts.findFirst.mockResolvedValue(null);
+    await RefundService.settleNoShowWithheld(
+      claimableBooking({ payment_status: 'pending' }), spot, { refundAmount: 200 },
+    );
+
+    expect(NotificationService.notifyNoShowCredit).not.toHaveBeenCalled();
+  });
+
+  test('a push that throws does not undo the credit', async () => {
+    prisma.payouts.findFirst.mockResolvedValue(null);
+    NotificationService.notifyNoShowCredit.mockRejectedValueOnce(new Error('device offline'));
+
+    const r = await RefundService.settleNoShowWithheld(claimableBooking(), spot, { refundAmount: 200 });
+
+    expect(r.credited).toBe(true);
+    expect(prisma.users.update).toHaveBeenCalled();
+  });
+});
+
+describe('reminding a driver about an unclaimed refund', () => {
+  const now = new Date('2026-11-13T10:00:00Z');
+  const DAY = 24 * 3600000;
+
+  test('reminds at three days and again at seven, and the last one says so', async () => {
+    prisma.bookings.findMany
+      .mockResolvedValueOnce([{ id: 100, user_id: 5, refund_amount: 200 }])   // 3-day window
+      .mockResolvedValueOnce([{ id: 101, user_id: 6, refund_amount: 150 }]);  // 7-day window
+
+    const sent = await remindUnclaimedRefunds(now);
+
+    expect(sent).toBe(2);
+    const first = NotificationService.sendPushNotification.mock.calls[0][1];
+    const last = NotificationService.sendPushNotification.mock.calls[1][1];
+    expect(first.title).toContain('200');
+    expect(first.title).not.toMatch(/last/i);
+    expect(last.title).toMatch(/last reminder/i);
+  });
+
+  test('each milestone is a one-minute window, so nobody is pestered every minute', async () => {
+    prisma.bookings.findMany.mockResolvedValue([]);
+    await remindUnclaimedRefunds(now);
+
+    const [three, seven] = prisma.bookings.findMany.mock.calls.map((c) => c[0].where);
+    expect(three.refund_status).toBe('claimable');
+    expect(three.updated_at.lte).toEqual(new Date(now.getTime() - 3 * DAY));
+    expect(three.updated_at.gt).toEqual(new Date(now.getTime() - 3 * DAY - 60000));
+    expect(seven.updated_at.lte).toEqual(new Date(now.getTime() - 7 * DAY));
+  });
+
+  test('only refunds with money on them are chased', async () => {
+    prisma.bookings.findMany.mockResolvedValue([]);
+    await remindUnclaimedRefunds(now);
+    expect(prisma.bookings.findMany.mock.calls[0][0].where.refund_amount).toEqual({ gt: 0 });
+  });
+
+  test('one failed push does not stop the rest', async () => {
+    prisma.bookings.findMany
+      .mockResolvedValueOnce([
+        { id: 100, user_id: 5, refund_amount: 200 },
+        { id: 101, user_id: 6, refund_amount: 300 },
+      ])
+      .mockResolvedValueOnce([]);
+    NotificationService.sendPushNotification.mockRejectedValueOnce(new Error('no token'));
+
+    const sent = await remindUnclaimedRefunds(now);
+
+    expect(sent).toBe(1);
+    expect(NotificationService.sendPushNotification).toHaveBeenCalledTimes(2);
   });
 });

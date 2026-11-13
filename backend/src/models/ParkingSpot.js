@@ -390,7 +390,22 @@ class ParkingSpot {
       status: 'completed',
     };
 
-    const [earnings, pendingEarnings] = await Promise.all([
+    // Settlements are earnings too, and they are NOT in the bookings sum.
+    //
+    // When a driver cancels or never turns up, the owner is credited their
+    // share of what is withheld -- real money, in their wallet, recorded as a
+    // payouts row. But the booking behind it is 'cancelled' or 'expired', so
+    // a total built from completed bookings alone leaves it out. The owner
+    // then sees their wallet hold more than they have supposedly "earned",
+    // with nothing on screen to explain the gap. Counted here so the two
+    // figures describe the same money.
+    const { SETTLEMENT_PURPOSES } = require('../constants/payoutPurposes');
+    const settledForSpotter = {
+      user_id: parseInt(userId),
+      purpose: { in: SETTLEMENT_PURPOSES },
+    };
+
+    const [earnings, pendingEarnings, settlementEarnings] = await Promise.all([
       prisma.bookings.aggregate({
         where: { ...completedForSpotter, payment_status: { in: SETTLED_STATUSES } },
         _sum: { spotter_earning: true },
@@ -398,6 +413,10 @@ class ParkingSpot {
       prisma.bookings.aggregate({
         where: { ...completedForSpotter, NOT: { payment_status: { in: SETTLED_STATUSES } } },
         _sum: { spotter_earning: true },
+      }),
+      prisma.payouts.aggregate({
+        where: settledForSpotter,
+        _sum: { amount: true },
       }),
     ]);
 
@@ -449,15 +468,25 @@ class ParkingSpot {
       }
     });
 
-    const trend = Array(7).fill(0);
-    recentCompletedBookings.forEach(item => {
-      const earnedAt = item.actual_end_time || item.created_at;
-      if (!earnedAt) return;
-      const dayDiff = Math.round((todayIstDay - istDayStart(earnedAt)) / DAY_MS);
-      if (dayDiff >= 0 && dayDiff < 7) {
-        trend[6 - dayDiff] += Number(item.spotter_earning || 0);
-      }
+    // The same settlements, on the same chart. Leaving them out of the trend
+    // while counting them in the total above would make the bars and the
+    // headline figure disagree, which is worse than either being wrong alone.
+    // Bucketed by when the credit was written, which is when it was earned.
+    const recentSettlements = await prisma.payouts.findMany({
+      where: { ...settledForSpotter, created_at: { gte: windowStart } },
+      select: { created_at: true, amount: true },
     });
+
+    const trend = Array(7).fill(0);
+    const addToTrend = (when, amount) => {
+      if (!when) return;
+      const dayDiff = Math.round((todayIstDay - istDayStart(when)) / DAY_MS);
+      if (dayDiff >= 0 && dayDiff < 7) trend[6 - dayDiff] += Number(amount || 0);
+    };
+    recentCompletedBookings.forEach((item) => {
+      addToTrend(item.actual_end_time || item.created_at, item.spotter_earning);
+    });
+    recentSettlements.forEach((p) => addToTrend(p.created_at, p.amount));
 
     // Calculate Current Surge Factor (Average for their active spots)
     const activeSpots = await prisma.parking_spots.findMany({
@@ -573,7 +602,8 @@ class ParkingSpot {
 
     return {
       active_spots: activeSpotsCount,
-      earnings: Number(earnings._sum.spotter_earning || 0),
+      earnings: Number(earnings._sum.spotter_earning || 0)
+        + Number(settlementEarnings._sum.amount || 0),
       // Completed, but the money has not been collected yet. Surfaced so the
       // dashboard can say so plainly instead of quietly counting it as income.
       pending_earnings: Number(pendingEarnings._sum.spotter_earning || 0),

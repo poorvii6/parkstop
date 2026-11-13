@@ -8,12 +8,19 @@
  */
 jest.mock('../../src/config/prisma', () => ({
   bookings: { findMany: jest.fn() },
+  payouts: { findMany: jest.fn() },
 }));
 jest.mock('../../src/models/ParkingSpot', () => ({}));
 jest.mock('../../src/utils/logger', () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }));
 
 const prisma = require('../../src/config/prisma');
 const SpotController = require('../../src/controllers/spotController');
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  // This file is about booking totals; no settlements in the window.
+  prisma.payouts.findMany.mockResolvedValue([]);
+});
 
 const makeRes = () => ({
   statusCode: 200, body: null,

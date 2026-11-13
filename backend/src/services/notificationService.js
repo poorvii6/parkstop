@@ -224,6 +224,53 @@ class NotificationService {
   }
 
   /**
+   * Tell the owner they have been paid for a booking that never happened.
+   *
+   * A driver who reserved a bay and never arrived still costs the owner the
+   * bay, so their share of what is withheld is credited the moment the hold
+   * expires. Without this the money simply appeared: the wallet went up with
+   * no booking to explain it, and the only trace was a line in payout history
+   * nobody opens. An owner who cannot account for money in their own wallet
+   * does not trust the wallet.
+   *
+   * Best effort, and never in the way of the credit itself -- the money is
+   * already theirs whether or not the phone is reachable.
+   *
+   * @param {object} booking  needs id, start_time
+   * @param {object} spot     for the title
+   * @param {number} amount   what was credited, in rupees
+   */
+  static async notifyNoShowCredit(spotterId, booking, spot, amount) {
+    if (!spotterId || !(Number(amount) > 0)) return;
+
+    const paid = Number(amount).toFixed(2);
+    const where = [spot?.title, booking?.slot_name].filter(Boolean).join(' \u00b7 ') || 'your spot';
+
+    try {
+      emitToUser(spotterId, 'booking:no_show_credit', {
+        bookingId: booking?.id,
+        amount: Number(paid),
+        spot_title: spot?.title || null,
+      });
+    } catch (e) {
+      logger.warn(`no_show_credit emit failed for booking ${booking?.id}: ${e?.message}`);
+    }
+
+    await this.sendNotification(spotterId, {
+      title: `\u20b9${paid} added to your wallet`,
+      message: `A driver did not turn up at ${where}. You are paid for holding the bay.`,
+      type: 'no_show_credit',
+      data: { bookingId: booking?.id, amount: Number(paid) },
+    });
+
+    await this.sendPushNotification(spotterId, {
+      title: `\u20b9${paid} added to your wallet \ud83d\udcb0`,
+      body: `A driver did not turn up at ${where}. You are paid for holding the bay.`,
+      data: { bookingId: booking?.id, type: 'no_show_credit' },
+    });
+  }
+
+  /**
    * Tell the owner a booking has been PAID.
    *
    * The owner needs this for two reasons. First, it is their money arriving
