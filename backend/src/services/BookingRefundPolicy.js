@@ -165,6 +165,43 @@ function refundFor({ spotFee, advanceFee = 0, startTime, now, reason = 'finder_c
 }
 
 /**
+ * What is withheld once a given refund has been paid.
+ *
+ * refundFor works this out from a fresh quote. A retried refund must not
+ * re-quote — the tier can drop from 70% to 50% while it waits — so it pays the
+ * amount already stored on the booking and needs the withheld side of that
+ * same figure.
+ */
+function withheldFor({ spotFee, advanceFee = 0, refundAmount }) {
+  const fee = Math.max(0, Number(spotFee) || 0);
+  const withheldSpotFee = round2(Math.max(0, fee - (Number(refundAmount) || 0)));
+  return {
+    withheldSpotFee,
+    withheldAmount: round2(withheldSpotFee + (Number(advanceFee) || 0)),
+  };
+}
+
+/**
+ * Did an earlier refund attempt actually go through?
+ *
+ * A gateway call can time out after Razorpay has already refunded. Before any
+ * retry we read the payment's amount_refunded and compare it with what this
+ * booking is owed. Paise on both sides, so float rounding cannot tip it.
+ *
+ *   'none'    nothing refunded yet — safe to call refund
+ *   'full'    exactly what we owe was refunded — record it, do not refund again
+ *   'partial' something, but less than owed — a human has to look
+ *   'over'    more than owed — a human has to look, and certainly no more money out
+ */
+function refundCoverage({ owed, refundedPaise }) {
+  const owedPaise = Math.round((Number(owed) || 0) * 100);
+  const refunded = Math.round(Number(refundedPaise) || 0);
+  if (refunded <= 0) return 'none';
+  if (refunded === owedPaise) return 'full';
+  return refunded < owedPaise ? 'partial' : 'over';
+}
+
+/**
  * Split the money nobody is getting back between the owner and the platform.
  *
  * The advance fee splits by its own fixed ratio. The withheld part of the spot
@@ -272,6 +309,8 @@ module.exports = {
   advanceFeeFor,
   validateLeadTime,
   refundFor,
+  withheldFor,
+  refundCoverage,
   settlementFor,
   finalChargeFor,
   completionSplitFor,

@@ -7,18 +7,35 @@
  * that a no-show is not refunded until it is claimed.
  */
 jest.mock('../../src/config/prisma', () => ({
-  bookings: { update: jest.fn(), updateMany: jest.fn(), findUnique: jest.fn() },
+  bookings: { update: jest.fn(), updateMany: jest.fn(), findUnique: jest.fn(), findMany: jest.fn() },
   parking_spots: { findUnique: jest.fn() },
-  users: { update: jest.fn() },
+  users: { update: jest.fn(), findMany: jest.fn() },
   payouts: { findFirst: jest.fn(), create: jest.fn() },
   $transaction: jest.fn(),
 }));
-jest.mock('../../src/services/paymentService', () => ({ processRefund: jest.fn() }));
+jest.mock('../../src/services/paymentService', () => ({
+  processRefund: jest.fn(),
+  fetchRefundState: jest.fn(),
+  markPaymentRefunded: jest.fn(),
+}));
+jest.mock('../../src/services/notificationService', () => ({ sendPushNotification: jest.fn() }));
 jest.mock('../../src/utils/logger', () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }));
+// For the sweep and controller tests further down.
+jest.mock('node-cron', () => ({ schedule: jest.fn() }));
+jest.mock('../../src/models/Booking', () => ({ findById: jest.fn(), cancel: jest.fn() }));
+jest.mock('../../src/models/ParkingSpot', () => ({ findById: jest.fn() }));
+jest.mock('../../src/config/socket', () => ({ emitToUser: jest.fn() }));
+jest.mock('../../src/services/payments/PayoutService', () => ({}));
+jest.mock('../../src/services/payments/BookingSettlementService', () => ({}));
 
 const prisma = require('../../src/config/prisma');
 const PaymentService = require('../../src/services/paymentService');
+const NotificationService = require('../../src/services/notificationService');
 const RefundService = require('../../src/services/BookingRefundService');
+const { retryFailedRefunds } = require('../../src/services/bookingExpiryService');
+const Booking = require('../../src/models/Booking');
+const ParkingSpot = require('../../src/models/ParkingSpot');
+const BookingController = require('../../src/controllers/bookingController');
 
 const HOUR = 3600000;
 
@@ -53,6 +70,10 @@ beforeEach(() => {
     })
   );
   PaymentService.processRefund.mockResolvedValue('rfnd_xyz');
+  PaymentService.fetchRefundState.mockResolvedValue({ refundedPaise: 0, refundId: null });
+  PaymentService.markPaymentRefunded.mockResolvedValue();
+  prisma.users.findMany.mockResolvedValue([{ id: 1 }, { id: 2 }]); // two admins
+  NotificationService.sendPushNotification.mockResolvedValue();
 });
 
 describe('cancelling well ahead', () => {
@@ -159,5 +180,296 @@ describe('quote', () => {
     // The app shows the preview on the confirm dialog; if these ever diverge,
     // the finder is told one figure and paid another.
     expect(preview.refundAmount).toBe(actual.refundAmount);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Failed refunds: classification, reconciliation and retry
+// ---------------------------------------------------------------------------
+
+// What Razorpay's SDK rejects with when it refuses a request.
+const razorpayError = (statusCode, description = 'Bad request') =>
+  Object.assign(new Error(description), { statusCode, error: { code: 'BAD_REQUEST_ERROR', description } });
+
+const wroteStatus = (status) =>
+  prisma.bookings.update.mock.calls.some((c) => c[0]?.data?.refund_status === status);
+
+// An early cancellation (₹280, 70%) whose first gateway call failed. It is now
+// inside the last half hour, so a fresh quote would only give ₹200 (50%).
+const failedBooking = (over = {}) => makeBooking({
+  refund_status: 'failed',
+  refund_amount: 280,
+  cancellation_reason: 'finder_cancelled',
+  start_time: new Date(Date.now() + 10 * 60 * 1000),
+  ...over,
+});
+
+describe('a gateway error is sorted into retryable or not', () => {
+  test('a Razorpay 4xx is permanent: needs_review, admins told, never "failed"', async () => {
+    PaymentService.processRefund.mockRejectedValue(razorpayError(400, 'Refund amount exceeds captured'));
+
+    const r = await RefundService.refundBooking(makeBooking(), spot);
+
+    expect(r.status).toBe('needs_review');
+    expect(wroteStatus('needs_review')).toBe(true);
+    expect(wroteStatus('failed')).toBe(false);
+    // Both admins pushed.
+    const adminPushes = NotificationService.sendPushNotification.mock.calls
+      .filter((c) => c[1]?.data?.type === 'refund_needs_review');
+    expect(adminPushes.map((c) => c[0]).sort()).toEqual([1, 2]);
+    expect(prisma.users.update).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['a 5xx', razorpayError(502, 'Bad gateway')],
+    ['a network error', Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' })],
+    ['a 429 rate limit', razorpayError(429, 'Too many requests')],
+  ])('%s is temporary: failed, so it gets retried, and no admin is paged', async (_, err) => {
+    PaymentService.processRefund.mockRejectedValue(err);
+
+    const r = await RefundService.refundBooking(makeBooking(), spot);
+
+    expect(r.status).toBe('failed');
+    expect(wroteStatus('failed')).toBe(true);
+    expect(wroteStatus('needs_review')).toBe(false);
+    expect(NotificationService.sendPushNotification).not.toHaveBeenCalled();
+  });
+
+  test('needs_review is terminal: the claim guard will not start a refund from it', async () => {
+    expect(RefundService.TERMINAL_REFUND_STATUSES).toContain('needs_review');
+    await RefundService.refundBooking(makeBooking(), spot);
+    const where = JSON.stringify(prisma.bookings.updateMany.mock.calls[0][0].where);
+    expect(where).toMatch(/needs_review/);
+  });
+});
+
+describe('retrying a failed refund', () => {
+  test('if the earlier refund actually went through, it is recorded and refund is NOT called again', async () => {
+    // Timed out on our side, accepted on Razorpay's: ₹280 is already refunded.
+    PaymentService.fetchRefundState.mockResolvedValue({ refundedPaise: 28000, refundId: 'rfnd_late' });
+
+    const r = await RefundService.retryRefund(failedBooking(), spot);
+
+    expect(PaymentService.processRefund).not.toHaveBeenCalled();
+    expect(r.status).toBe('processed');
+    expect(r.reconciled).toBe(true);
+    const done = prisma.bookings.update.mock.calls.find((c) => c[0].data.refund_status === 'processed');
+    expect(done[0].data).toMatchObject({ refund_amount: 280, refund_id: 'rfnd_late' });
+    expect(PaymentService.markPaymentRefunded).toHaveBeenCalledWith(expect.objectContaining({ id: 100 }), 280);
+    // The owner is still credited their share, once.
+    expect(prisma.users.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { balance: { increment: 121 } } })
+    );
+  });
+
+  test('Razorpay is asked before refund is called, never after', async () => {
+    await RefundService.retryRefund(failedBooking(), spot);
+
+    const asked = PaymentService.fetchRefundState.mock.invocationCallOrder[0];
+    const paid = PaymentService.processRefund.mock.invocationCallOrder[0];
+    expect(asked).toBeLessThan(paid);
+    expect(PaymentService.fetchRefundState).toHaveBeenCalledWith('pay_abc123');
+  });
+
+  test('it pays the stored refund_amount, not a fresh (lower) quote', async () => {
+    const booking = failedBooking();
+    // Sanity: re-quoting now would give the late-cancel figure.
+    expect(RefundService.quote(booking).refundAmount).toBe(200);
+
+    const r = await RefundService.retryRefund(booking, spot);
+
+    expect(PaymentService.processRefund).toHaveBeenCalledWith(100, 280);
+    expect(r.refundAmount).toBe(280);
+    expect(r.status).toBe('processed');
+    // And the owner is settled on that same figure: ₹120 withheld → ₹121.
+    expect(prisma.users.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { balance: { increment: 121 } } })
+    );
+  });
+
+  test('refundBooking on a booking that already failed goes down the retry path', async () => {
+    const r = await RefundService.refundBooking(failedBooking(), spot);
+
+    expect(PaymentService.fetchRefundState).toHaveBeenCalled();
+    expect(PaymentService.processRefund).toHaveBeenCalledWith(100, 280);
+    expect(r.refundAmount).toBe(280);
+  });
+
+  test('a partial refund on record is not topped up blindly; a human looks', async () => {
+    PaymentService.fetchRefundState.mockResolvedValue({ refundedPaise: 10000, refundId: 'rfnd_x' });
+
+    const r = await RefundService.retryRefund(failedBooking(), spot);
+
+    expect(r.status).toBe('needs_review');
+    expect(PaymentService.processRefund).not.toHaveBeenCalled();
+    expect(prisma.users.update).not.toHaveBeenCalled();
+  });
+
+  test('more refunded than owed: no more money out, and a human looks', async () => {
+    // e.g. the 50% claim was retried blindly and Razorpay returned 100%.
+    PaymentService.fetchRefundState.mockResolvedValue({ refundedPaise: 40000, refundId: 'rfnd_x' });
+
+    const r = await RefundService.retryRefund(failedBooking(), spot);
+
+    expect(r.status).toBe('needs_review');
+    expect(PaymentService.processRefund).not.toHaveBeenCalled();
+  });
+
+  test('if Razorpay cannot be read, nothing is refunded and it stays failed for later', async () => {
+    PaymentService.fetchRefundState.mockRejectedValue(new Error('ETIMEDOUT'));
+
+    const r = await RefundService.retryRefund(failedBooking(), spot);
+
+    expect(r.status).toBe('failed');
+    expect(PaymentService.processRefund).not.toHaveBeenCalled();
+    const back = prisma.bookings.update.mock.calls.find((c) => c[0].data.refund_status === 'failed');
+    // updated_at refreshed, so the sweep waits another 15 minutes.
+    expect(back[0].data.updated_at).toBeInstanceOf(Date);
+  });
+
+  test('the retry claims the row with the same guard, and only from "failed"', async () => {
+    await RefundService.retryRefund(failedBooking(), spot);
+
+    const where = prisma.bookings.updateMany.mock.calls[0][0].where;
+    const json = JSON.stringify(where);
+    expect(json).toMatch(/processed/);
+    expect(json).toMatch(/"refund_status":"failed"/);
+  });
+
+  test('a retry that loses the claim touches neither Razorpay call', async () => {
+    prisma.bookings.updateMany.mockResolvedValue({ count: 0 });
+
+    const r = await RefundService.retryRefund(failedBooking(), spot);
+
+    expect(r.status).toBe('already_handled');
+    expect(PaymentService.fetchRefundState).not.toHaveBeenCalled();
+    expect(PaymentService.processRefund).not.toHaveBeenCalled();
+  });
+
+  test('the driver is pushed when a retried refund finally succeeds', async () => {
+    await RefundService.retryRefund(failedBooking(), spot);
+
+    expect(NotificationService.sendPushNotification).toHaveBeenCalledWith(5, expect.objectContaining({
+      data: expect.objectContaining({ type: 'refund_processed', bookingId: 100 }),
+    }));
+  });
+
+  test('the driver is not pushed when the retry fails again', async () => {
+    PaymentService.processRefund.mockRejectedValue(razorpayError(503, 'Service unavailable'));
+
+    const r = await RefundService.retryRefund(failedBooking(), spot);
+
+    expect(r.status).toBe('failed');
+    const driverPush = NotificationService.sendPushNotification.mock.calls.some((c) => c[0] === 5);
+    expect(driverPush).toBe(false);
+  });
+});
+
+describe('the retry sweep', () => {
+  test('picks a few failed refunds that have waited 15 minutes, and retries each', async () => {
+    const now = new Date('2026-11-13T10:00:00Z');
+    prisma.bookings.findMany.mockResolvedValue([failedBooking({ id: 100 }), failedBooking({ id: 101 })]);
+    prisma.parking_spots.findUnique.mockResolvedValue(spot);
+
+    const n = await retryFailedRefunds(now);
+
+    expect(n).toBe(2);
+    const q = prisma.bookings.findMany.mock.calls[0][0];
+    expect(q.where.refund_status).toBe('failed');
+    expect(q.where.updated_at.lt).toEqual(new Date(now.getTime() - 15 * 60 * 1000));
+    expect(q.take).toBeGreaterThan(0);
+    expect(q.take).toBeLessThanOrEqual(10);
+    expect(PaymentService.processRefund).toHaveBeenCalledWith(100, 280);
+    expect(PaymentService.processRefund).toHaveBeenCalledWith(101, 280);
+  });
+
+  test('one bad row does not stop the rest', async () => {
+    prisma.bookings.findMany.mockResolvedValue([failedBooking({ id: 100 }), failedBooking({ id: 101 })]);
+    prisma.parking_spots.findUnique
+      .mockRejectedValueOnce(new Error('db hiccup'))
+      .mockResolvedValue(spot);
+
+    await retryFailedRefunds(new Date());
+
+    expect(PaymentService.processRefund).toHaveBeenCalledTimes(1);
+    expect(PaymentService.processRefund).toHaveBeenCalledWith(101, 280);
+  });
+});
+
+describe('the endpoints', () => {
+  const makeRes = () => ({
+    statusCode: 200, body: null,
+    status(c) { this.statusCode = c; return this; },
+    json(b) { this.body = b; return this; },
+  });
+  const req = { user: { id: 5, role: 'FINDER' }, params: { id: '100' } };
+
+  beforeEach(() => {
+    ParkingSpot.findById.mockResolvedValue(spot);
+    Booking.cancel.mockResolvedValue({});
+  });
+
+  test('claimRefund accepts a failed refund and tries again, at the stored amount', async () => {
+    Booking.findById.mockResolvedValue(failedBooking());
+    const res = makeRes();
+
+    await BookingController.claimRefund(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body.data).toMatchObject({ refund_status: 'processed', refund_amount: 280 });
+    expect(PaymentService.fetchRefundState).toHaveBeenCalled();
+    expect(PaymentService.processRefund).toHaveBeenCalledWith(100, 280);
+  });
+
+  test('claimRefund on a needs_review refund pays nothing', async () => {
+    Booking.findById.mockResolvedValue(failedBooking({ refund_status: 'needs_review' }));
+    const res = makeRes();
+
+    await BookingController.claimRefund(req, res);
+
+    expect(res.body.data.refund_status).toBe('needs_review');
+    expect(PaymentService.processRefund).not.toHaveBeenCalled();
+  });
+
+  test('cancelBooking tells the driver a failed refund is being retried', async () => {
+    Booking.findById.mockResolvedValue(makeBooking());
+    PaymentService.processRefund.mockRejectedValue(new Error('gateway down'));
+    const res = makeRes();
+
+    await BookingController.cancelBooking(req, res);
+
+    expect(res.body.data.refund_status).toBe('failed');
+    expect(res.body.message).toMatch(/retrying/i);
+    expect(res.body.message).not.toBe('Booking cancelled successfully');
+  });
+
+  test('cancelBooking still says the money is coming when it went through', async () => {
+    Booking.findById.mockResolvedValue(makeBooking());
+    const res = makeRes();
+
+    await BookingController.cancelBooking(req, res);
+
+    expect(res.body.message).toMatch(/₹280 will be returned/);
+  });
+});
+
+describe('policy helpers used by the retry', () => {
+  const Policy = require('../../src/services/BookingRefundPolicy');
+
+  test.each([
+    [280, 0, 'none'],
+    [280, 28000, 'full'],
+    [280, 10000, 'partial'],
+    [280, 40000, 'over'],
+    [280.5, 28050, 'full'],
+  ])('owed ₹%s, refunded %s paise → %s', (owed, refundedPaise, want) => {
+    expect(Policy.refundCoverage({ owed, refundedPaise })).toBe(want);
+  });
+
+  test('withheldFor matches refundFor for the same refund', () => {
+    const q = Policy.refundFor({ spotFee: 400, advanceFee: 50, startTime: Date.now() + 4 * HOUR, now: Date.now() });
+    const w = Policy.withheldFor({ spotFee: 400, advanceFee: 50, refundAmount: q.refundAmount });
+    expect(w.withheldAmount).toBe(q.withheldAmount);
+    expect(w.withheldSpotFee).toBe(120);
   });
 });

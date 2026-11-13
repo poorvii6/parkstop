@@ -10,6 +10,26 @@ const PayoutService = require('../services/payments/PayoutService');
 const BookingSettlementService = require('../services/payments/BookingSettlementService');
 const BookingRefundService = require('../services/BookingRefundService');
 
+/**
+ * What to tell a driver who just cancelled. "Booking cancelled successfully"
+ * on a refund that failed told them nothing was owed; they need to know the
+ * money is still coming.
+ */
+function cancelMessage(refund) {
+  if (!refund || !(refund.refundAmount > 0)) return 'Booking cancelled successfully';
+  const amt = `₹${refund.refundAmount}`;
+  switch (refund.status) {
+    case 'processed':
+      return `Booking cancelled. ${amt} will be returned to your original payment method.`;
+    case 'failed':
+      return `Booking cancelled. Your ${amt} refund did not go through yet. We are retrying it automatically and will notify you when it is on its way.`;
+    case 'needs_review':
+      return `Booking cancelled. Your ${amt} refund needs a manual check. Our team has been told and will process it.`;
+    default:
+      return `Booking cancelled. Your ${amt} refund is being processed.`;
+  }
+}
+
 class BookingController {
 
   /**
@@ -602,9 +622,7 @@ class BookingController {
 
       res.json({
         success: true,
-        message: refund && refund.refundAmount > 0
-          ? `Booking cancelled. ₹${refund.refundAmount} will be returned to your original payment method.`
-          : 'Booking cancelled successfully',
+        message: cancelMessage(refund),
         data: refund
           ? {
               refund_amount: refund.refundAmount,
@@ -770,7 +788,26 @@ class BookingController {
         });
       }
 
-      if (booking.refund_status !== 'claimable') {
+      if (booking.refund_status === 'needs_review') {
+        return res.json({
+          success: true,
+          message: 'Your refund is being checked by our team. We will be in touch.',
+          data: { refund_amount: Number(booking.refund_amount) || 0, refund_status: 'needs_review' }
+        });
+      }
+
+      if (booking.refund_status === 'processing') {
+        return res.json({
+          success: true,
+          message: 'Your refund is already being processed.',
+          data: { refund_amount: Number(booking.refund_amount) || 0, refund_status: 'processing' }
+        });
+      }
+
+      // 'failed' is retried here too, not just by the sweep. retryRefund pays
+      // the amount already on the booking and checks with Razorpay first, so
+      // a refund that secretly went through is recorded, not paid again.
+      if (booking.refund_status !== 'claimable' && booking.refund_status !== 'failed') {
         return res.status(400).json({
           success: false,
           message: 'There is no refund to claim on this booking'
@@ -778,15 +815,33 @@ class BookingController {
       }
 
       const spot = await ParkingSpot.findById(booking.spot_id);
-      const refund = await BookingRefundService.refundBooking(booking, spot, {
-        reason: 'no_show',
-        force: true
-      });
+      const refund = booking.refund_status === 'failed'
+        ? await BookingRefundService.retryRefund(booking, spot, { notifyDriver: false })
+        : await BookingRefundService.refundBooking(booking, spot, {
+            reason: 'no_show',
+            force: true
+          });
 
       if (refund.status === 'failed') {
         return res.status(502).json({
           success: false,
-          message: 'We could not reach the payment provider. Please try again shortly.'
+          message: 'We could not reach the payment provider. We will keep trying automatically and let you know when it goes through.'
+        });
+      }
+
+      if (refund.status === 'needs_review') {
+        return res.json({
+          success: true,
+          message: 'Your refund needs a manual check. Our team has been told and will process it.',
+          data: { refund_amount: refund.refundAmount, refund_status: 'needs_review' }
+        });
+      }
+
+      if (refund.status === 'already_handled') {
+        return res.json({
+          success: true,
+          message: 'Your refund is already being processed.',
+          data: { refund_amount: refund.refundAmount, refund_status: 'processing' }
         });
       }
 

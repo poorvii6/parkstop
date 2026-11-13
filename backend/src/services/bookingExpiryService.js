@@ -126,6 +126,41 @@ const recoverUnsettledPayouts = async (now) => {
   return rows.length;
 };
 
+/**
+ * Refunds whose gateway call failed with a network or 5xx error.
+ *
+ * A handful per run, oldest first, and only once they have sat for 15 minutes
+ * so a flapping gateway is not hammered every minute. retryRefund claims each
+ * row with the same guard the first attempt uses (and requires it to still be
+ * 'failed'), so two overlapping runs cannot both pay it. It also asks Razorpay
+ * whether the earlier attempt went through before calling refund again.
+ */
+const REFUND_RETRY_BATCH = 5;
+
+const retryFailedRefunds = async (now) => {
+  const rows = await prisma.bookings.findMany({
+    where: {
+      refund_status: 'failed',
+      updated_at: { lt: new Date(now.getTime() - BookingRefundService.RETRY_AFTER_MS) },
+    },
+    orderBy: { updated_at: 'asc' },
+    take: REFUND_RETRY_BATCH,
+  });
+
+  for (const booking of rows) {
+    try {
+      const spot = booking.spot_id
+        ? await prisma.parking_spots.findUnique({ where: { id: booking.spot_id } })
+        : null;
+      const r = await BookingRefundService.retryRefund(booking, spot);
+      logger.info(`Refund retry for booking ${booking.id}: ${r.status}`);
+    } catch (err) {
+      logger.error(`Refund retry failed for booking ${booking.id}:`, err);
+    }
+  }
+  return rows.length;
+};
+
 const startBookingExpiryJob = () => {
   // Run every minute
   cron.schedule('* * * * *', async () => {
@@ -299,6 +334,15 @@ const startBookingExpiryJob = () => {
         logger.error('Owner-credit recovery sweep failed:', err);
       }
 
+      /**
+       * 6️⃣ RETRY REFUNDS that failed on a temporary gateway error.
+       */
+      try {
+        await retryFailedRefunds(now);
+      } catch (err) {
+        logger.error('Refund retry sweep failed:', err);
+      }
+
     } catch (error) {
       logger.error('Booking lifecycle job error:', error);
     }
@@ -312,3 +356,4 @@ module.exports = startBookingExpiryJob;
 module.exports.expireReservation = expireReservation;
 module.exports.closeSession = closeSession;
 module.exports.recoverUnsettledPayouts = recoverUnsettledPayouts;
+module.exports.retryFailedRefunds = retryFailedRefunds;

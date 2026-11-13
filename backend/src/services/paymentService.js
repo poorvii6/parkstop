@@ -390,24 +390,7 @@ class PaymentService {
       // Razorpay is the only gateway.
       const refundId = await razorpayAdapter.refund(booking.payment_id, amount);
 
-      // Say which kind of refund it was.
-      //
-      // The cancellation ladder hands back 70% or 50%, never the lot, so
-      // writing 'refunded' for every one of them meant a booking that returned
-      // 280 of 400 read in every report as fully refunded -- and the 120 the
-      // owner and the platform actually kept was invisible. An amount of
-      // undefined means Razorpay refunds the whole payment.
-      const collected = Number(booking.amount_paid || 0);
-      const returned = amount === undefined || amount === null ? collected : Number(amount);
-      const fully = !(collected > 0) || returned >= collected;
-
-      await prisma.bookings.update({
-        where: { id: parseInt(bookingId) },
-        data: {
-          payment_status: fully ? 'refunded' : 'partially_refunded',
-          updated_at: new Date()
-        }
-      });
+      await PaymentService.markPaymentRefunded(booking, amount);
 
       // The refund id itself: BookingRefundService stores it on the booking.
       return refundId;
@@ -415,6 +398,59 @@ class PaymentService {
       logger.error('Refund Error:', error);
       throw error;
     }
+  }
+
+  /**
+   * Record on the booking which kind of refund its payment has had.
+   *
+   * The cancellation ladder hands back 70% or 50%, never the lot, so writing
+   * 'refunded' for every one of them meant a booking that returned 280 of 400
+   * read in every report as fully refunded -- and the 120 the owner and the
+   * platform actually kept was invisible. An amount of undefined means
+   * Razorpay refunds the whole payment.
+   *
+   * Shared by processRefund and by the retry path, which can find that an
+   * earlier attempt already went through and must record it the same way.
+   */
+  static async markPaymentRefunded(booking, amount) {
+    const collected = Number(booking.amount_paid || 0);
+    const returned = amount === undefined || amount === null ? collected : Number(amount);
+    const fully = !(collected > 0) || returned >= collected;
+
+    await prisma.bookings.update({
+      where: { id: parseInt(booking.id) },
+      data: {
+        payment_status: fully ? 'refunded' : 'partially_refunded',
+        updated_at: new Date()
+      }
+    });
+  }
+
+  /**
+   * What Razorpay says has already been refunded on this payment.
+   *
+   * amount_refunded is in paise and rises as soon as a refund is created, not
+   * only once it settles, so a refund that timed out on our side but was
+   * accepted on theirs shows up here.
+   *
+   * @returns {Promise<{refundedPaise: number, refundId: string|null}>}
+   */
+  static async fetchRefundState(paymentId) {
+    const payment = await razorpayAdapter.fetchPayment(paymentId);
+    const refundedPaise = Number(payment?.amount_refunded || 0);
+
+    let refundId = null;
+    if (refundedPaise > 0) {
+      // Best effort: the id is for the record, not for the decision.
+      try {
+        const refunds = await razorpayAdapter.fetchRefunds(paymentId);
+        refundId = refunds[0]?.id || null;
+      } catch (err) {
+        logger.warn(`Could not list refunds for payment ${paymentId}: ${err?.message}`);
+      }
+    }
+
+    return { refundedPaise, refundId };
   }
 }
 
