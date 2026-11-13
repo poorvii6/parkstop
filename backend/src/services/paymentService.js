@@ -92,18 +92,52 @@ class PaymentService {
       ? Math.max(0, round2(gross - alreadyCollected))
       : Math.max(0, round2(Number(grossPaid) - paidArrears));
 
-    const claimed = await prisma.bookings.updateMany({
-      where: { id: parseInt(bookingId), payment_status: { not: 'paid' } },
-      data: {
-        payment_id: paymentId,
-        payment_status: 'paid',
-        // A RUNNING TOTAL of what has arrived, incremented in the same atomic
-        // claim that flips the status, so two callers cannot both add.
-        amount_paid: { increment: arrived },
-        updated_at: new Date()
-      }
+    // The claim and the ledger row move together.
+    //
+    // There must never be a settled booking with no payment row, nor a payment
+    // row for a booking that was not settled: the ledger is what later decides
+    // whether an incoming payment has been seen before, and a gap in it reads
+    // as "never seen", which is the answer that refunds money.
+    const outcome = await prisma.$transaction(async (tx) => {
+      // This exact payment has settled before. Not an error and not a
+      // duplicate — a redelivered webhook for something already handled.
+      // Checked inside the transaction so two deliveries racing cannot both
+      // pass; the UNIQUE index on razorpay_payment_id is the backstop if they
+      // somehow do, and it would roll this whole transaction back.
+      const seen = await tx.payments.findUnique({
+        where: { razorpay_payment_id: String(paymentId) },
+      });
+      if (seen) return 'already_recorded';
+
+      const claimed = await tx.bookings.updateMany({
+        where: { id: parseInt(bookingId), payment_status: { not: 'paid' } },
+        data: {
+          payment_id: paymentId,
+          payment_status: 'paid',
+          // A RUNNING TOTAL of what has arrived, incremented in the same atomic
+          // claim that flips the status, so two callers cannot both add.
+          amount_paid: { increment: arrived },
+          updated_at: new Date()
+        }
+      });
+      if (claimed.count === 0) return 'not_claimed';
+
+      await tx.payments.create({
+        data: {
+          booking_id: parseInt(bookingId),
+          razorpay_payment_id: String(paymentId),
+          // What Razorpay captured, arrears included — the money that moved,
+          // not the share of it this booking kept.
+          amount: round2(Number(grossPaid == null ? arrived + paidArrears : grossPaid)),
+          arrears_cleared: paidArrears,
+          status: 'captured',
+        },
+      });
+
+      return 'claimed';
     });
-    if (claimed.count === 0) return null;
+
+    if (outcome !== 'claimed') return null;
 
     const updatedBooking = await prisma.bookings.findUnique({
       where: { id: parseInt(bookingId) },
@@ -627,12 +661,61 @@ class PaymentService {
    */
   static async _refundDuplicatePayment(booking, { paymentId, amountPaise }) {
     const original = booking?.payment_id || null;
+    if (!paymentId) return { duplicate: false };
 
-    // The same payment arriving twice is a retry, not a duplicate. And a
-    // booking with no recorded payment id has no original to compare against,
-    // so calling this one "extra" would be a guess — leave it alone.
-    if (!paymentId || !original || String(paymentId) === String(original)) {
-      return { duplicate: false };
+    // Ask the LEDGER whether this payment has been seen, not bookings.payment_id.
+    //
+    // payment_id is a single column that an overstay top-up overwrites, so the
+    // payment that came before it stops existing anywhere. Comparing against
+    // it meant a late webhook retry of a legitimate earlier payment looked
+    // like a second payment on a booking already paid — ₹450 prepaid, ₹800
+    // top-up, and the ₹450 refunded the moment Razorpay redelivered its first
+    // webhook. Every captured payment now has a row, so "have we seen this
+    // one?" is a lookup rather than a comparison against the most recent.
+    const recorded = await prisma.payments.findUnique({
+      where: { razorpay_payment_id: String(paymentId) },
+    });
+
+    if (recorded) {
+      if (Number(recorded.booking_id) === Number(booking.id)) {
+        // Seen, on this booking. An ordinary retry — the money is ours to keep
+        // and was already accounted for.
+        logger.info(`Payment ${paymentId} already recorded against booking ${booking.id}; retry, nothing to refund`);
+        return { duplicate: false, retry: true };
+      }
+      // Recorded against a DIFFERENT booking. Refusing is the safe answer:
+      // that money settled something else, and refunding it here would undo a
+      // payment this booking never had a claim on.
+      logger.error(
+        `Payment ${paymentId} arrived for booking ${booking.id} but is recorded against ` +
+        `booking ${recorded.booking_id}. Refunding nothing; a human should look.`
+      );
+      await PaymentService._notifyAdminsOfDuplicate(
+        booking, paymentId, Number(recorded.amount),
+        `It is recorded against booking #${recorded.booking_id}, not this one.`
+      );
+      return { duplicate: false, mismatched: true };
+    }
+
+    // Never seen, on a booking that is already paid — but only trust that if
+    // this booking has a ledger at all.
+    //
+    // Bookings settled before this table existed have no rows, so "never seen"
+    // is indistinguishable from "we have no records of this booking" and would
+    // refund a legitimate retry. The backfill script fills these in; until it
+    // has run for a given booking, the honest answer is that we cannot tell.
+    const ledgerCount = await prisma.payments.count({ where: { booking_id: parseInt(booking.id) } });
+    if (ledgerCount === 0) {
+      logger.error(
+        `Booking ${booking.id} has no payment ledger, so payment ${paymentId} cannot be judged ` +
+        `a duplicate (most recent on the booking is ${original}). Refunding nothing. ` +
+        `Run scripts/backfill-payments-ledger.js.`
+      );
+      await PaymentService._notifyAdminsOfDuplicate(
+        booking, paymentId, 0,
+        'The booking predates the payments ledger, so a duplicate cannot be told from a retry.'
+      );
+      return { duplicate: false, unknown: true };
     }
 
     const amount = Math.round(Number(amountPaise) || 0) / 100;

@@ -18,6 +18,10 @@
 jest.mock('../../src/config/prisma', () => ({
   bookings: { findUnique: jest.fn(), findFirst: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
   users: { update: jest.fn(), findMany: jest.fn() },
+  // The payments ledger: every captured payment gets a row, written in the
+  // same transaction as the atomic claim.
+  payments: { findUnique: jest.fn(), create: jest.fn(), count: jest.fn() },
+  $transaction: jest.fn(),
 }));
 jest.mock('../../src/services/payments/RazorpayAdapter', () => ({
   verifyPaymentSignature: jest.fn(), fetchOrder: jest.fn(), fetchPayment: jest.fn(),
@@ -55,6 +59,13 @@ const settleWrites = () =>
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // Ledger defaults: nothing recorded yet, and $transaction runs its
+  // callback against the same mocks.
+  prisma.payments.findUnique.mockResolvedValue(null);
+  prisma.payments.create.mockResolvedValue({});
+  prisma.payments.count.mockResolvedValue(1);
+  prisma.$transaction.mockImplementation(async (fn) =>
+    typeof fn === 'function' ? fn(prisma) : Promise.all(fn));
   prisma.bookings.findUnique.mockResolvedValue(REPRICED);
   prisma.bookings.findFirst.mockResolvedValue(null);
   prisma.bookings.updateMany.mockResolvedValue({ count: 1 });
