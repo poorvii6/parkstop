@@ -17,6 +17,17 @@ jobs:
       # Pure unit tests mock Prisma and never connect, but `prisma validate`/`generate`
       # require the env var to be present. This dummy URL is never dialed.
       DATABASE_URL: postgresql://dummy:dummy@localhost:5432/dummy
+      # Same reason, same dummy values as the integration job below.
+      #
+      # Four suites import a module that loads the real config, which refuses
+      # to start without these and takes the whole suite with it. The giveaway
+      # in the log is the shape of the failure: "291 passed, 0 failed, 4 suites
+      # failed to RUN" — nothing was broken, four files could not boot. They
+      # are never used to reach Razorpay: every test that touches it mocks the
+      # adapter.
+      JWT_SECRET: ci-test-secret-that-is-at-least-thirty-two-characters-long
+      RAZORPAY_KEY_ID: rzp_test_ci_dummy_key
+      RAZORPAY_KEY_SECRET: ci_dummy_razorpay_secret
     steps:
       - uses: actions/checkout@v4
 
