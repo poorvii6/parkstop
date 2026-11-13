@@ -13,7 +13,11 @@ jest.mock('../../src/config/prisma', () => ({
 jest.mock('../../src/models/Booking', () => ({ findById: jest.fn() }));
 jest.mock('../../src/models/ParkingSpot', () => ({ findById: jest.fn() }));
 jest.mock('../../src/services/notificationService', () => ({}));
-jest.mock('../../src/services/paymentService', () => ({}));
+// The endpoint quotes through PaymentService.computePayable -- the same
+// function the order and QR routes charge by -- so the real one is used here.
+jest.mock('../../src/services/paymentService', () => ({
+  computePayable: jest.requireActual('../../src/services/paymentService').computePayable,
+}));
 jest.mock('../../src/services/payments/PayoutService', () => ({}));
 jest.mock('../../src/services/payments/BookingSettlementService', () => ({ settleCompletedBooking: jest.fn() }));
 jest.mock('../../src/services/BookingRefundService', () => ({ refundBooking: jest.fn(), quote: jest.fn() }));

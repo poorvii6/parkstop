@@ -1271,6 +1271,22 @@
     </form>`;
   }
 
+  // Owners do not ask for payouts. Every Saturday morning ParkStop sweeps each
+  // eligible wallet and an admin sends the bank transfer, so this only says
+  // where the owner stands -- or, if they cannot be paid, what to fix.
+  function payoutLine(payouts, open, balance) {
+    if (open) return inr(open.amount) + ' on its way to your bank';
+    if (balance < 0) return 'Platform dues to clear';
+    if (!payouts) return '';
+    if (!payouts.eligible) return payouts.blocked_reason || 'Finish verification to be paid';
+    const min = num(payouts.min_amount);
+    if (balance < min) return 'Paid out once it reaches ' + inr(min);
+    const when = payouts.next_payout_at
+      ? new Date(payouts.next_payout_at).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })
+      : 'Saturday';
+    return 'Paid to your bank on ' + when;
+  }
+
   function OwnerToday({ user, dash, bookings, reloadAll, payouts, go }) {
     const now = useNow(1000);
     const list = bookings || [];
@@ -1290,8 +1306,7 @@
       </div>
       <section class="kpis">
         <div class="kpi"><span class="eyebrow">Wallet</span><b class="num">${dash ? inr(balance) : '…'}</b>
-          <div class="row"><small class="faint">${open ? inr(open.amount) + ' on its way to your bank' : balance < 0 ? 'Platform dues to clear' : 'Ready to send to your bank'}</small>
-          <button class="btn sm primary" disabled=${!payouts || !!open || !payouts.can_request || balance < num(payouts && payouts.min_amount)} title=${payouts && payouts.blocked_reason || ''} onClick=${async () => { const r = await attempt(() => api.post('/payouts/request', {}), (x) => x.message || 'Payout requested'); if (r) reloadAll(); }}>Request payout</button></div></div>
+          <div class="row"><small class="faint">${payoutLine(payouts, open, balance)}</small></div></div>
         <div class="kpi"><span class="eyebrow">Earned so far</span><b class="num">${dash ? inr(Math.round(num(dash.earnings))) : '…'}</b><small class="faint">${dash && num(dash.pending_earnings) > 0 ? inr(num(dash.pending_earnings)) + ' waiting for finder payment' : "after ParkStop's fee"}</small></div>
         <div class="kpi"><span class="eyebrow">Cars parked now</span><b class="num">${parked.length}</b><small class="faint">${arriving.length} arriving · ${leaving.length} leaving</small></div>
         <div class="kpi"><span class="eyebrow">Bays in use</span><b class="num">${dash ? num(dash.occupancy_rate) + '%' : '…'}</b><small class="faint">${dash ? `${dash.active_spots} live spot${dash.active_spots === 1 ? '' : 's'} · avg stay ${num(dash.avg_duration)} h` : ''}</small></div>
@@ -1358,7 +1373,7 @@
         <div class="kpi"><span class="eyebrow">Finders paid</span><b class="num">${t ? inr(t.gross) : '…'}</b><small class="faint">${t ? t.bookings + ' parkings' : ''}</small></div>
         <div class="kpi"><span class="eyebrow">ParkStop fee</span><b class="num">${t ? inr(t.fees) : '…'}</b><small class="faint">platform commission</small></div>
         <div class="kpi"><span class="eyebrow">You earned</span><b class="num">${t ? inr(t.earnings) : '…'}</b><small class="faint">last ${days} days</small></div>
-        <div class="kpi"><span class="eyebrow">Payout account</span><b class="num" style="font-size:20px">${payouts && payouts.requests[0] && payouts.requests[0].bank_account_last4 ? '••' + payouts.requests[0].bank_account_last4 : payouts && payouts.can_request ? 'Verified' : 'Not set'}</b><small class="faint">${payouts && payouts.blocked_reason ? payouts.blocked_reason : `Minimum payout ${inr(payouts ? payouts.min_amount : 100)}`}</small></div>
+        <div class="kpi"><span class="eyebrow">Payout account</span><b class="num" style="font-size:20px">${payouts && payouts.requests[0] && payouts.requests[0].bank_account_last4 ? '••' + payouts.requests[0].bank_account_last4 : payouts && payouts.eligible ? 'Verified' : 'Not set'}</b><small class="faint">${payouts && payouts.blocked_reason ? payouts.blocked_reason : `Minimum payout ${inr(payouts ? payouts.min_amount : 100)}`}</small></div>
       </section>
       <section class="grid2">
         <div class="col"><div class="card"><div class="card-h"><h2>Every parking</h2>${data && data.items_truncated && html`<small class="faint">latest ${data.items_shown}</small>`}</div>

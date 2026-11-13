@@ -1,10 +1,13 @@
 /**
- * Owner payout requests (paid by hand by an admin).
+ * Owner payouts: the Saturday run, and an admin paying by hand.
  *
- * Money rules under test:
- *   - only a verified owner with a verified bank account can request;
- *   - the whole balance leaves the wallet once, at request time;
- *   - only one open request at a time, and a minimum amount;
+ * Owners no longer ask for a payout. Every Saturday weeklyPayoutService sweeps
+ * each eligible wallet into a 'requested' row, and an admin sends the bank
+ * transfer and marks it paid. Money rules under test:
+ *   - the run does nothing at all while no admin account exists;
+ *   - only a verified owner with complete bank details is swept;
+ *   - the whole balance leaves the wallet once, under a row lock;
+ *   - never a second row while one is open, and never below the minimum;
  *   - an admin can mark a request paid OR reject it, exactly once;
  *   - rejecting puts the money back in the wallet.
  *
@@ -17,7 +20,7 @@ const mockTx = {
 };
 jest.mock('../../src/config/prisma', () => ({
   $transaction: jest.fn((fn) => fn(mockTx)),
-  users: { findUnique: jest.fn(), findMany: jest.fn().mockResolvedValue([]) },
+  users: { findUnique: jest.fn(), findMany: jest.fn().mockResolvedValue([]), count: jest.fn() },
   payout_requests: { findMany: jest.fn(), updateMany: jest.fn(), findUnique: jest.fn() },
 }));
 jest.mock('../../src/services/notificationService', () => ({
@@ -49,51 +52,92 @@ beforeEach(() => {
 
 const owner = { user: { id: 7, role: 'SPOTTER' }, body: {} };
 
-describe('owner requests a payout', () => {
+const Weekly = require('../../src/services/weeklyPayoutService');
+
+// The run reads eligible owners, then (after paying) the admin list for the
+// batch notice. Each test sets the first; the second is always empty.
+const sweep = (...owners) => {
+  prisma.users.findMany.mockResolvedValueOnce(owners).mockResolvedValue([]);
+  return Weekly.runWeeklyPayouts();
+};
+
+describe('the Saturday payout run', () => {
+  beforeEach(() => { prisma.users.count.mockResolvedValue(1); });
+
   test('moves the whole balance out of the wallet into one request', async () => {
-    const res = makeRes();
-    await C.requestPayout(owner, res);
-    expect(res.body.success).toBe(true);
+    const out = await sweep({ id: 7, balance: 850.5 });
+    expect(out.paid).toBe(1);
     expect(mockTx.users.update).toHaveBeenCalledWith({ where: { id: 7 }, data: { balance: { decrement: 850.5 } } });
     const data = mockTx.payout_requests.create.mock.calls[0][0].data;
     expect(data).toMatchObject({ user_id: 7, amount: 850.5, status: 'requested', bank_account_last4: '9012' });
   });
 
   test('the owner row is locked before the balance is read', async () => {
-    await C.requestPayout(owner, makeRes());
+    await sweep({ id: 7, balance: 850.5 });
     expect(mockTx.$executeRaw.mock.invocationCallOrder[0])
       .toBeLessThan(mockTx.users.findUnique.mock.invocationCallOrder[0]);
   });
 
-  test('an unverified owner cannot request', async () => {
-    prisma.users.findUnique.mockResolvedValue({ ...VERIFIED, verification_status: 'pending' });
-    const res = makeRes();
-    await C.requestPayout(owner, res);
-    expect(res.statusCode).toBe(403);
+  test('does nothing at all while no admin account exists', async () => {
+    // Nobody could pay the rows or reject them back, so no wallet is touched.
+    prisma.users.count.mockResolvedValue(0);
+    const out = await sweep({ id: 7, balance: 850.5 });
+    expect(out.aborted).toBeTruthy();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
     expect(mockTx.users.update).not.toHaveBeenCalled();
   });
 
-  test('an owner with no verified bank account cannot request', async () => {
-    prisma.users.findUnique.mockResolvedValue({ ...VERIFIED, bank_account_number: null });
-    const res = makeRes();
-    await C.requestPayout(owner, res);
-    expect(res.statusCode).toBe(403);
+  test('only verified owners with complete bank details are selected', async () => {
+    await sweep();
+    const where = prisma.users.findMany.mock.calls[0][0].where;
+    expect(where).toMatchObject({
+      verification_status: 'approved',
+      bank_account_number: { not: null },
+      bank_ifsc: { not: null },
+      bank_account_name: { not: null },
+    });
   });
 
-  test('a second request while one is open is refused', async () => {
-    mockTx.payout_requests.findFirst.mockResolvedValue({ id: 3, status: 'requested' });
-    const res = makeRes();
-    await C.requestPayout(owner, res);
-    expect(res.statusCode).toBe(409);
+  test('a blank name on the account is skipped and keeps the balance', async () => {
+    // `not: null` lets an empty string through; the run re-checks after the lock.
+    mockTx.users.findUnique.mockResolvedValue({ ...VERIFIED, bank_account_name: '' });
+    const out = await sweep({ id: 7, balance: 850.5 });
+    expect(out.paid).toBe(0);
     expect(mockTx.users.update).not.toHaveBeenCalled();
-  });
-
-  test('below the minimum is refused', async () => {
-    mockTx.users.findUnique.mockResolvedValue({ ...VERIFIED, balance: 40 });
-    const res = makeRes();
-    await C.requestPayout(owner, res);
-    expect(res.statusCode).toBe(400);
     expect(mockTx.payout_requests.create).not.toHaveBeenCalled();
+  });
+
+  test('an owner with a request still open is not swept again', async () => {
+    mockTx.payout_requests.findFirst.mockResolvedValue({ id: 3, status: 'requested' });
+    const out = await sweep({ id: 7, balance: 850.5 });
+    expect(out.paid).toBe(0);
+    expect(mockTx.users.update).not.toHaveBeenCalled();
+  });
+
+  test('a balance that dropped below the minimum is left for next week', async () => {
+    mockTx.users.findUnique.mockResolvedValue({ ...VERIFIED, balance: 40 });
+    const out = await sweep({ id: 7, balance: 850.5 });
+    expect(out.paid).toBe(0);
+    expect(mockTx.payout_requests.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('what the owner is shown', () => {
+  test('an owner missing the name on the account is told to add it', async () => {
+    prisma.users.findUnique.mockResolvedValue({ ...VERIFIED, bank_account_name: null });
+    prisma.payout_requests.findMany.mockResolvedValue([]);
+    const res = makeRes();
+    await C.myRequests(owner, res);
+    expect(res.body.data.eligible).toBe(false);
+    expect(res.body.data.blocked_reason).toMatch(/name on the account/i);
+  });
+
+  test('a ready owner is told when the next payout is', async () => {
+    prisma.payout_requests.findMany.mockResolvedValue([]);
+    const res = makeRes();
+    await C.myRequests(owner, res);
+    expect(res.body.data.eligible).toBe(true);
+    expect(new Date(res.body.data.next_payout_at).getUTCDay()).toBe(6);
   });
 });
 

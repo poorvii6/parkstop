@@ -351,7 +351,7 @@ export default function SpotterDashboard() {
                   <Ionicons name="wallet" size={20} color="#10b981" style={{ marginRight: 8 }} />
                   <View style={{ flex: 1 }}>
                     <Text style={{ color: '#10b981', fontWeight: '800', fontSize: 14 }}>Available to pay out</Text>
-                    <Text style={{ color: '#34d399', fontSize: 12 }}>Your 80% share, paid out every Saturday.</Text>
+                    <Text style={{ color: '#34d399', fontSize: 12 }}>Your share after ParkStop's fee, paid out every Saturday.</Text>
                   </View>
                   <Text style={{ color: '#10b981', fontWeight: '900', fontSize: 18 }}>₹{Number(dashboardData.balance).toFixed(2)}</Text>
                 </View>

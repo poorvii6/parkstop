@@ -10,6 +10,7 @@ jest.mock('../../src/config/prisma', () => ({
   bookings: { update: jest.fn(), updateMany: jest.fn(), findUnique: jest.fn() },
   parking_spots: { findUnique: jest.fn() },
   users: { update: jest.fn() },
+  payouts: { findFirst: jest.fn(), create: jest.fn() },
   $transaction: jest.fn(),
 }));
 jest.mock('../../src/services/paymentService', () => ({ processRefund: jest.fn() }));
@@ -40,8 +41,16 @@ beforeEach(() => {
   prisma.bookings.updateMany.mockResolvedValue({ count: 1 });
   prisma.bookings.update.mockResolvedValue({});
   prisma.users.update.mockResolvedValue({});
+  // The owner's share of a cancellation is now recorded as a payouts row
+  // before the wallet is credited, inside the same transaction.
+  prisma.payouts.findFirst.mockResolvedValue(null);
+  prisma.payouts.create.mockResolvedValue({});
   prisma.$transaction.mockImplementation(async (fn) =>
-    fn({ users: { update: prisma.users.update }, bookings: { update: prisma.bookings.update } })
+    fn({
+      users: { update: prisma.users.update },
+      bookings: { update: prisma.bookings.update },
+      payouts: { findFirst: prisma.payouts.findFirst, create: prisma.payouts.create },
+    })
   );
   PaymentService.processRefund.mockResolvedValue('rfnd_xyz');
 });
