@@ -50,25 +50,56 @@ class PaymentService {
    * @param arrearsPaid rupees of OLD dues included in this payment (from the
    *   order/QR notes). Only that much debt is cleared — never more.
    */
-  static async _finalizeClaimedBooking(bookingId, paymentId, arrearsPaid = 0) {
+  /**
+   * @param {number|null} [grossPaid]  rupees this payment actually carried,
+   *   arrears included. Omitted means "assume it covered exactly the balance",
+   *   which is what this function used to assume unconditionally.
+   */
+  static async _finalizeClaimedBooking(bookingId, paymentId, arrearsPaid = 0, grossPaid = null) {
     const before = await prisma.bookings.findUnique({
       where: { id: parseInt(bookingId) },
-      select: { total_price: true, advance_fee: true, status: true }
+      select: { total_price: true, advance_fee: true, status: true, amount_paid: true }
     });
 
-    // What this booking itself cost, excluding any arrears cleared in the same
-    // order — those settle an older debt and must not count as money paid
-    // towards this booking, or a refund would hand back more than was taken.
-    const paidForThisBooking =
-      Number(before?.total_price || 0) + Number(before?.advance_fee || 0);
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Arrears settle an OLDER debt and must not count as money paid towards
+    // this booking, or a refund would hand back more than was taken for it.
+    const paidArrears = Math.max(0, Number(arrearsPaid) || 0);
+
+    // What actually arrived for THIS booking.
+    //
+    // This used to be ASSIGNED total_price + advance_fee — the whole price,
+    // regardless of what the payment carried. That is an assumption, and in
+    // the normal flows it happens to be right, which is why it went unnoticed:
+    // a first payment covers the whole price, and an overstay top-up is
+    // exactly the difference, so the running total lands on the gross either
+    // way. It is wrong the moment a payment arrives that does NOT cover the
+    // balance — a payment created before complete() repriced an overstay, for
+    // instance. The booking then recorded ₹1250 collected when ₹450 had
+    // arrived, the driver's remaining debt was erased, and the owner was
+    // credited 80% of a figure nobody had paid.
+    //
+    // An increment also makes the column mean what every reader of it already
+    // assumes: money collected, not the price. BookingRefundService.spotFeeOf
+    // derives the refundable spot fee from it, so under the old assignment a
+    // part-paid booking could be refunded more than was ever taken.
+    const gross = Number(before?.total_price || 0) + Number(before?.advance_fee || 0);
+    const alreadyCollected = Math.max(0, Number(before?.amount_paid || 0));
+    const arrived = grossPaid == null
+      // No figure given: assume it covered exactly what was outstanding, which
+      // reproduces the old behaviour precisely.
+      ? Math.max(0, round2(gross - alreadyCollected))
+      : Math.max(0, round2(Number(grossPaid) - paidArrears));
 
     const claimed = await prisma.bookings.updateMany({
       where: { id: parseInt(bookingId), payment_status: { not: 'paid' } },
       data: {
         payment_id: paymentId,
         payment_status: 'paid',
-        // The floor used at checkout and the basis for every refund figure.
-        amount_paid: paidForThisBooking,
+        // A RUNNING TOTAL of what has arrived, incremented in the same atomic
+        // claim that flips the status, so two callers cannot both add.
+        amount_paid: { increment: arrived },
         updated_at: new Date()
       }
     });
@@ -82,7 +113,6 @@ class PaymentService {
     // Clear ONLY the arrears this payment actually included. Clearing the full
     // balance here used to forgive debt that was never paid (e.g. webhook
     // settlement of an order created without arrears).
-    const paidArrears = Math.max(0, Number(arrearsPaid) || 0);
     if (paidArrears > 0 && updatedBooking.users && updatedBooking.users.balance < 0) {
       const arrearsToClear = Math.min(paidArrears, Math.abs(Number(updatedBooking.users.balance)));
       await prisma.users.update({
@@ -106,7 +136,9 @@ class PaymentService {
       const paidSpot = updatedBooking?.parking_spots;
       if (paidSpot?.spotter_id) {
         await NotificationService.notifyBookingPaid(
-          paidSpot.spotter_id, updatedBooking, paidSpot, paidForThisBooking,
+          // What this payment brought in, not the booking's whole price — the
+          // owner is being told money has landed, so it must be that money.
+          paidSpot.spotter_id, updatedBooking, paidSpot, arrived,
         );
       }
     } catch (notifyErr) {
@@ -242,7 +274,10 @@ class PaymentService {
       throw new Error('QR amount underpaid');
     }
 
-    const updated = await PaymentService._finalizeClaimedBooking(bookingId, paymentEntity.id, Number(qrEntity?.notes?.arrears || 0));
+    const updated = await PaymentService._finalizeClaimedBooking(
+      bookingId, paymentEntity.id, Number(qrEntity?.notes?.arrears || 0),
+      Number(paymentEntity.amount) / 100
+    );
     if (!updated) {
       // Already paid. If this is a DIFFERENT payment it is real money we have
       // just taken for a booking that was settled — the owner's QR is the
@@ -299,8 +334,30 @@ class PaymentService {
       throw new Error('Webhook user mismatch');
     }
 
+    // The payment must still cover what the booking needs NOW, not merely what
+    // its own order was created for.
+    //
+    // Matching the payment against its order proves the payment is genuine; it
+    // says nothing about whether the price has moved since. A payment created
+    // before complete() repriced an overstay matches its order perfectly and
+    // is hundreds of rupees short of the bill. The QR path has always compared
+    // against computePayable, and so has verify; this one did not, which made
+    // the webhook the only door a stale payment could walk through.
+    //
+    // An already-paid booking needs 0, so a duplicate still passes here and is
+    // handled below, where it is refunded rather than settled.
+    const minPaise = Math.round(PaymentService.computePayable(booking, null).base * 100);
+    if (Number(paymentEntity.amount) < minPaise) {
+      logger.error(
+        `Webhook UNDERPAID booking ${bookingId}: payment ${paymentEntity.id} carried ` +
+        `${paymentEntity.amount} paise but the booking needs ${minPaise}`
+      );
+      throw new Error('Webhook amount no longer covers the booking');
+    }
+
     const updatedBooking = await PaymentService._finalizeClaimedBooking(
-      bookingId, paymentEntity.id, Number(order?.notes?.arrears || 0)
+      bookingId, paymentEntity.id, Number(order?.notes?.arrears || 0),
+      Number(paymentEntity.amount) / 100
     );
     if (!updatedBooking) {
       // Already paid, and this is a captured payment we have just taken. If it
@@ -418,7 +475,8 @@ class PaymentService {
 
       // 7. Atomic claim — exactly one caller (client verify or webhook) wins.
       const updatedBooking = await PaymentService._finalizeClaimedBooking(
-        bookingId, paymentId, Number(order.notes?.arrears || 0)
+        bookingId, paymentId, Number(order.notes?.arrears || 0),
+        Number(payment.amount) / 100
       );
       if (!updatedBooking) {
         logger.info(`Booking ${bookingId} was settled concurrently — idempotent return`);
