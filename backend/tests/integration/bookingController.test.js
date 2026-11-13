@@ -48,6 +48,19 @@ describe('Booking API', () => {
       where: { firebase_uid: 'testspotter' }
     });
 
+    // Approve the owner, or nothing on their spot can be booked.
+    //
+    // Booking.create refuses a spot whose owner is not approved (Booking.js,
+    // "Only spots of verified owners can be booked"), and verification_status
+    // defaults to NULL. That gate was added after this fixture was written, so
+    // "Finder can create a booking" has been failing on an owner who was never
+    // approved rather than on anything to do with booking. Registering through
+    // the API cannot set this -- approval is an admin action.
+    await prisma.users.update({
+      where: { id: spotter.id },
+      data: { verification_status: 'approved' }
+    });
+
     // 3. Create a Spot using Prisma directly
     const spot = await prisma.parking_spots.create({
       data: {
