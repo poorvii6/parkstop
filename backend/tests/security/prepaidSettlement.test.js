@@ -65,6 +65,23 @@ describe('the owner is not paid before the car arrives', () => {
 });
 
 describe('amount_paid records this booking only', () => {
+  // The no-amount fallback has to subtract what is already collected, not just
+  // take the gross. Every other case starts from zero collected, where the two
+  // give the same answer -- so only a part-paid booking pins this down. Without
+  // it the running total would count the first payment twice.
+  test('with no amount given, only the OUTSTANDING balance is added', async () => {
+    prisma.bookings.findUnique
+      .mockResolvedValueOnce({ total_price: 1200, advance_fee: 50, status: 'completed', amount_paid: 450 })
+      .mockResolvedValueOnce(settled('completed'));
+
+    await PaymentService._finalizeClaimedBooking(100, 'pay_abc');
+
+    // Gross is 1250 and 450 is already in, so 800 is what is left to collect.
+    expect(prisma.bookings.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ amount_paid: { increment: 800 } }) })
+    );
+  });
+
   test('spot fee plus advance fee', async () => {
     prisma.bookings.findUnique
       .mockResolvedValueOnce({ total_price: 400, advance_fee: 50, status: 'reserved' })
