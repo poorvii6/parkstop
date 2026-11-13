@@ -137,6 +137,70 @@ const recoverUnsettledPayouts = async (now) => {
  */
 const REFUND_RETRY_BATCH = 5;
 
+/** No-shows whose owner credit is backfilled per run. */
+const CLAIMABLE_SETTLE_BATCH = 5;
+
+/**
+ * No-shows sitting at 'claimable' whose owner was never credited.
+ *
+ * Owner credit for a no-show now happens at expiry. Before that it only
+ * happened if the driver came back and claimed their refund, so every booking
+ * already parked at 'claimable' has withheld money that was never split — and
+ * the drivers who matter here are precisely the ones who never returned, so
+ * nothing will ever trigger it. This pays the owner's side, oldest first, a few
+ * per run.
+ *
+ * It cannot credit twice, by three independent guards:
+ *   1. the LEFT JOIN drops any booking that already has a payouts row;
+ *   2. settleWithheld checks again for that row inside the transaction, so two
+ *      overlapping runs cannot both write;
+ *   3. payouts.booking_id is UNIQUE in the database, which rolls back the whole
+ *      transaction — credit included — if the first two are ever bypassed.
+ *
+ * refund_amount < amount_paid excludes bookings that withhold nothing: those
+ * settle to a zero owner share, write no payouts row, and would otherwise be
+ * re-selected by this query on every single run forever.
+ */
+const settleClaimableNoShows = async () => {
+  const rows = await prisma.$queryRaw`
+    SELECT b.id
+    FROM bookings b
+    JOIN parking_spots s ON s.id = b.spot_id
+    LEFT JOIN payouts p ON p.booking_id = b.id
+    WHERE p.id IS NULL
+      AND b.refund_status = 'claimable'
+      AND b.payment_status = 'paid'
+      AND b.amount_paid > 0
+      AND b.refund_amount IS NOT NULL
+      AND b.refund_amount < b.amount_paid
+      AND s.spotter_id IS NOT NULL
+    ORDER BY b.updated_at ASC
+    LIMIT ${CLAIMABLE_SETTLE_BATCH}
+  `;
+
+  for (const r of rows) {
+    try {
+      const booking = await prisma.bookings.findUnique({ where: { id: Number(r.id) } });
+      if (!booking) continue;
+      const spot = await prisma.parking_spots.findUnique({ where: { id: booking.spot_id } });
+      const settlement = await BookingRefundService.settleNoShowWithheld(booking, spot, {
+        reason: booking.cancellation_reason || 'no_show',
+        // The figure already stored on the booking, never a fresh quote: the
+        // driver was told this amount and may still claim exactly it.
+        refundAmount: Number(booking.refund_amount),
+      });
+      if (settlement?.credited) {
+        logger.warn(
+          `Backfilled owner credit ₹${settlement.ownerAmount} for no-show booking ${booking.id}`
+        );
+      }
+    } catch (err) {
+      logger.error(`Owner credit for claimable no-show ${r.id} failed:`, err);
+    }
+  }
+  return rows.length;
+};
+
 const retryFailedRefunds = async (now) => {
   const rows = await prisma.bookings.findMany({
     where: {
@@ -343,6 +407,17 @@ const startBookingExpiryJob = () => {
         logger.error('Refund retry sweep failed:', err);
       }
 
+      /**
+       * 7️⃣ BACKFILL: no-shows left claimable before owner credit moved to
+       * expiry. New ones are settled as they expire, so this drains and stays
+       * empty.
+       */
+      try {
+        await settleClaimableNoShows();
+      } catch (err) {
+        logger.error('Claimable no-show settle sweep failed:', err);
+      }
+
     } catch (error) {
       logger.error('Booking lifecycle job error:', error);
     }
@@ -357,3 +432,4 @@ module.exports.expireReservation = expireReservation;
 module.exports.closeSession = closeSession;
 module.exports.recoverUnsettledPayouts = recoverUnsettledPayouts;
 module.exports.retryFailedRefunds = retryFailedRefunds;
+module.exports.settleClaimableNoShows = settleClaimableNoShows;

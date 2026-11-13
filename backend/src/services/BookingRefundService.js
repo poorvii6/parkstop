@@ -115,6 +115,12 @@ function isPermanentGatewayError(err) {
  * refund that never happened, or a refund with nobody credited.
  */
 async function settleWithheld(tx, { booking, spot, withheldSpotFee, reason }) {
+  // Whether THIS call wrote the credit. A no-show is now settled at expiry, so
+  // the later claim runs through here a second time and must find the row and
+  // leave it alone -- `credited` is how callers can tell the difference and log
+  // the truth rather than claiming to have paid an owner twice.
+  let credited = false;
+
   const settlement = Policy.settlementFor({
     // The rate belongs to the booking, not to the fraction being settled.
     spotFeeTotal: spotFeeOf(booking),
@@ -134,6 +140,7 @@ async function settleWithheld(tx, { booking, spot, withheldSpotFee, reason }) {
     // this one is the same money and now does too.
     const already = await tx.payouts.findFirst({ where: { booking_id: parseInt(booking.id) } });
     if (!already) {
+      credited = true;
       await tx.payouts.create({
         data: {
           user_id: spot.spotter_id,
@@ -154,7 +161,77 @@ async function settleWithheld(tx, { booking, spot, withheldSpotFee, reason }) {
     }
   }
 
-  return settlement;
+  return { ...settlement, credited };
+}
+
+/**
+ * Credit the owner their share of what a no-show withholds, without refunding
+ * the driver.
+ *
+ * A no-show withholds money the moment the bay is released, and the owner's
+ * share of it is theirs whether or not the driver ever asks for the rest.
+ *
+ * This used to wait for a claim: refundBooking marked the booking 'claimable'
+ * and returned, and settleWithheld only ran from recordProcessed. So an owner
+ * who held a bay empty for a driver who then vanished got nothing at all,
+ * because the one thing that paid them was the driver choosing to come back
+ * and ask for a refund. The owner's share is now settled at expiry. The
+ * driver's refund still waits for a claim, which is the part that is genuinely
+ * theirs to ask for.
+ *
+ * No gateway call happens here, deliberately. Nothing is being refunded yet —
+ * this only splits money already collected, so it is a wallet credit and a
+ * payouts row, exactly as a completed booking's earnings are.
+ *
+ * Idempotent three times over: settleWithheld will not write a second payouts
+ * row for a booking that already has one, payouts.booking_id is UNIQUE in the
+ * database, and the credit, the row and the booking update are one
+ * transaction, so a crash part-way leaves nothing behind.
+ *
+ * @param {object} opts
+ * @param {number} opts.refundAmount  what the driver could still claim. The
+ *   withheld side of THIS figure is what gets split, so a later claim paying
+ *   the same stored amount settles to the same split and finds its row.
+ * @param {boolean} [opts.markClaimable=false]  also move the booking to
+ *   'claimable'. The expiry path passes true; the backfill sweep passes false
+ *   because those bookings are already there.
+ * @returns {Promise<object|null>} the settlement, or null if nothing was owed
+ */
+async function settleNoShowWithheld(booking, spot, { reason = 'no_show', refundAmount, markClaimable = false } = {}) {
+  const { withheldSpotFee } = Policy.withheldFor({
+    spotFee: spotFeeOf(booking),
+    advanceFee: Number(booking.advance_fee) || 0,
+    refundAmount,
+  });
+
+  return prisma.$transaction(async (tx) => {
+    let settlement = null;
+
+    // An owner is never credited before the money is in. A cash no-show banked
+    // nothing, so there is no withheld money to split -- and payment_status is
+    // written in the same update as amount_paid, so this is the honest test for
+    // "did we actually take it".
+    if (booking.payment_status === 'paid') {
+      settlement = await settleWithheld(tx, { booking, spot, withheldSpotFee, reason });
+    }
+
+    // Marked inside the same transaction as the credit, and unconditionally:
+    // an unpaid no-show still becomes claimable, it simply has nothing to
+    // settle.
+    if (markClaimable) {
+      await tx.bookings.update({
+        where: { id: parseInt(booking.id) },
+        data: {
+          refund_status: 'claimable',
+          refund_amount: refundAmount,
+          cancellation_reason: reason,
+          updated_at: new Date(),
+        },
+      });
+    }
+
+    return settlement;
+  });
 }
 
 /**
@@ -188,7 +265,12 @@ async function recordProcessed(booking, spot, { amount, reason, refundId }) {
 
   logger.info(
     `Booking ${booking.id} refunded ₹${amount} (${reason}); ` +
-    `owner credited ₹${settlement.ownerAmount}, platform kept ₹${settlement.platformAmount}`
+    (settlement.credited
+      // A no-show was already settled at expiry, so this claim pays the driver
+      // only. Saying "owner credited" here would be a lie in the log.
+      ? `owner credited ₹${settlement.ownerAmount}, platform kept ₹${settlement.platformAmount}`
+      : `owner already credited ₹${settlement.ownerAmount} earlier, not paid again; ` +
+        `platform kept ₹${settlement.platformAmount}`)
   );
 
   return settlement;
@@ -281,16 +363,22 @@ async function refundBooking(booking, spot, { reason = 'finder_cancelled', force
   // A no-show refund is deliberately not automatic — the finder has to ask. The
   // sweep marks it claimable and stops; only the claim endpoint passes force.
   if (q.requiresClaim && !force) {
-    await prisma.bookings.update({
-      where: { id: parseInt(booking.id) },
-      data: {
-        refund_status: 'claimable',
-        refund_amount: q.refundAmount,
-        cancellation_reason: reason,
-        updated_at: new Date(),
-      },
+    // Mark it claimable AND pay the owner their share of what is withheld, in
+    // one transaction. The driver's refund is what waits for a claim; the
+    // owner's earnings do not, or a driver who never comes back leaves the
+    // owner unpaid for a bay they held.
+    const settlement = await settleNoShowWithheld(booking, spot, {
+      reason,
+      refundAmount: q.refundAmount,
+      markClaimable: true,
     });
-    return { ...q, status: 'claimable', refunded: false };
+    if (settlement?.credited) {
+      logger.info(
+        `Booking ${booking.id} is claimable (₹${q.refundAmount} to the driver on request); ` +
+        `owner credited ₹${settlement.ownerAmount} of the withheld ₹${q.withheldAmount} now`
+      );
+    }
+    return { ...q, status: 'claimable', refunded: false, settlement };
   }
 
   const won = await claimForRefund(booking.id, q.refundAmount, reason);
@@ -404,6 +492,7 @@ async function retryRefund(booking, spot, { notifyDriver = true } = {}) {
 module.exports = {
   quote,
   refundBooking,
+  settleNoShowWithheld,
   retryRefund,
   claimForRefund,
   isPermanentGatewayError,
