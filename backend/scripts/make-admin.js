@@ -66,7 +66,8 @@ async function main() {
 
   try {
     const { rows } = await client.query(
-      `SELECT id, email, name, full_name, role, verification_status, firebase_uid
+      `SELECT id, email, name, full_name, role, verification_status, firebase_uid,
+              is_finder_registered, is_spotter_registered
        FROM users WHERE lower(email) = lower($1)`,
       [email]
     );
@@ -93,6 +94,28 @@ async function main() {
     console.log(`  role                ${u.role}`);
     console.log(`  verification_status ${u.verification_status === null ? 'NULL' : u.verification_status}`);
     console.log(`  signed in before    ${u.firebase_uid ? 'yes' : 'NO — firebase_uid is not set'}`);
+
+    // Which screens they will still be able to reach as an admin.
+    //
+    // Route access is capability-based, not role-based (utils/roles.js), and
+    // the two capabilities are NOT symmetric:
+    //
+    //   FINDER  -> current === 'FINDER'  || is_finder_registered !== false
+    //   SPOTTER -> current === 'SPOTTER' || is_spotter_registered === true
+    //
+    // is_finder_registered defaults to true and is tested permissively, so
+    // driver access survives. is_spotter_registered defaults to FALSE and is
+    // tested strictly, so an admin who has never used owner mode is refused
+    // the owner routes. Tapping "Owner" on the admin screen fixes it —
+    // switch-role sets the flag — but it is worth knowing before, not after.
+    console.log(`  driver access       ${u.is_finder_registered !== false ? 'yes' : 'NO'}  (is_finder_registered=${u.is_finder_registered})`);
+    console.log(`  owner access        ${u.is_spotter_registered === true ? 'yes' : 'NO'}  (is_spotter_registered=${u.is_spotter_registered})`);
+    if (u.is_spotter_registered !== true) {
+      console.log('');
+      console.log('  Note: owner routes will refuse this account until is_spotter_registered');
+      console.log('  is true. Tap "Owner" under "Use the app" on the admin screen once and');
+      console.log('  switch-role sets it. Driver access is unaffected.');
+    }
 
     // Never demote. This script has exactly one direction.
     if (String(u.role).toUpperCase() === 'ADMIN') {
