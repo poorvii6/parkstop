@@ -218,6 +218,19 @@ describe('no-shows: the driver claims, the owner is paid anyway', () => {
     );
   });
 
+  test('money recorded but not yet confirmed paid credits nobody', async () => {
+    // The gate is the ONLY thing stopping this one: amount_paid is set, so the
+    // withheld figure is non-zero and the settlement would otherwise pay out.
+    // An owner is never credited before the money is in.
+    const r = await RefundService.refundBooking(
+      noShow({ payment_status: 'pending' }), spot, { reason: 'no_show' }
+    );
+
+    expect(r.status).toBe('claimable');
+    expect(prisma.payouts.create).not.toHaveBeenCalled();
+    expect(prisma.users.update).not.toHaveBeenCalled();
+  });
+
   test('a later claim refunds the DRIVER and does not credit the owner twice', async () => {
     // Expiry already settled the owner, so the payouts row is there.
     prisma.payouts.findFirst.mockResolvedValue({ id: 55, booking_id: 100, amount: 185 });
