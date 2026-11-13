@@ -88,6 +88,55 @@ class SpotController {
         take: MAX_ROWS,
       });
 
+      // Settlements: cancellations and no-shows the owner was paid a share of.
+      //
+      // These never become completed bookings, so the query above cannot see
+      // them -- yet the money is in the wallet. Listed alongside the sessions
+      // that did run, each saying plainly what it was, so an owner totting up
+      // this screen arrives at the figure their wallet actually shows.
+      const { SETTLEMENT_PURPOSES, SETTLEMENT_LABELS } = require('../constants/payoutPurposes');
+      const settlements = await prisma.payouts.findMany({
+        where: {
+          user_id: req.user.id,
+          purpose: { in: SETTLEMENT_PURPOSES },
+          created_at: { gte: since },
+        },
+        orderBy: { created_at: 'desc' },
+        take: MAX_ROWS,
+      });
+
+      // Which spot each settlement was for, looked up separately: `payouts`
+      // has a booking_id column but no Prisma relation to bookings, so it
+      // cannot be `include`d. One query for the whole batch, not one each.
+      const settlementBookingIds = settlements.map((p) => p.booking_id).filter((id) => id != null);
+      const spotByBooking = new Map();
+      if (settlementBookingIds.length) {
+        const rows = await prisma.bookings.findMany({
+          where: { id: { in: settlementBookingIds } },
+          select: { id: true, parking_spots: { select: { id: true, title: true } } },
+        });
+        rows.forEach((r) => spotByBooking.set(r.id, r.parking_spots));
+      }
+
+      const settlementItems = settlements.map((p) => ({
+        booking_id: p.booking_id,
+        spot_id: spotByBooking.get(p.booking_id)?.id || null,
+        spot_title: spotByBooking.get(p.booking_id)?.title || 'Spot',
+        date: p.created_at,
+        hours: 0,
+        // No session ran, so there is no gross takings figure to report and no
+        // commission line. Reporting the owner's credit as `gross` would
+        // inflate the takings total with money nobody was charged.
+        total_price: 0,
+        platform_fee: 0,
+        spotter_earning: Number(p.amount || 0),
+        payment_mode: 'online',
+        payment_status: 'paid',
+        kind: p.purpose,
+        reason: SETTLEMENT_LABELS[p.purpose] || 'Settlement',
+        wallet_effect: Number(p.amount || 0),
+      }));
+
       const items = bookings.map((b) => ({
         booking_id: b.id,
         spot_id: b.parking_spots?.id || null,
@@ -103,7 +152,9 @@ class SpotController {
         wallet_effect: b.payment_mode === 'cash'
           ? -Number(b.platform_fee || 0)
           : Number(b.spotter_earning || 0),
-      }));
+        kind: 'booking',
+      })).concat(settlementItems)
+        .sort((a, b) => new Date(b.date) - new Date(a.date));
 
       // Per-spot rollup so the Spotter can see which spot performs best.
       const bySpotMap = new Map();
@@ -148,7 +199,11 @@ class SpotController {
             fees: Number(totals.fees.toFixed(2)),
             earnings: Number(totals.earnings.toFixed(2)),
             cash_fees_owed: Number(totals.cash_fees_owed.toFixed(2)),
-            bookings: items.length,
+            // Sessions that actually ran. A settlement is money, not a
+            // booking, so counting it here would tell an owner they had more
+            // custom than they did.
+            bookings: items.length - settlementItems.length,
+            settlements: settlementItems.length,
           },
           by_spot: bySpot,
           // A page of the ledger, newest first — the totals above are for the

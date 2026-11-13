@@ -65,7 +65,7 @@ describe('refund ladder', () => {
     expect(r.requiresClaim).toBe(false);
   });
 
-  test('cancelling inside the last half hour drops to 50%', () => {
+  test('cancelling inside the last hour drops to 50%', () => {
     const r = P.refundFor({
       spotFee: 400, advanceFee: 50, startTime: start, now: at(4 * HOUR - 10 * MIN),
     });
@@ -73,11 +73,21 @@ describe('refund ladder', () => {
     expect(r.refundAmount).toBe(200);
   });
 
-  test('exactly 30 minutes out is still the early tier', () => {
+  // An hour, not half an hour: cancelling with more than an hour to go is the
+  // 70% tier, which is what the published refund policy promises.
+  test('just over an hour out is still the early tier', () => {
     const r = P.refundFor({
-      spotFee: 400, startTime: start, now: at(4 * HOUR - 31 * MIN),
+      spotFee: 400, startTime: start, now: at(4 * HOUR - 61 * MIN),
     });
     expect(r.tier).toBe('early_cancel');
+  });
+
+  test('just inside the hour has already dropped to the late tier', () => {
+    const r = P.refundFor({
+      spotFee: 400, startTime: start, now: at(4 * HOUR - 59 * MIN),
+    });
+    expect(r.tier).toBe('late_cancel');
+    expect(r.refundAmount).toBe(200);
   });
 
   test('a no-show gets 50% but has to ask for it', () => {

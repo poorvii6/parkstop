@@ -44,7 +44,7 @@ const ADVANCE_FEE_OWNER_SHARE = num(process.env.ADVANCE_FEE_OWNER_SHARE, 0.5);
 const GRACE_MS = num(process.env.ARRIVAL_GRACE_MINUTES, 30) * MINUTE_MS;
 
 /** Cancelling before this point in the run-up gets the higher refund. */
-const LATE_CANCEL_WINDOW_MS = num(process.env.LATE_CANCEL_WINDOW_MINUTES, 30) * MINUTE_MS;
+const LATE_CANCEL_WINDOW_MS = num(process.env.LATE_CANCEL_WINDOW_MINUTES, 60) * MINUTE_MS;
 
 const EARLY_CANCEL_REFUND_RATE = num(process.env.EARLY_CANCEL_REFUND_RATE, 0.7);
 const LATE_CANCEL_REFUND_RATE = num(process.env.LATE_CANCEL_REFUND_RATE, 0.5);

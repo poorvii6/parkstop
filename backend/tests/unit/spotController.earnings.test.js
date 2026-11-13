@@ -18,6 +18,9 @@
 jest.mock('../../src/config/prisma', () => ({
   bookings: { findMany: jest.fn() },
   users: { findUnique: jest.fn() },
+  // Settlements (cancellations, no-shows) are earnings with no completed
+  // booking behind them, so the breakdown reads them from payouts as well.
+  payouts: { findMany: jest.fn() },
 }));
 jest.mock('../../src/models/ParkingSpot', () => ({ getSpotterDashboard: jest.fn() }));
 jest.mock('../../src/services/PricingService', () => ({}));
@@ -54,7 +57,12 @@ const booking = (over = {}) => ({
 
 const payload = (res) => res.json.mock.calls[0][0].data;
 
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => {
+  jest.clearAllMocks();
+  // Most cases are about bookings; settlements default to none so each test
+  // only sets up the thing it is actually about.
+  prisma.payouts.findMany.mockResolvedValue([]);
+});
 
 describe('SpotController.getEarningsBreakdown', () => {
   describe('wallet effect sign', () => {
@@ -125,7 +133,7 @@ describe('SpotController.getEarningsBreakdown', () => {
       await SpotController.getEarningsBreakdown(req(), res);
 
       const { totals, items, by_spot } = payload(res);
-      expect(totals).toEqual({ gross: 0, fees: 0, earnings: 0, cash_fees_owed: 0, bookings: 0 });
+      expect(totals).toEqual({ gross: 0, fees: 0, earnings: 0, cash_fees_owed: 0, bookings: 0, settlements: 0 });
       expect(items).toEqual([]);
       expect(by_spot).toEqual([]);
     });
@@ -202,5 +210,68 @@ describe('SpotController.getEarningsBreakdown', () => {
     expect(res.status).toHaveBeenCalledWith(500);
     expect(res.json.mock.calls[0][0].success).toBe(false);
     expect(JSON.stringify(res.json.mock.calls[0][0])).not.toMatch(/connection reset/);
+  });
+});
+
+describe('settlements appear as earnings', () => {
+  // A cancellation or no-show credits the owner but leaves no completed
+  // booking, so a screen built from bookings alone showed money in the wallet
+  // that the earnings list could not account for.
+  const settlement = (over = {}) => ({
+    booking_id: 55,
+    amount: 185,
+    purpose: 'no_show_settlement',
+    created_at: new Date('2026-11-10T10:00:00Z'),
+    ...over,
+  });
+
+  it('lists a no-show credit, with a reason, and counts it in earnings', async () => {
+    prisma.bookings.findMany
+      .mockResolvedValueOnce([])                                  // completed bookings
+      .mockResolvedValueOnce([{ id: 55, parking_spots: { id: 3, title: 'Driveway' } }]); // spot lookup
+    prisma.payouts.findMany.mockResolvedValue([settlement()]);
+
+    const res = mockRes();
+    await SpotController.getEarningsBreakdown(req(), res);
+    const { totals, items } = payload(res);
+
+    expect(totals.earnings).toBe(185);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      booking_id: 55, spot_title: 'Driveway', spotter_earning: 185,
+      kind: 'no_show_settlement', reason: 'Driver did not arrive', wallet_effect: 185,
+    });
+  });
+
+  it('does not report the credit as takings or commission', async () => {
+    // Nobody was charged for a session that never ran, so gross and fees stay
+    // at zero -- otherwise the owner's takings would be inflated by money that
+    // was never taken.
+    prisma.bookings.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: 55, parking_spots: { id: 3, title: 'Driveway' } }]);
+    prisma.payouts.findMany.mockResolvedValue([settlement()]);
+
+    const res = mockRes();
+    await SpotController.getEarningsBreakdown(req(), res);
+    const { totals } = payload(res);
+
+    expect(totals.gross).toBe(0);
+    expect(totals.fees).toBe(0);
+  });
+
+  it('counts sessions and settlements separately', async () => {
+    prisma.bookings.findMany
+      .mockResolvedValueOnce([booking({ spotter_earning: 80 })])
+      .mockResolvedValueOnce([{ id: 55, parking_spots: { id: 3, title: 'Driveway' } }]);
+    prisma.payouts.findMany.mockResolvedValue([settlement()]);
+
+    const res = mockRes();
+    await SpotController.getEarningsBreakdown(req(), res);
+    const { totals } = payload(res);
+
+    expect(totals.bookings).toBe(1);
+    expect(totals.settlements).toBe(1);
+    expect(totals.earnings).toBe(265);
   });
 });

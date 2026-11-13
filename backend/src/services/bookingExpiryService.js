@@ -225,6 +225,65 @@ const retryFailedRefunds = async (now) => {
   return rows.length;
 };
 
+/**
+ * Nudge drivers sitting on an unclaimed no-show refund.
+ *
+ * A no-show refund is deliberately not pushed at anyone -- the driver has to
+ * ask. The drivers this applies to are, by definition, the ones who did not
+ * turn up, and most never come back to ask, so the money stays with ParkStop
+ * by default. That is only fair if they were actually told, more than once,
+ * that it is sitting there.
+ *
+ * Two reminders, at three and seven days, and then it rests. The second says
+ * it is the last one, so nobody can say they were not warned.
+ *
+ * Fired on a one-minute window rather than a "sent" column, the same way the
+ * expiring-soon warning works: the sweep runs every minute, so a booking falls
+ * inside exactly one window per milestone and is reminded exactly once. The
+ * cost of that is a reminder missed if the server is down for that minute,
+ * which is the right way round for a nudge -- far better than a column that
+ * could let the same driver be pestered every minute.
+ */
+const CLAIM_REMINDER_DAYS = [3, 7];
+
+const remindUnclaimedRefunds = async (now) => {
+  let sent = 0;
+
+  for (const days of CLAIM_REMINDER_DAYS) {
+    const until = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+    const from = new Date(until.getTime() - 60 * 1000);
+
+    const rows = await prisma.bookings.findMany({
+      where: {
+        refund_status: 'claimable',
+        refund_amount: { gt: 0 },
+        updated_at: { gt: from, lte: until },
+      },
+      select: { id: true, user_id: true, refund_amount: true },
+      take: 50,
+    });
+
+    for (const b of rows) {
+      const amount = Number(b.refund_amount).toFixed(2);
+      const last = days === CLAIM_REMINDER_DAYS[CLAIM_REMINDER_DAYS.length - 1];
+      try {
+        await NotificationService.sendPushNotification(b.user_id, {
+          title: last ? `Last reminder: \u20b9${amount} is waiting` : `\u20b9${amount} is waiting for you`,
+          body: last
+            ? `Claim your refund for booking #${b.id} in ParkStop. This is the last reminder we will send.`
+            : `You can claim a \u20b9${amount} refund for booking #${b.id} in ParkStop.`,
+          data: { bookingId: b.id, type: 'refund_claimable', amount: Number(amount) },
+        });
+        sent += 1;
+      } catch (err) {
+        logger.warn(`Refund reminder failed for booking ${b.id}: ${err?.message}`);
+      }
+    }
+  }
+
+  return sent;
+};
+
 const startBookingExpiryJob = () => {
   // Run every minute
   cron.schedule('* * * * *', async () => {
@@ -418,6 +477,15 @@ const startBookingExpiryJob = () => {
         logger.error('Claimable no-show settle sweep failed:', err);
       }
 
+      /**
+       * 8️⃣ REMIND drivers sitting on an unclaimed refund, at 3 and 7 days.
+       */
+      try {
+        await remindUnclaimedRefunds(now);
+      } catch (err) {
+        logger.error('Unclaimed refund reminder sweep failed:', err);
+      }
+
     } catch (error) {
       logger.error('Booking lifecycle job error:', error);
     }
@@ -433,3 +501,5 @@ module.exports.closeSession = closeSession;
 module.exports.recoverUnsettledPayouts = recoverUnsettledPayouts;
 module.exports.retryFailedRefunds = retryFailedRefunds;
 module.exports.settleClaimableNoShows = settleClaimableNoShows;
+module.exports.remindUnclaimedRefunds = remindUnclaimedRefunds;
+module.exports.CLAIM_REMINDER_DAYS = CLAIM_REMINDER_DAYS;

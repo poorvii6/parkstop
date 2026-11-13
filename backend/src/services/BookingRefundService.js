@@ -27,6 +27,7 @@ const logger = require('../utils/logger');
 const PaymentService = require('./paymentService');
 const NotificationService = require('./notificationService');
 const Policy = require('./BookingRefundPolicy');
+const { NO_SHOW_SETTLEMENT, CANCELLATION_SETTLEMENT } = require('../constants/payoutPurposes');
 
 /** Statuses from which no further refund may be started. */
 const TERMINAL_REFUND_STATUSES = ['processing', 'processed', 'needs_review'];
@@ -148,7 +149,7 @@ async function settleWithheld(tx, { booking, spot, withheldSpotFee, reason }) {
           amount: settlement.ownerAmount,
           status: 'balance_credited',
           mode: 'balance',
-          purpose: reason === 'no_show' ? 'no_show_settlement' : 'cancellation_settlement',
+          purpose: reason === 'no_show' ? NO_SHOW_SETTLEMENT : CANCELLATION_SETTLEMENT,
           narration: reason === 'no_show'
             ? `ParkStop earnings - no-show on booking #${booking.id}`
             : `ParkStop earnings - cancelled booking #${booking.id}`,
@@ -204,15 +205,15 @@ async function settleNoShowWithheld(booking, spot, { reason = 'no_show', refundA
     refundAmount,
   });
 
-  return prisma.$transaction(async (tx) => {
-    let settlement = null;
+  const settlement = await prisma.$transaction(async (tx) => {
+    let result = null;
 
     // An owner is never credited before the money is in. A cash no-show banked
     // nothing, so there is no withheld money to split -- and payment_status is
     // written in the same update as amount_paid, so this is the honest test for
     // "did we actually take it".
     if (booking.payment_status === 'paid') {
-      settlement = await settleWithheld(tx, { booking, spot, withheldSpotFee, reason });
+      result = await settleWithheld(tx, { booking, spot, withheldSpotFee, reason });
     }
 
     // Marked inside the same transaction as the credit, and unconditionally:
@@ -230,8 +231,24 @@ async function settleNoShowWithheld(booking, spot, { reason = 'no_show', refundA
       });
     }
 
-    return settlement;
+    return result;
   });
+
+  // Told only once, and only by the call that actually wrote the credit, so a
+  // later claim settling the same booking does not announce the money twice.
+  // Outside the transaction and swallowed: a push that fails must never roll
+  // back money the owner has already earned.
+  if (settlement?.credited && spot?.spotter_id) {
+    try {
+      await NotificationService.notifyNoShowCredit(
+        spot.spotter_id, booking, spot, settlement.ownerAmount,
+      );
+    } catch (err) {
+      logger.warn(`No-show credit notice failed for booking ${booking.id}: ${err?.message}`);
+    }
+  }
+
+  return settlement;
 }
 
 /**

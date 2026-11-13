@@ -19,7 +19,7 @@ jest.mock('../../src/services/paymentService', () => ({
   fetchRefundState: jest.fn(),
   markPaymentRefunded: jest.fn(),
 }));
-jest.mock('../../src/services/notificationService', () => ({ sendPushNotification: jest.fn() }));
+jest.mock('../../src/services/notificationService', () => ({ sendPushNotification: jest.fn(), notifyNoShowCredit: jest.fn() }));
 jest.mock('../../src/utils/logger', () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }));
 // For the sweep and controller tests further down.
 jest.mock('node-cron', () => ({ schedule: jest.fn() }));
@@ -33,7 +33,7 @@ const prisma = require('../../src/config/prisma');
 const PaymentService = require('../../src/services/paymentService');
 const NotificationService = require('../../src/services/notificationService');
 const RefundService = require('../../src/services/BookingRefundService');
-const { retryFailedRefunds, settleClaimableNoShows } = require('../../src/services/bookingExpiryService');
+const { retryFailedRefunds, settleClaimableNoShows, remindUnclaimedRefunds } = require('../../src/services/bookingExpiryService');
 const Booking = require('../../src/models/Booking');
 const ParkingSpot = require('../../src/models/ParkingSpot');
 const BookingController = require('../../src/controllers/bookingController');
@@ -653,5 +653,109 @@ describe('policy helpers used by the retry', () => {
     const w = Policy.withheldFor({ spotFee: 400, advanceFee: 50, refundAmount: q.refundAmount });
     expect(w.withheldAmount).toBe(q.withheldAmount);
     expect(w.withheldSpotFee).toBe(120);
+  });
+});
+
+describe('the owner is told about a no-show credit', () => {
+  // The money lands in their wallet with no booking to explain it, so the
+  // only thing standing between that and "where did this come from" is this
+  // notification.
+  const claimableBooking = (over = {}) => ({
+    id: 100, user_id: 5, spot_id: 9,
+    amount_paid: 450, advance_fee: 50, payment_status: 'paid',
+    start_time: new Date(Date.now() + 4 * 3600000),
+    ...over,
+  });
+
+  test('a credit at expiry is announced to the owner, once, with the amount', async () => {
+    prisma.payouts.findFirst.mockResolvedValue(null);
+    await RefundService.settleNoShowWithheld(claimableBooking(), spot, {
+      refundAmount: 200, markClaimable: true,
+    });
+
+    expect(NotificationService.notifyNoShowCredit).toHaveBeenCalledTimes(1);
+    const [ownerId, , , amount] = NotificationService.notifyNoShowCredit.mock.calls[0];
+    expect(ownerId).toBe(spot.spotter_id);
+    expect(amount).toBe(185);   // 80% of the 200 withheld + half the 50 fee
+  });
+
+  test('a booking already settled says nothing: no second announcement', async () => {
+    // The later claim runs the same settlement. Telling them again would read
+    // as a second payment.
+    prisma.payouts.findFirst.mockResolvedValue({ id: 1, booking_id: 100 });
+    await RefundService.settleNoShowWithheld(claimableBooking(), spot, { refundAmount: 200 });
+
+    expect(NotificationService.notifyNoShowCredit).not.toHaveBeenCalled();
+  });
+
+  test('nothing collected, nothing credited, nothing announced', async () => {
+    prisma.payouts.findFirst.mockResolvedValue(null);
+    await RefundService.settleNoShowWithheld(
+      claimableBooking({ payment_status: 'pending' }), spot, { refundAmount: 200 },
+    );
+
+    expect(NotificationService.notifyNoShowCredit).not.toHaveBeenCalled();
+  });
+
+  test('a push that throws does not undo the credit', async () => {
+    prisma.payouts.findFirst.mockResolvedValue(null);
+    NotificationService.notifyNoShowCredit.mockRejectedValueOnce(new Error('device offline'));
+
+    const r = await RefundService.settleNoShowWithheld(claimableBooking(), spot, { refundAmount: 200 });
+
+    expect(r.credited).toBe(true);
+    expect(prisma.users.update).toHaveBeenCalled();
+  });
+});
+
+describe('reminding a driver about an unclaimed refund', () => {
+  const now = new Date('2026-11-13T10:00:00Z');
+  const DAY = 24 * 3600000;
+
+  test('reminds at three days and again at seven, and the last one says so', async () => {
+    prisma.bookings.findMany
+      .mockResolvedValueOnce([{ id: 100, user_id: 5, refund_amount: 200 }])   // 3-day window
+      .mockResolvedValueOnce([{ id: 101, user_id: 6, refund_amount: 150 }]);  // 7-day window
+
+    const sent = await remindUnclaimedRefunds(now);
+
+    expect(sent).toBe(2);
+    const first = NotificationService.sendPushNotification.mock.calls[0][1];
+    const last = NotificationService.sendPushNotification.mock.calls[1][1];
+    expect(first.title).toContain('200');
+    expect(first.title).not.toMatch(/last/i);
+    expect(last.title).toMatch(/last reminder/i);
+  });
+
+  test('each milestone is a one-minute window, so nobody is pestered every minute', async () => {
+    prisma.bookings.findMany.mockResolvedValue([]);
+    await remindUnclaimedRefunds(now);
+
+    const [three, seven] = prisma.bookings.findMany.mock.calls.map((c) => c[0].where);
+    expect(three.refund_status).toBe('claimable');
+    expect(three.updated_at.lte).toEqual(new Date(now.getTime() - 3 * DAY));
+    expect(three.updated_at.gt).toEqual(new Date(now.getTime() - 3 * DAY - 60000));
+    expect(seven.updated_at.lte).toEqual(new Date(now.getTime() - 7 * DAY));
+  });
+
+  test('only refunds with money on them are chased', async () => {
+    prisma.bookings.findMany.mockResolvedValue([]);
+    await remindUnclaimedRefunds(now);
+    expect(prisma.bookings.findMany.mock.calls[0][0].where.refund_amount).toEqual({ gt: 0 });
+  });
+
+  test('one failed push does not stop the rest', async () => {
+    prisma.bookings.findMany
+      .mockResolvedValueOnce([
+        { id: 100, user_id: 5, refund_amount: 200 },
+        { id: 101, user_id: 6, refund_amount: 300 },
+      ])
+      .mockResolvedValueOnce([]);
+    NotificationService.sendPushNotification.mockRejectedValueOnce(new Error('no token'));
+
+    const sent = await remindUnclaimedRefunds(now);
+
+    expect(sent).toBe(1);
+    expect(NotificationService.sendPushNotification).toHaveBeenCalledTimes(2);
   });
 });
