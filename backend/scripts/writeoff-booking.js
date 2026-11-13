@@ -18,6 +18,11 @@
  * It refuses outright if any money is involved — amount_paid above zero, a
  * payment_id, or a payout row. Those need a real decision, not a script.
  */
+// Refuse to run against a non-local database unless --production is passed.
+// This script writes.
+const requireLocalDb = require('./lib/require-local-db');
+requireLocalDb({ script: 'writeoff-booking.js', what: 'write off a booking\'s balance' });
+
 const fs = require('fs');
 const path = require('path');
 const { Client } = require('pg');

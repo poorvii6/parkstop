@@ -31,6 +31,11 @@
  * Uses `pg` directly rather than Prisma, same as the other scripts here: one
  * less platform-specific binary to care about.
  */
+// Refuse to run against a non-local database unless --production is passed.
+// This script writes.
+const requireLocalDb = require('./lib/require-local-db');
+requireLocalDb({ script: 'backfill-payments-ledger.js', what: 'insert payments ledger rows' });
+
 const fs = require('fs');
 const path = require('path');
 const { Client } = require('pg');

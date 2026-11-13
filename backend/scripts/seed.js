@@ -1,3 +1,8 @@
+// Refuse to run against a non-local database unless --production is passed.
+// This script writes.
+const requireLocalDb = require('./lib/require-local-db');
+requireLocalDb({ script: 'seed.js', what: 'insert seed data' });
+
 const db = require('../src/config/database');
 
 async function seed() {
