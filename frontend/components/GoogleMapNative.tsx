@@ -42,6 +42,30 @@ const NAV_FOLLOW_MS = 400;
  * that turns arrived with no time to react.
  */
 const NAV_ZOOM = 18.5;
+// Compass smoothing. 0 would freeze the heading, 1 would use the raw reading.
+// Low enough to swallow hand tremor, high enough that a real turn still feels
+// immediate.
+const HEADING_SMOOTHING = 0.18;
+// Degrees of turn needed to START moving the map, and to KEEP moving it once
+// it has begun. Raise the first if the map still drifts while you stand still.
+//
+// KEEP has to sit BELOW the distance a slow turn covers in one tick, or the
+// hysteresis defeats itself: the camera reaches the target every tick (the
+// animation is shorter than the interval), so the gap falls back under KEEP,
+// the turn is declared over, and the next move has to clear the full START
+// again. A gentle turn then moves the map in START-sized jumps — the exact
+// jerkiness the second threshold exists to prevent. A slow turn of ~10 deg/s
+// covers ~3 deg per tick, so KEEP must be under that. The smoothed heading's
+// own noise is around 1 deg, so 3 still sits clear of it.
+const HEADING_START_DEG = 12;
+const HEADING_KEEP_DEG = 3;
+// How long "we are turning" survives after the last qualifying move.
+//
+// Without this, `turning` is cleared the moment the camera catches up, which
+// during a slow turn is every single tick. The latch keeps the cheaper gate
+// alive across the quiet ticks of a continuous turn, and expires when the
+// phone genuinely settles.
+const HEADING_LATCH_MS = 1500;
 const NAV_PITCH = 60;
 
 /**
@@ -266,7 +290,15 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
   // Compass ("heading-up") browsing mode — the third state of Google's My
   // Location button. Only meaningful outside navigation.
   const [headingMode, setHeadingMode] = useState(false);
+  // The SMOOTHED compass heading. The raw magnetometer is far too jumpy to
+  // drive a camera from directly -- see the filter in the watch below.
   const deviceHeading = useRef(0);
+  const headingSeeded = useRef(false);
+  // Whether the map is mid-turn, so it can keep up with a turn it has already
+  // committed to without needing to clear the larger starting threshold again.
+  const turning = useRef(false);
+  /** When `turning` lapses if nothing else qualifies. See HEADING_LATCH_MS. */
+  const turningUntil = useRef(0);
 
   // The device compass is only watched while heading-up mode is actually on.
   // Subscribing all the time would spin the magnetometer for a view nobody is
@@ -279,14 +311,52 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
       try {
         sub = await Location.watchHeadingAsync((h) => {
           if (!alive) return;
+          // An uncalibrated magnetometer must not drive the camera at all.
+          //
+          // `accuracy` is a 0-3 calibration level: 3 high, 2 medium, 1 low,
+          // 0 none. On iOS 3 means under 20 degrees of uncertainty and 2 under
+          // 35, so even "medium" is loose — but 0 is the device saying it does
+          // not know which way it is pointing, and smoothing nonsense still
+          // leaves nonsense. Those samples are dropped entirely: they do not
+          // move the map and they do not seed the filter.
+          //
+          // Only 0 is rejected, not "below high". Some Android devices sit at
+          // low until the user waves the phone in a figure of eight, and a map
+          // that refuses to turn until then looks broken.
+          if (h.accuracy != null && h.accuracy <= 0) return;
+
           // trueHeading is -1 until the magnetometer calibrates; fall back to
           // magnetic so the map still turns instead of sitting frozen at north.
           const deg = h.trueHeading >= 0 ? h.trueHeading : h.magHeading;
-          if (deg >= 0) deviceHeading.current = deg;
+          if (!(deg >= 0)) return;
+
+          // Low-pass the compass before anything looks at it.
+          //
+          // A phone held in the hand wanders several degrees from one
+          // magnetometer sample to the next, and this fires on every sample.
+          // Feeding that straight to the camera is what made the map swing
+          // for the slightest turn: the reading was never still, so the
+          // 3-degree gate downstream was clearing itself on noise alone.
+          //
+          // Averaged the short way round the circle, so 359 -> 1 is a
+          // two-degree step rather than a spin back through 358.
+          if (!headingSeeded.current) {
+            deviceHeading.current = deg;
+            headingSeeded.current = true;
+            return;
+          }
+          const diff = (((deg - deviceHeading.current + 540) % 360) - 180);
+          deviceHeading.current = (deviceHeading.current + diff * HEADING_SMOOTHING + 360) % 360;
         });
       } catch {}
     })();
-    return () => { alive = false; try { sub?.remove?.(); } catch {} };
+    return () => {
+      alive = false;
+      headingSeeded.current = false;
+      turning.current = false;
+      turningUntil.current = 0;
+      try { sub?.remove?.(); } catch {}
+    };
   }, [headingMode, props.isActiveNavigation]);
 
   // Google shows the compass ONLY when the camera is actually turned or tilted,
@@ -554,13 +624,30 @@ const GoogleMapNative = forwardRef((props: Props, ref: any) => {
       if (!mapRef.current) return;
       if (Date.now() - lastInteraction.current < 2000) return;
       if (Date.now() < suppressFollowUntil.current) return;
-      // Only move for a turn big enough to see; below that it is compass noise
-      // and animating it just makes the map shimmer.
+      // Two thresholds, not one.
+      //
+      // A single gate cannot both ignore a hand wobble and follow a real turn:
+      // set it low and the map swings at rest, set it high and a slow turn
+      // moves the map in jerks. So starting to turn needs a deliberate
+      // movement, and once the map IS turning it keeps up with much smaller
+      // changes until the phone settles again. That is also what stops the
+      // map oscillating around a single threshold.
       const delta = Math.abs((((deviceHeading.current - mapHeadingRef.current + 540) % 360) - 180));
-      if (delta < 3) return;
+      const gate = turning.current ? HEADING_KEEP_DEG : HEADING_START_DEG;
+      if (delta < gate) {
+        // Only declare the turn over once the phone has actually settled.
+        // Clearing it the instant the camera catches up would end the turn on
+        // every tick, since the animation finishes before the next one starts.
+        if (Date.now() > turningUntil.current) turning.current = false;
+        return;
+      }
+      turning.current = true;
+      turningUntil.current = Date.now() + HEADING_LATCH_MS;
       markProgrammatic(400);
-      mapRef.current.animateCamera({ heading: deviceHeading.current }, { duration: 300 });
-    }, 250);
+      // Never longer than the interval, or a new animation interrupts the last
+      // one mid-flight and the map stutters instead of sweeping.
+      mapRef.current.animateCamera({ heading: deviceHeading.current }, { duration: 280 });
+    }, 300);
     return () => clearInterval(iv);
     // mapHeading deliberately absent: it is read from mapHeadingRef above, so
     // this interval is built once per mode change instead of being torn down
