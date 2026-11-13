@@ -17,7 +17,8 @@
  */
 
 jest.mock('../../src/config/prisma', () => ({
-  users: { findUnique: jest.fn(), update: jest.fn(), create: jest.fn() },
+  // register() resolves the existing account with findFirst, socialLogin with findUnique.
+  users: { findUnique: jest.fn(), findFirst: jest.fn(), update: jest.fn(), create: jest.fn() },
 }));
 jest.mock('../../src/config/firebase', () => ({
   auth: { verifyIdToken: jest.fn() },
@@ -195,5 +196,151 @@ describe('socialLogin account resolution', () => {
       expect(body).not.toMatch(/constraint/i);
       expect(body).not.toMatch(/email`/);
     });
+  });
+});
+
+/**
+ * An ADMIN is never demoted by signing up again.
+ *
+ * Both the login and the sign-up screens post to /auth/social-login. The login
+ * screen sends { email, token } with no role; the sign-up screen sends a role,
+ * and the controller used to write whatever the request carried. So an admin
+ * who tapped Sign Up instead of Log In was silently demoted to FINDER, found
+ * the admin screen gone, and had no way back except scripts/make-admin.js.
+ *
+ * It matters more than an inconvenience: the weekly payout run aborts when no
+ * ADMIN account exists, so demoting the only admin stops owners being paid.
+ *
+ * switchRole has always refused this ("An admin stays an admin while using the
+ * driver or owner screens"). These two paths did not, and the disagreement is
+ * what made it a trap rather than a rule.
+ */
+describe('an ADMIN is never demoted by a sign-up', () => {
+  const ADMIN = {
+    id: 7,
+    email: 'admin@parkstop.test',
+    full_name: 'The Admin',
+    role: 'ADMIN',
+    firebase_uid: 'admin-uid',
+    is_finder_registered: true,
+    is_spotter_registered: false,
+  };
+
+  const signUpAs = async (role) => {
+    asToken(ADMIN.firebase_uid, ADMIN.email, true);
+    prisma.users.findUnique.mockResolvedValue(ADMIN);
+    prisma.users.update.mockImplementation(async ({ data }) => ({ ...ADMIN, ...data }));
+    const res = mockRes();
+    await AuthController.socialLogin(
+      { body: { token: 'any-token-string', email: ADMIN.email, role } },
+      res
+    );
+    return prisma.users.update.mock.calls[0]?.[0]?.data || {};
+  };
+
+  // These assert the ROLE THAT GETS WRITTEN, not that a warning was logged.
+  // A test that only checked the log would pass with the guard ripped out.
+  it('writes role ADMIN when the sign-up screen asks for FINDER', async () => {
+    const data = await signUpAs('FINDER');
+    expect(prisma.users.update).toHaveBeenCalled(); // not passing on an empty object
+    expect(data.role).toBe('ADMIN');
+  });
+
+  it('writes role ADMIN when the sign-up screen asks for SPOTTER', async () => {
+    const data = await signUpAs('SPOTTER');
+    expect(data.role).toBe('ADMIN');
+  });
+
+  it('the exact case: ADMIN + sign-up as SPOTTER -> role ADMIN, owner access granted', async () => {
+    // One assertion on the single update payload, so there is no way for the
+    // role to be demoted in one call and corrected in another.
+    const data = await signUpAs('SPOTTER');
+
+    expect(prisma.users.update).toHaveBeenCalledTimes(1);
+    expect(prisma.users.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 7 },
+        data: expect.objectContaining({ role: 'ADMIN', is_spotter_registered: true }),
+      })
+    );
+    // And nothing in that payload demotes them.
+    expect(data.role).not.toBe('SPOTTER');
+    expect(data.role).not.toBe('FINDER');
+  });
+
+  it('STILL grants the capability asked for — an admin may become an owner', async () => {
+    // Only the role is protected. An admin signing up as an owner should gain
+    // owner access, which is what makes the owner routes work for them
+    // (is_spotter_registered === true in utils/roles.js).
+    const data = await signUpAs('SPOTTER');
+    expect(data.is_spotter_registered).toBe(true);
+  });
+
+  it('a non-admin IS still re-roled, so ordinary sign-up is unchanged', async () => {
+    asToken('finder-uid', 'finder@parkstop.test', true);
+    prisma.users.findUnique.mockResolvedValue({ ...ADMIN, id: 8, role: 'FINDER', firebase_uid: 'finder-uid' });
+    prisma.users.update.mockImplementation(async ({ data }) => ({ ...ADMIN, ...data }));
+
+    await AuthController.socialLogin(
+      { body: { token: 'any-token-string', email: 'finder@parkstop.test', role: 'SPOTTER' } },
+      mockRes()
+    );
+
+    const data = prisma.users.update.mock.calls[0][0].data;
+    expect(data.role).toBe('SPOTTER');
+    expect(data.is_spotter_registered).toBe(true);
+  });
+});
+
+describe('an ADMIN is never demoted by /auth/register either', () => {
+  // The same overwrite existed on the register path. Fixing only social-login
+  // would have left the identical trap one endpoint away.
+  const ADMIN = {
+    id: 7,
+    email: 'admin@parkstop.test',
+    full_name: 'The Admin',
+    name: 'The Admin',
+    role: 'ADMIN',
+    firebase_uid: 'admin-uid',
+    is_finder_registered: true,
+    is_spotter_registered: false,
+  };
+
+  const registerAs = async (role, existing) => {
+    asToken(existing.firebase_uid, existing.email, true);
+    prisma.users.findFirst.mockResolvedValue(existing);
+    prisma.users.findUnique.mockResolvedValue(existing);
+    prisma.users.update.mockImplementation(async ({ data }) => ({ ...existing, ...data }));
+    const res = mockRes();
+    await AuthController.register(
+      { body: { email: existing.email, name: 'The Admin', phone: '9876543210', role, firebase_token: 'any' } },
+      res
+    );
+    return prisma.users.update.mock.calls[0]?.[0]?.data || {};
+  };
+
+  it('writes role ADMIN when registering as FINDER', async () => {
+    const data = await registerAs('FINDER', ADMIN);
+    // The update must have HAPPENED (otherwise this passes on an empty object
+    // for the wrong reason) and must say ADMIN.
+    expect(prisma.users.update).toHaveBeenCalled();
+    expect(data.role).toBe('ADMIN');
+    expect(data.is_finder_registered).toBe(true);
+  });
+
+  it('the exact case on this path too: ADMIN + register as SPOTTER', async () => {
+    const data = await registerAs('SPOTTER', ADMIN);
+    expect(data.role).toBe('ADMIN');
+    expect(data.is_spotter_registered).toBe(true);
+  });
+
+  it('still grants the capability', async () => {
+    const data = await registerAs('SPOTTER', ADMIN);
+    expect(data.is_spotter_registered).toBe(true);
+  });
+
+  it('a non-admin IS still re-roled', async () => {
+    const data = await registerAs('SPOTTER', { ...ADMIN, id: 8, role: 'FINDER', firebase_uid: 'finder-uid', email: 'finder@parkstop.test' });
+    expect(data.role).toBe('SPOTTER');
   });
 });

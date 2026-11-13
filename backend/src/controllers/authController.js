@@ -173,7 +173,22 @@ class AuthController {
 
         // If registering with a different role, update role and flags
         if (normalizedRole !== existing.role) {
-          updateData.role = normalizedRole;
+          // An ADMIN is never demoted by a registration, for the same reason
+          // the social-login path above refuses it: the role is granted out of
+          // band by scripts/make-admin.js, and re-registering is not a request
+          // to give it up. The capability flag is still set.
+          if (String(existing.role).toUpperCase() !== 'ADMIN') {
+            updateData.role = normalizedRole;
+          } else {
+            // Reasserted, not merely left alone — same reasoning as the
+            // social-login path.
+            updateData.role = 'ADMIN';
+            logger.warn(
+              `Registration for admin ${existing.id} asked for role ${normalizedRole}; ` +
+              'keeping ADMIN and setting the capability flag only'
+            );
+          }
+
           if (normalizedRole === 'FINDER') {
             updateData.is_finder_registered = true;
           } else if (normalizedRole === 'SPOTTER') {
@@ -519,7 +534,47 @@ class AuthController {
         // If a specific role is requested and differs from their current role, update it
         if (role && role.toUpperCase() !== user.role) {
           const targetRole = role.toUpperCase();
-          updateData.role = targetRole;
+
+          // An ADMIN is never demoted by a sign-up.
+          //
+          // Both the login and the sign-up screens post to this endpoint. The
+          // login screen sends { email, token } with no role, so it never
+          // reached this branch; the sign-up screen sends a role, so going
+          // through it again overwrote whatever the account was — and an admin
+          // who tapped Sign Up instead of Log In was silently demoted to
+          // FINDER or SPOTTER, with nothing in the app to say so. They would
+          // then find the admin screen gone, with no way back except another
+          // trip through scripts/make-admin.js.
+          //
+          // It is worse than an inconvenience: the weekly payout run aborts
+          // when no ADMIN account exists, so demoting the only admin stops
+          // owners being paid.
+          //
+          // switchRole already refuses this ("An admin stays an admin while
+          // using the driver or owner screens"); this path simply did not, and
+          // the two disagreeing is what made it a trap rather than a rule.
+          //
+          // The capability flag below is still set, deliberately: an admin who
+          // signs up as an owner SHOULD gain owner access. Only the role is
+          // protected.
+          if (String(user.role).toUpperCase() !== 'ADMIN') {
+            updateData.role = targetRole;
+          } else {
+            // Reassert ADMIN rather than just declining to write it.
+            //
+            // Leaving the field out is enough today, but only because nothing
+            // above this sets it — and a bare `updateData.role = ...` creeping
+            // back in above the guard is precisely the mistake this exists to
+            // prevent. Writing it makes the outcome independent of everything
+            // else in the function, and makes it assertable: a test can check
+            // the payload says ADMIN, rather than checking a log appeared.
+            updateData.role = 'ADMIN';
+            logger.warn(
+              `Social login for admin ${user.id} asked for role ${targetRole}; ` +
+              'keeping ADMIN and setting the capability flag only'
+            );
+          }
+
           if (targetRole === 'FINDER') {
             updateData.is_finder_registered = true;
           } else if (targetRole === 'SPOTTER') {
