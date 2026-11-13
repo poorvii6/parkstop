@@ -1,3 +1,8 @@
+// Refuse to run against a non-local database unless --production is passed.
+// This script writes.
+const requireLocalDb = require('./lib/require-local-db');
+requireLocalDb({ script: 'generate-test-data.js', what: 'insert test users, spots and bookings' });
+
 const prisma = require('../src/config/prisma');
 
 async function main() {

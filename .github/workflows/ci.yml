@@ -101,8 +101,34 @@ jobs:
       - name: Generate Prisma client
         run: cd backend && npx prisma generate
 
-      - name: Push schema to test DB
-        run: cd backend && npx prisma db push --skip-generate
+      # Build the test database the way production is built: by applying the
+      # migrations. This used to be `prisma db push`, which writes
+      # schema.prisma straight into the database and never runs a migration at
+      # all — so a migration could be wrong, or missing entirely, and CI would
+      # still be green. A migration had in fact never been applied to any
+      # database before being merged.
+      - name: Apply migrations to test DB
+        run: cd backend && npx prisma migrate deploy
+
+      # And prove the migrations actually produce schema.prisma. Without this,
+      # someone editing the schema without writing a migration would get a
+      # green build from the step above, since it would apply the old
+      # migrations happily and simply not have the new column.
+      #
+      # --exit-code: 0 when the diff is empty, 2 when it is not.
+      - name: Check migrations match the schema
+        run: |
+          cd backend
+          npx prisma migrate diff \
+            --from-url "$DATABASE_URL" \
+            --to-schema-datamodel prisma/schema.prisma \
+            --exit-code \
+          || {
+            echo "::error::The database built from prisma/migrations does not match prisma/schema.prisma."
+            echo "A schema change was committed without a migration, or a migration is wrong."
+            echo "Run: npx prisma migrate dev --name <what_changed>   (against a LOCAL database)"
+            exit 1
+          }
 
       - name: Run integration tests
         run: cd backend && npm run test:integration

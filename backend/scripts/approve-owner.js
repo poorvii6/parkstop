@@ -19,6 +19,11 @@
  * Uses `pg` directly rather than Prisma — one less platform-specific binary
  * to care about.
  */
+// Refuse to run against a non-local database unless --production is passed.
+// This script writes.
+const requireLocalDb = require('./lib/require-local-db');
+requireLocalDb({ script: 'approve-owner.js', what: 'set a user\'s verification_status' });
+
 const fs = require('fs');
 const path = require('path');
 const { Client } = require('pg');

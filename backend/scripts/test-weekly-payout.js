@@ -19,6 +19,11 @@
  */
 
 require('dotenv').config();
+// Refuse to run against a non-local database unless --production is passed.
+// This script writes.
+const requireLocalDb = require('./lib/require-local-db');
+requireLocalDb({ script: 'test-weekly-payout.js', what: 'CREATE users, run payouts, then DELETE them' });
+
 const prisma = require('../src/config/prisma');
 const { runWeeklyPayouts, MIN_PAYOUT } = require('../src/services/weeklyPayoutService');
 
