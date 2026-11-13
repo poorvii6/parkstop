@@ -50,25 +50,56 @@ class PaymentService {
    * @param arrearsPaid rupees of OLD dues included in this payment (from the
    *   order/QR notes). Only that much debt is cleared — never more.
    */
-  static async _finalizeClaimedBooking(bookingId, paymentId, arrearsPaid = 0) {
+  /**
+   * @param {number|null} [grossPaid]  rupees this payment actually carried,
+   *   arrears included. Omitted means "assume it covered exactly the balance",
+   *   which is what this function used to assume unconditionally.
+   */
+  static async _finalizeClaimedBooking(bookingId, paymentId, arrearsPaid = 0, grossPaid = null) {
     const before = await prisma.bookings.findUnique({
       where: { id: parseInt(bookingId) },
-      select: { total_price: true, advance_fee: true, status: true }
+      select: { total_price: true, advance_fee: true, status: true, amount_paid: true }
     });
 
-    // What this booking itself cost, excluding any arrears cleared in the same
-    // order — those settle an older debt and must not count as money paid
-    // towards this booking, or a refund would hand back more than was taken.
-    const paidForThisBooking =
-      Number(before?.total_price || 0) + Number(before?.advance_fee || 0);
+    const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+
+    // Arrears settle an OLDER debt and must not count as money paid towards
+    // this booking, or a refund would hand back more than was taken for it.
+    const paidArrears = Math.max(0, Number(arrearsPaid) || 0);
+
+    // What actually arrived for THIS booking.
+    //
+    // This used to be ASSIGNED total_price + advance_fee — the whole price,
+    // regardless of what the payment carried. That is an assumption, and in
+    // the normal flows it happens to be right, which is why it went unnoticed:
+    // a first payment covers the whole price, and an overstay top-up is
+    // exactly the difference, so the running total lands on the gross either
+    // way. It is wrong the moment a payment arrives that does NOT cover the
+    // balance — a payment created before complete() repriced an overstay, for
+    // instance. The booking then recorded ₹1250 collected when ₹450 had
+    // arrived, the driver's remaining debt was erased, and the owner was
+    // credited 80% of a figure nobody had paid.
+    //
+    // An increment also makes the column mean what every reader of it already
+    // assumes: money collected, not the price. BookingRefundService.spotFeeOf
+    // derives the refundable spot fee from it, so under the old assignment a
+    // part-paid booking could be refunded more than was ever taken.
+    const gross = Number(before?.total_price || 0) + Number(before?.advance_fee || 0);
+    const alreadyCollected = Math.max(0, Number(before?.amount_paid || 0));
+    const arrived = grossPaid == null
+      // No figure given: assume it covered exactly what was outstanding, which
+      // reproduces the old behaviour precisely.
+      ? Math.max(0, round2(gross - alreadyCollected))
+      : Math.max(0, round2(Number(grossPaid) - paidArrears));
 
     const claimed = await prisma.bookings.updateMany({
       where: { id: parseInt(bookingId), payment_status: { not: 'paid' } },
       data: {
         payment_id: paymentId,
         payment_status: 'paid',
-        // The floor used at checkout and the basis for every refund figure.
-        amount_paid: paidForThisBooking,
+        // A RUNNING TOTAL of what has arrived, incremented in the same atomic
+        // claim that flips the status, so two callers cannot both add.
+        amount_paid: { increment: arrived },
         updated_at: new Date()
       }
     });
@@ -82,7 +113,6 @@ class PaymentService {
     // Clear ONLY the arrears this payment actually included. Clearing the full
     // balance here used to forgive debt that was never paid (e.g. webhook
     // settlement of an order created without arrears).
-    const paidArrears = Math.max(0, Number(arrearsPaid) || 0);
     if (paidArrears > 0 && updatedBooking.users && updatedBooking.users.balance < 0) {
       const arrearsToClear = Math.min(paidArrears, Math.abs(Number(updatedBooking.users.balance)));
       await prisma.users.update({
@@ -106,7 +136,9 @@ class PaymentService {
       const paidSpot = updatedBooking?.parking_spots;
       if (paidSpot?.spotter_id) {
         await NotificationService.notifyBookingPaid(
-          paidSpot.spotter_id, updatedBooking, paidSpot, paidForThisBooking,
+          // What this payment brought in, not the booking's whole price — the
+          // owner is being told money has landed, so it must be that money.
+          paidSpot.spotter_id, updatedBooking, paidSpot, arrived,
         );
       }
     } catch (notifyErr) {
@@ -242,10 +274,28 @@ class PaymentService {
       throw new Error('QR amount underpaid');
     }
 
-    const updated = await PaymentService._finalizeClaimedBooking(bookingId, paymentEntity.id, Number(qrEntity?.notes?.arrears || 0));
+    const updated = await PaymentService._finalizeClaimedBooking(
+      bookingId, paymentEntity.id, Number(qrEntity?.notes?.arrears || 0),
+      Number(paymentEntity.amount) / 100
+    );
     if (!updated) {
+      // Already paid. If this is a DIFFERENT payment it is real money we have
+      // just taken for a booking that was settled — the owner's QR is the
+      // likeliest source, since one raised before the driver paid in the app
+      // stays scannable for thirty minutes. Re-read the booking: the one above
+      // was fetched before the claim and its payment_id may be stale.
+      const settled = await prisma.bookings.findUnique({ where: { id: parseInt(bookingId) } });
+      const dup = await PaymentService._refundDuplicatePayment(settled || booking, {
+        paymentId: paymentEntity.id,
+        amountPaise: paymentEntity.amount,
+      });
+      // A temporary failure must not be acked, or Razorpay stops redelivering
+      // and the refund is never retried.
+      if (dup.duplicate && !dup.refunded && !dup.alreadyRefunded && !dup.permanent) {
+        throw new Error(`Duplicate payment ${paymentEntity.id} on booking ${bookingId} could not be refunded yet`);
+      }
       logger.info(`QR: booking ${bookingId} already settled — idempotent ack`);
-      return { handled: true, alreadySettled: true };
+      return { handled: true, alreadySettled: true, duplicate: dup };
     }
     logger.info(`QR settled booking ${bookingId} via payment ${paymentEntity.id}`);
     return { handled: true };
@@ -284,12 +334,45 @@ class PaymentService {
       throw new Error('Webhook user mismatch');
     }
 
+    // The payment must still cover what the booking needs NOW, not merely what
+    // its own order was created for.
+    //
+    // Matching the payment against its order proves the payment is genuine; it
+    // says nothing about whether the price has moved since. A payment created
+    // before complete() repriced an overstay matches its order perfectly and
+    // is hundreds of rupees short of the bill. The QR path has always compared
+    // against computePayable, and so has verify; this one did not, which made
+    // the webhook the only door a stale payment could walk through.
+    //
+    // An already-paid booking needs 0, so a duplicate still passes here and is
+    // handled below, where it is refunded rather than settled.
+    const minPaise = Math.round(PaymentService.computePayable(booking, null).base * 100);
+    if (Number(paymentEntity.amount) < minPaise) {
+      logger.error(
+        `Webhook UNDERPAID booking ${bookingId}: payment ${paymentEntity.id} carried ` +
+        `${paymentEntity.amount} paise but the booking needs ${minPaise}`
+      );
+      throw new Error('Webhook amount no longer covers the booking');
+    }
+
     const updatedBooking = await PaymentService._finalizeClaimedBooking(
-      bookingId, paymentEntity.id, Number(order?.notes?.arrears || 0)
+      bookingId, paymentEntity.id, Number(order?.notes?.arrears || 0),
+      Number(paymentEntity.amount) / 100
     );
     if (!updatedBooking) {
+      // Already paid, and this is a captured payment we have just taken. If it
+      // is not the payment recorded on the booking, give it back.
+      const settled = await prisma.bookings.findUnique({ where: { id: parseInt(bookingId) } });
+      const dup = await PaymentService._refundDuplicatePayment(settled || booking, {
+        paymentId: paymentEntity.id,
+        amountPaise: paymentEntity.amount,
+      });
+      // Do not ack a temporary failure: the redelivery is what retries it.
+      if (dup.duplicate && !dup.refunded && !dup.alreadyRefunded && !dup.permanent) {
+        throw new Error(`Duplicate payment ${paymentEntity.id} on booking ${bookingId} could not be refunded yet`);
+      }
       logger.info(`Webhook: booking ${bookingId} already settled — idempotent ack`);
-      return { handled: true, alreadySettled: true };
+      return { handled: true, alreadySettled: true, duplicate: dup };
     }
 
     logger.info(`Webhook settled booking ${bookingId} via payment ${paymentEntity.id}`);
@@ -311,10 +394,26 @@ class PaymentService {
         throw new Error('This booking does not belong to you.');
       }
 
-      if (booking.payment_status === 'paid') {
-        logger.info(`Payment verification for booking ${bookingId} was already processed (already paid)`);
+      // Already paid, by THIS payment: an ordinary retry of the same verify
+      // call. Nothing to check and nothing to give back.
+      const alreadyPaid = booking.payment_status === 'paid';
+      if (alreadyPaid && paymentId && String(paymentId) === String(booking.payment_id)) {
+        logger.info(`Payment verification for booking ${bookingId} was already processed (same payment)`);
         return { success: true, paymentId: booking.payment_id };
       }
+
+      // Already paid by a DIFFERENT payment is a duplicate, and it is handled
+      // at the BOTTOM of this function, not here.
+      //
+      // This used to return at this point, before a single check had run, and
+      // hand back the booking's old payment_id as though the new payment had
+      // settled it. Refunding from here would mean refunding an id that
+      // nothing has verified: no signature, no proof the order belongs to this
+      // booking or this finder, no proof the payment belongs to the order. An
+      // attacker could post somebody else's payment id at an already-paid
+      // booking and have us refund it. So the full chain runs first, exactly
+      // as it would for a first payment, and only an id that survives all of
+      // it is given back.
 
       // 1. Signature: proves Razorpay issued this payment for this order.
       //    There is no test/mock shortcut — every booking needs a real payment.
@@ -360,9 +459,24 @@ class PaymentService {
       });
       if (reused) throw new Error('This payment was already used for another booking.');
 
-      // 6. Atomic claim — exactly one caller (client verify or webhook) wins.
+      // 6. Verified, and the booking was already paid by something else: this
+      //    is real money taken twice. Give THIS payment back; the booking keeps
+      //    the one that actually settled it.
+      if (alreadyPaid) {
+        const dup = await PaymentService._refundDuplicatePayment(booking, {
+          paymentId,
+          amountPaise: payment.amount,
+        });
+        // The parking is paid for either way, so the driver is not shown an
+        // error. A refund that failed temporarily is retried when Razorpay
+        // redelivers the webhook for this same payment.
+        return { success: true, paymentId: booking.payment_id, duplicate: dup };
+      }
+
+      // 7. Atomic claim — exactly one caller (client verify or webhook) wins.
       const updatedBooking = await PaymentService._finalizeClaimedBooking(
-        bookingId, paymentId, Number(order.notes?.arrears || 0)
+        bookingId, paymentId, Number(order.notes?.arrears || 0),
+        Number(payment.amount) / 100
       );
       if (!updatedBooking) {
         logger.info(`Booking ${bookingId} was settled concurrently — idempotent return`);
@@ -451,6 +565,154 @@ class PaymentService {
     }
 
     return { refundedPaise, refundId };
+  }
+
+  /**
+   * Tell every admin that a duplicate payment could not be given back.
+   *
+   * Deliberately does NOT write booking.refund_status = 'needs_review'. That
+   * column is the DRIVER's cancellation-refund lifecycle, and 'needs_review' is
+   * one of BookingRefundService.TERMINAL_REFUND_STATUSES — writing it here
+   * would permanently block a legitimate cancellation refund for this booking,
+   * because claimForRefund refuses to start from a terminal status. Two
+   * different pots of money, one column. Never throws.
+   */
+  static async _notifyAdminsOfDuplicate(booking, duplicateId, amount, why) {
+    try {
+      const admins = await prisma.users.findMany({ where: { role: 'ADMIN' }, select: { id: true } });
+      if (!admins.length) {
+        logger.error(
+          `Duplicate payment ${duplicateId} on booking ${booking.id} needs review ` +
+          `but there is no admin account to tell`
+        );
+        return;
+      }
+      await Promise.all(admins.map((a) => NotificationService.sendPushNotification(a.id, {
+        title: 'Duplicate payment needs review',
+        body: `Booking #${booking.id}: ₹${amount} taken by payment ${duplicateId} could not be refunded automatically. ${why}`,
+        data: { type: 'duplicate_payment_needs_review', bookingId: parseInt(booking.id), paymentId: String(duplicateId) },
+      })));
+    } catch (err) {
+      logger.warn(`Admin duplicate-payment notice failed for booking ${booking.id}: ${err?.message}`);
+    }
+  }
+
+  /**
+   * A second, real payment arrived for a booking that is already paid.
+   *
+   * The money is captured into ParkStop's Razorpay account either way, so the
+   * only question is whether we hand it back. Until now nothing did: the atomic
+   * claim in _finalizeClaimedBooking returned null, the caller logged "already
+   * settled — idempotent ack", and a real payment sat in our account with
+   * nothing recording it, refunding it or telling anyone.
+   *
+   * The likeliest way in is the owner raising a QR at checkout while the driver
+   * pays in the app. createBookingQr refuses an already-paid booking, but a QR
+   * raised seconds earlier stays scannable for thirty minutes.
+   *
+   * Three rules, in order:
+   *
+   *   1. Never touch the original. Only this payment's own id, for its own
+   *      amount. Refunding booking.payment_id would hand back the money that
+   *      actually paid for the parking and leave the duplicate in place.
+   *   2. Ask Razorpay what it has already refunded before refunding anything.
+   *      Webhooks retry, so this is re-entered for the same payment, and
+   *      amount_refunded rises as soon as a refund is CREATED — so one that
+   *      timed out on our side but was accepted on theirs is seen here.
+   *   3. A failure is never swallowed. Admins are told and the log carries both
+   *      payment ids and the amount.
+   *
+   * @returns {Promise<object>} `{duplicate:false}` when this is the same
+   *   payment arriving again (an ordinary retry), otherwise the outcome.
+   */
+  static async _refundDuplicatePayment(booking, { paymentId, amountPaise }) {
+    const original = booking?.payment_id || null;
+
+    // The same payment arriving twice is a retry, not a duplicate. And a
+    // booking with no recorded payment id has no original to compare against,
+    // so calling this one "extra" would be a guess — leave it alone.
+    if (!paymentId || !original || String(paymentId) === String(original)) {
+      return { duplicate: false };
+    }
+
+    const amount = Math.round(Number(amountPaise) || 0) / 100;
+
+    logger.error(
+      `DUPLICATE PAYMENT on booking ${booking.id}: ₹${amount} captured by payment ${paymentId} ` +
+      `while the booking was already paid by ${original}. Refunding ${paymentId} in full.`
+    );
+
+    if (!(amount > 0)) {
+      await PaymentService._notifyAdminsOfDuplicate(
+        booking, paymentId, amount, 'The duplicate carries no amount to refund.'
+      );
+      return { duplicate: true, refunded: false, needsReview: true, permanent: true };
+    }
+
+    // Lazy require: BookingRefundService requires this module at its top, so a
+    // top-level require here would be circular and hand back a half-built one.
+    const { isPermanentGatewayError } = require('./BookingRefundService');
+
+    // Rule 2: has it already gone back?
+    let state;
+    try {
+      state = await PaymentService.fetchRefundState(paymentId);
+    } catch (err) {
+      const permanent = isPermanentGatewayError(err);
+      const why = err?.error?.description || err?.message || 'unknown error';
+      logger.error(`Could not read duplicate payment ${paymentId} for booking ${booking.id}: ${why}`);
+      if (permanent) {
+        await PaymentService._notifyAdminsOfDuplicate(booking, paymentId, amount, `Razorpay could not be read: ${why}`);
+      }
+      return { duplicate: true, refunded: false, needsReview: permanent, permanent, error: why };
+    }
+
+    if (Number(state.refundedPaise) >= Math.round(Number(amountPaise))) {
+      logger.warn(
+        `Duplicate payment ${paymentId} on booking ${booking.id} was already refunded ` +
+        `(₹${Number(state.refundedPaise) / 100}); recording, not refunding again`
+      );
+      return { duplicate: true, refunded: false, alreadyRefunded: true, refundId: state.refundId };
+    }
+
+    // Rule 1: this payment's own id, its own amount. Never booking.payment_id.
+    let refundId;
+    try {
+      refundId = await razorpayAdapter.refund(paymentId, amount);
+    } catch (err) {
+      const permanent = isPermanentGatewayError(err);
+      const why = err?.error?.description || err?.message || 'unknown error';
+      logger.error(
+        `DUPLICATE REFUND FAILED for booking ${booking.id}: payment ${paymentId} (₹${amount}), ` +
+        `original ${original}. ${why}`
+      );
+      if (permanent) {
+        await PaymentService._notifyAdminsOfDuplicate(booking, paymentId, amount, `Razorpay refused the refund: ${why}`);
+      }
+      // A temporary failure is left for the caller to retry — the webhook
+      // redelivers, and re-entering is safe because of rule 2.
+      return { duplicate: true, refunded: false, needsReview: permanent, permanent, error: why };
+    }
+
+    logger.warn(
+      `Duplicate payment refunded for booking ${booking.id}: ₹${amount} returned on ${paymentId} ` +
+      `(refund ${refundId}); original payment ${original} untouched`
+    );
+
+    // Best effort: the money is already on its way back.
+    try {
+      if (booking.user_id) {
+        await NotificationService.sendPushNotification(booking.user_id, {
+          title: 'You were charged twice',
+          body: `You were charged twice for booking #${booking.id}. ₹${amount} is on its way back to your original payment method.`,
+          data: { type: 'duplicate_payment_refunded', bookingId: parseInt(booking.id) },
+        });
+      }
+    } catch (err) {
+      logger.warn(`Duplicate-refund notice failed for booking ${booking.id}: ${err?.message}`);
+    }
+
+    return { duplicate: true, refunded: true, refundId };
   }
 }
 

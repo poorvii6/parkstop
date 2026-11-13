@@ -65,15 +65,64 @@ describe('the owner is not paid before the car arrives', () => {
 });
 
 describe('amount_paid records this booking only', () => {
+  // The no-amount fallback has to subtract what is already collected, not just
+  // take the gross. Every other case starts from zero collected, where the two
+  // give the same answer -- so only a part-paid booking pins this down. Without
+  // it the running total would count the first payment twice.
+  test('with no amount given, only the OUTSTANDING balance is added', async () => {
+    prisma.bookings.findUnique
+      .mockResolvedValueOnce({ total_price: 1200, advance_fee: 50, status: 'completed', amount_paid: 450 })
+      .mockResolvedValueOnce(settled('completed'));
+
+    await PaymentService._finalizeClaimedBooking(100, 'pay_abc');
+
+    // Gross is 1250 and 450 is already in, so 800 is what is left to collect.
+    expect(prisma.bookings.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ amount_paid: { increment: 800 } }) })
+    );
+  });
+
   test('spot fee plus advance fee', async () => {
     prisma.bookings.findUnique
       .mockResolvedValueOnce({ total_price: 400, advance_fee: 50, status: 'reserved' })
       .mockResolvedValueOnce(settled('reserved'));
 
+    // ₹450 arrived against a booking with nothing collected, so the running
+    // total goes up by ₹450. Called without a paid amount, which means "assume
+    // it covered exactly the balance" — the behaviour this used to assume
+    // unconditionally, now expressed as an increment.
     await PaymentService._finalizeClaimedBooking(100, 'pay_abc');
 
     expect(prisma.bookings.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ amount_paid: 450 }) })
+      expect.objectContaining({ data: expect.objectContaining({ amount_paid: { increment: 450 } }) })
+    );
+  });
+
+  test('records only what ARRIVED, not the booking price', async () => {
+    // The hole this closes: a ₹450 payment landing on a booking repriced to
+    // ₹1200 + ₹50 used to record ₹1250 collected. Now it records ₹450.
+    prisma.bookings.findUnique
+      .mockResolvedValueOnce({ total_price: 1200, advance_fee: 50, status: 'completed', amount_paid: 0 })
+      .mockResolvedValueOnce(settled('completed'));
+
+    await PaymentService._finalizeClaimedBooking(100, 'pay_abc', 0, 450);
+
+    expect(prisma.bookings.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ amount_paid: { increment: 450 } }) })
+    );
+  });
+
+  test('an overstay top-up ADDS to what was already collected', async () => {
+    // ₹450 prepaid, repriced to ₹1200 + ₹50, driver pays the ₹800 difference.
+    // The running total must land on ₹1250, not overwrite to it.
+    prisma.bookings.findUnique
+      .mockResolvedValueOnce({ total_price: 1200, advance_fee: 50, status: 'completed', amount_paid: 450 })
+      .mockResolvedValueOnce(settled('completed'));
+
+    await PaymentService._finalizeClaimedBooking(100, 'pay_abc', 0, 800);
+
+    expect(prisma.bookings.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ amount_paid: { increment: 800 } }) })
     );
   });
 
@@ -89,7 +138,7 @@ describe('amount_paid records this booking only', () => {
     await PaymentService._finalizeClaimedBooking(100, 'pay_abc', 300);
 
     expect(prisma.bookings.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ amount_paid: 400 }) })
+      expect.objectContaining({ data: expect.objectContaining({ amount_paid: { increment: 400 } }) })
     );
     expect(prisma.users.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { balance: { increment: 300 } } })
