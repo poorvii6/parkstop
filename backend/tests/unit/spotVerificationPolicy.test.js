@@ -281,3 +281,159 @@ describe('ownerSummary is the one shape both owner screens read', () => {
     expect(out.is_live).toBe(false);
   });
 });
+
+/**
+ * Does the document's address agree with the pin?
+ *
+ * The bands are 150 m and 1 km. What matters as much is WHAT THE ADDRESS
+ * RESOLVED TO, because Nominatim returns the street for a full Indian house
+ * address and a box 4.4 km across for a suburb. A coarse hit is therefore
+ * allowed its own size before any distance counts, and can never read as
+ * confirmation however close the pin is.
+ */
+describe('addressVerdictFor', () => {
+  const { PRECISION } = require('../../src/services/geocoding');
+  const V = Policy.ADDRESS_VERDICT;
+
+  const fine = (metres) => Policy.addressVerdictFor({ metres, precision: PRECISION.STREET, uncertaintyM: 150 });
+  // "Indiranagar, Bengaluru": a suburb with a radius of about 2.2 km.
+  const suburb = (metres) => Policy.addressVerdictFor({ metres, precision: PRECISION.LOCALITY, uncertaintyM: 2200 });
+
+  describe('a precise hit gets the bands as written', () => {
+    test.each([
+      [0, V.CONSISTENT],
+      [149, V.CONSISTENT],
+      [150, V.CONSISTENT],
+      [151, V.REVIEW],
+      [900, V.REVIEW],
+      [1000, V.REVIEW],
+      [1001, V.MISMATCH],
+      [3000, V.MISMATCH],
+    ])('%s m is %s', (metres, expected) => {
+      expect(fine(metres).verdict).toBe(expected);
+    });
+
+    test('the 3 km case this feature exists for is a mismatch', () => {
+      // An owner uploading their own bill and listing a driveway three
+      // kilometres away, when the document resolved precisely enough to say so.
+      expect(fine(3000).verdict).toBe(V.MISMATCH);
+      expect(fine(3000).explanation).toMatch(/too far to be the same place/);
+    });
+  });
+
+  describe('a coarse hit is allowed its own size, and never confirms anything', () => {
+    test.each([
+      [0, V.UNVERIFIABLE],
+      [1000, V.UNVERIFIABLE],
+      [2200, V.UNVERIFIABLE],
+      [2350, V.UNVERIFIABLE],
+      [2351, V.REVIEW],
+      [3200, V.REVIEW],
+      [3201, V.MISMATCH],
+      [20000, V.MISMATCH],
+    ])('%s m from the middle of a 2.2 km suburb is %s', (metres, expected) => {
+      expect(suburb(metres).verdict).toBe(expected);
+    });
+
+    test('being close to the middle of a suburb is NOT evidence', () => {
+      // The pin being 100 m from the centroid of a 4.4 km suburb says nothing
+      // whatever about a driveway, so it must not read as consistent.
+      const out = suburb(100);
+
+      expect(out.verdict).toBe(V.UNVERIFIABLE);
+      expect(out.verdict).not.toBe(V.CONSISTENT);
+      expect(out.explanation).toMatch(/neither confirms nor contradicts/);
+    });
+
+    test('being well outside the area IS evidence', () => {
+      expect(suburb(20000).verdict).toBe(V.MISMATCH);
+      expect(suburb(20000).explanation).toMatch(/outside the locality/);
+    });
+
+    test('the allowance is reported, so the number can be read later', () => {
+      expect(suburb(2500).beyond_m).toBe(300);
+      expect(suburb(2500).metres).toBe(2500);
+    });
+  });
+
+  describe('a region-sized hit is useless for confirming, usable for refuting', () => {
+    const city = (metres) => Policy.addressVerdictFor({ metres, precision: PRECISION.REGION, uncertaintyM: 17500 });
+
+    test('anywhere in the city is unverifiable', () => {
+      expect(city(10000).verdict).toBe(V.UNVERIFIABLE);
+    });
+
+    test('a different city is a mismatch', () => {
+      expect(city(40000).verdict).toBe(V.MISMATCH);
+    });
+  });
+
+  describe('an unknown-precision hit is treated as coarse', () => {
+    // Ola returns a point and nothing about granularity, and has been recorded
+    // tens of kilometres out on administrative names.
+    const ola = (metres) => Policy.addressVerdictFor({ metres, precision: PRECISION.UNKNOWN, uncertaintyM: 1000 });
+
+    test('a close hit still cannot confirm', () => {
+      expect(ola(50).verdict).toBe(V.UNVERIFIABLE);
+    });
+
+    test('a far one still refutes', () => {
+      expect(ola(5000).verdict).toBe(V.MISMATCH);
+    });
+  });
+
+  describe('nothing resolved', () => {
+    test.each([null, undefined, NaN, 'abc'])('%s metres is unresolved', (metres) => {
+      const out = Policy.addressVerdictFor({ metres, precision: null, uncertaintyM: null });
+
+      expect(out.verdict).toBe(V.UNRESOLVED);
+      expect(out.metres).toBeNull();
+      expect(out.explanation).toMatch(/could not be found on the map/);
+    });
+  });
+});
+
+describe('what stands in the way of a desk pass', () => {
+  const { NAME_MATCH } = require('../../src/services/nameMatch');
+  const V = Policy.ADDRESS_VERDICT;
+  const codes = (args) => Policy.deskPassBlockers(args).map((b) => b.code);
+
+  test('a name that is not the same person blocks', () => {
+    expect(codes({ nameVerdict: NAME_MATCH.NONE, addressVerdict: V.CONSISTENT })).toEqual(['NAME_NO_MATCH']);
+  });
+
+  test('no name typed at all blocks', () => {
+    expect(codes({ nameVerdict: null, addressVerdict: V.CONSISTENT })).toEqual(['NAME_NO_MATCH']);
+  });
+
+  test.each([NAME_MATCH.DIRECT, NAME_MATCH.GOOD_PARTIAL, NAME_MATCH.MODERATE_PARTIAL])(
+    '%s does not block — the admin is reading the document',
+    (nameVerdict) => {
+      expect(codes({ nameVerdict, addressVerdict: V.CONSISTENT })).toEqual([]);
+    }
+  );
+
+  test('an address somewhere else, or nowhere, blocks', () => {
+    expect(codes({ nameVerdict: NAME_MATCH.DIRECT, addressVerdict: V.MISMATCH })).toEqual(['ADDRESS_MISMATCH']);
+    expect(codes({ nameVerdict: NAME_MATCH.DIRECT, addressVerdict: V.UNRESOLVED })).toEqual(['ADDRESS_UNRESOLVED']);
+  });
+
+  test('unverifiable and review do NOT block, deliberately', () => {
+    // Most legitimate Indian addresses resolve only to a locality. Blocking on
+    // that would mean an override on nearly every pass, and an override that is
+    // always required is not a signal, it is a keystroke.
+    expect(codes({ nameVerdict: NAME_MATCH.DIRECT, addressVerdict: V.UNVERIFIABLE })).toEqual([]);
+    expect(codes({ nameVerdict: NAME_MATCH.DIRECT, addressVerdict: V.REVIEW })).toEqual([]);
+  });
+
+  test('both problems are reported, not just the first', () => {
+    expect(codes({ nameVerdict: NAME_MATCH.NONE, addressVerdict: V.MISMATCH }))
+      .toEqual(['NAME_NO_MATCH', 'ADDRESS_MISMATCH']);
+  });
+
+  test('each blocker carries a sentence an admin can act on', () => {
+    for (const b of Policy.deskPassBlockers({ nameVerdict: NAME_MATCH.NONE, addressVerdict: V.MISMATCH })) {
+      expect(b.message.length).toBeGreaterThan(20);
+    }
+  });
+});

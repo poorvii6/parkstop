@@ -16,6 +16,8 @@ const {
   isVisibleToDrivers,
   isPinFrozen,
 } = require('../constants/spotVerification');
+const { FINE_PRECISIONS } = require('./geocoding');
+const { GOOD_NAME_MATCH, REVIEW_NAME_MATCH } = require('./nameMatch');
 
 /** What we promise the owner. */
 const SLA_HOURS = 48;
@@ -89,6 +91,128 @@ function waitFor({ status, submittedAt, now = new Date() }) {
     hours_left: round1(Math.max(0, SLA_HOURS - waitingHours)),
     overdue_by_hours: waiting >= SLA_HOURS ? round1(waitingHours - SLA_HOURS) : null,
   };
+}
+
+/**
+ * Does the document's address agree with the pin?
+ *
+ * The bands are 150 m and 1 km, as agreed. What matters as much is WHAT THE
+ * ADDRESS RESOLVED TO, because the distance is otherwise meaningless:
+ *
+ *   - a full building address in Bengaluru comes back as the STREET, because
+ *     Nominatim drops house numbers. 120 m from a street centroid is nothing.
+ *   - "Indiranagar, Bengaluru" comes back as a suburb 4.4 km across. Being
+ *     800 m from the middle of it says nothing at all about a driveway — and
+ *     neither does being 2 km from it.
+ *   - a bill-style address with no commas comes back as nothing.
+ *
+ * So a coarse hit is allowed its own size before any distance counts, and can
+ * never read as CONFIRMATION however close the pin is — only as unverifiable,
+ * or, if the pin is far outside the area entirely, as a mismatch. A fine hit
+ * gets the bands as written.
+ *
+ * Nothing here decides anything. An admin reads the document; this tells them
+ * what the numbers are worth.
+ */
+const ADDRESS_VERDICT = {
+  /** Close, and the address resolved precisely enough for that to mean it. */
+  CONSISTENT: 'consistent',
+  /** Far enough to look at, close enough to be ordinary. */
+  REVIEW: 'review',
+  /** Beyond anything the imprecision can explain. */
+  MISMATCH: 'mismatch',
+  /** Resolved, but only to an area the pin sits inside. Proves nothing. */
+  UNVERIFIABLE: 'unverifiable',
+  /** Nothing came back. Never a pass on its own. */
+  UNRESOLVED: 'unresolved',
+};
+
+/** Within this, a precise hit counts as agreeing with the pin. */
+const ADDRESS_CONSISTENT_M = 150;
+/** Beyond this, a precise hit is a mismatch rather than something to look at. */
+const ADDRESS_REVIEW_M = 1000;
+
+/**
+ * @param {object} args
+ * @param {number|null} args.metres       pin to geocoded point
+ * @param {string|null} args.precision    see geocoding.PRECISION
+ * @param {number|null} args.uncertaintyM the size of the thing that was found
+ */
+function addressVerdictFor({ metres, precision, uncertaintyM }) {
+  if (metres === null || metres === undefined || !Number.isFinite(Number(metres))) {
+    return {
+      verdict: ADDRESS_VERDICT.UNRESOLVED,
+      metres: null,
+      beyond_m: null,
+      explanation: 'The address on the document could not be found on the map, so there is nothing to compare the pin against.',
+    };
+  }
+
+  const d = Number(metres);
+  const fine = FINE_PRECISIONS.includes(precision);
+  // A coarse hit is allowed its own radius before any of the distance counts
+  // against the owner. A fine hit gets no allowance.
+  const allowance = fine ? 0 : Math.max(0, Number(uncertaintyM) || 0);
+  const beyond = Math.max(0, d - allowance);
+
+  let verdict;
+  if (beyond <= ADDRESS_CONSISTENT_M) {
+    verdict = fine ? ADDRESS_VERDICT.CONSISTENT : ADDRESS_VERDICT.UNVERIFIABLE;
+  } else if (beyond <= ADDRESS_REVIEW_M) {
+    verdict = ADDRESS_VERDICT.REVIEW;
+  } else {
+    verdict = ADDRESS_VERDICT.MISMATCH;
+  }
+
+  const explanations = {
+    [ADDRESS_VERDICT.CONSISTENT]: `The address resolves to within ${Math.round(d)} m of the pin.`,
+    [ADDRESS_VERDICT.UNVERIFIABLE]: `The address only resolves to a ${precision} about ${Math.round(allowance)} m across, and the pin is inside it. The distance neither confirms nor contradicts anything — read the document.`,
+    [ADDRESS_VERDICT.REVIEW]: fine
+      ? `The pin is ${Math.round(d)} m from the address. Ordinary for a street-level result, worth a look.`
+      : `The pin is ${Math.round(d)} m from the middle of a ${precision}, which is ${Math.round(beyond)} m outside it.`,
+    [ADDRESS_VERDICT.MISMATCH]: fine
+      ? `The pin is ${Math.round(d)} m from the address — too far to be the same place.`
+      : `The pin is ${Math.round(beyond)} m outside the ${precision} this address resolves to.`,
+  };
+
+  return { verdict, metres: Math.round(d), beyond_m: Math.round(beyond), explanation: explanations[verdict] };
+}
+
+/**
+ * What stands in the way of passing a desk review.
+ *
+ * Only two things, and both yield to an admin who says why in writing: a name
+ * that does not look like the same person, and an address that is either
+ * somewhere else or nowhere at all.
+ *
+ * UNVERIFIABLE and REVIEW deliberately do NOT block. Most legitimate Indian
+ * addresses resolve only to a locality — it is what the geocoder does — so
+ * blocking on that would mean an override on nearly every pass, and an
+ * override that is always required is not a signal, it is a keystroke.
+ */
+function deskPassBlockers({ nameVerdict, addressVerdict }) {
+  const blockers = [];
+
+  if (!GOOD_NAME_MATCH.includes(nameVerdict) && !REVIEW_NAME_MATCH.includes(nameVerdict)) {
+    blockers.push({
+      code: 'NAME_NO_MATCH',
+      message: 'The name on the document does not look like the same person as the verified Aadhaar name.',
+    });
+  }
+  if (addressVerdict === ADDRESS_VERDICT.MISMATCH) {
+    blockers.push({
+      code: 'ADDRESS_MISMATCH',
+      message: 'The address on the document is too far from this spot to be the same place.',
+    });
+  }
+  if (addressVerdict === ADDRESS_VERDICT.UNRESOLVED) {
+    blockers.push({
+      code: 'ADDRESS_UNRESOLVED',
+      message: 'The address on the document could not be found on the map, so it cannot be checked against the pin.',
+    });
+  }
+
+  return blockers;
 }
 
 /**
@@ -196,7 +320,12 @@ module.exports = {
   SLA,
   SLA_HOURS,
   AT_RISK_HOURS,
+  ADDRESS_VERDICT,
+  ADDRESS_CONSISTENT_M,
+  ADDRESS_REVIEW_M,
   waitFor,
+  addressVerdictFor,
+  deskPassBlockers,
   driverVisibleStatusFor,
   ownerMessageFor,
   ownerSummary,

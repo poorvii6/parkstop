@@ -177,12 +177,10 @@ function assertCoordinate(value, field, limit) {
 /** Whether a caller actually sent a field, as opposed to leaving it out. */
 const isGiven = (v) => v !== undefined && v !== null && v !== '';
 
-/** Metres between two coordinates. Flat-earth is ample at this scale. */
-function metresBetween(aLat, aLng, bLat, bLng) {
-  const dx = (bLng - aLng) * 111320 * Math.cos((aLat * Math.PI) / 180);
-  const dy = (bLat - aLat) * 110540;
-  return Math.sqrt(dx * dx + dy * dy);
-}
+// Metres between two coordinates. Was a private copy here; shared now, because
+// the per-spot address check measures a document's address against this same
+// pin and routes/maps.js had a third copy in different units.
+const { metresBetween } = require('../utils/geo');
 
 /**
  * How far the pin may shift before it counts as a MOVE rather than the app

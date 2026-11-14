@@ -21,8 +21,12 @@ const cf = require('../services/cashfreeVerification');
 const NotificationService = require('../services/notificationService');
 
 const MAX_ATTEMPTS_PER_DAY = 5;           // per paid step, to cap cost and abuse
-const GOOD_NAME_MATCH = ['DIRECT_MATCH', 'GOOD_PARTIAL_MATCH'];
-const REVIEW_NAME_MATCH = ['MODERATE_PARTIAL_MATCH']; // allowed, flagged for admin
+// One copy, in services/nameMatch.js, now that the per-spot desk review
+// classifies name verdicts too. The strings are Cashfree's; the per-spot check
+// produces the same vocabulary from a local comparison, so one policy covers
+// both. GOOD_NAME_MATCH: good enough to proceed. REVIEW_NAME_MATCH: allowed,
+// flagged for an admin.
+const { GOOD_NAME_MATCH, REVIEW_NAME_MATCH } = require('../services/nameMatch');
 const DOC_TYPES = ['electricity_bill', 'property_tax', 'rent_agreement', 'sale_deed', 'water_bill', 'other'];
 
 cloudinary.config({

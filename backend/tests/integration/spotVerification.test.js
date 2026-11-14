@@ -42,6 +42,17 @@ jest.mock('cloudinary', () => {
   };
 });
 
+/**
+ * The geocoder is mocked: these tests must not depend on Nominatim being up,
+ * and Nominatim's usage policy is one request a second. What it ACTUALLY does
+ * with Indian addresses is recorded in tests/unit/geocoding.test.js, from live
+ * responses. Here each test says what came back and checks what we did about it.
+ */
+jest.mock('../../src/services/geocoding', () => {
+  const actual = jest.requireActual('../../src/services/geocoding');
+  return { ...actual, geocodeAddress: jest.fn() };
+});
+
 process.env.CLOUDINARY_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME || 'test-cloud';
 
 const request = require('supertest');
@@ -669,5 +680,388 @@ describe('the pin freeze follows the spot, not the owner', () => {
 
     expect(res.status).toBe(200);
     expect(Number((await spotRow(ids.spots.rejected)).latitude)).toBeCloseTo(28.61, 4);
+  });
+});
+
+// ──────────────────────── stage 2: the desk review ────────────────────────
+
+/**
+ * An admin reads the document. Two checks help them: is this the same person,
+ * and is this the same place. Neither decides — a desk pass sends the spot to
+ * the FIELD stage, not live, because a desk review cannot prove a document is
+ * genuine.
+ */
+describe('the desk review', () => {
+  const { geocodeAddress } = require('../../src/services/geocoding');
+  const { PRECISION } = jest.requireActual('../../src/services/geocoding');
+
+  /** A geocoder answer, positioned relative to the spot's pin. */
+  const resolvesTo = ({ metresNorth = 0, precision = PRECISION.STREET, uncertainty = 150, source = 'nominatim' }) => {
+    geocodeAddress.mockResolvedValue({
+      lat: String(PIN.latitude + metresNorth / 110540),
+      lon: String(PIN.longitude),
+      precision,
+      uncertainty_m: uncertainty,
+      source,
+      display_name: 'Somewhere, Bengaluru',
+      bbox: null,
+      place_rank: 26,
+      kind: 'highway/residential',
+    });
+  };
+  const resolvesToNothing = () => geocodeAddress.mockResolvedValue(null);
+
+  /** A spot sitting in desk_pending, owned by the approved OWNER. */
+  async function submittedSpot(title, over = {}) {
+    const id = await makeSpot(ids.owner, title, 'not_started');
+    await prisma.spot_verifications.update({
+      where: { spot_id: id },
+      data: {
+        status: 'desk_pending',
+        submitted_at: new Date(),
+        doc_type: 'electricity_bill',
+        doc_public_id: 'parkstop/spot-docs/mock-desk',
+        claimed_address: '42 Verification Road, Indiranagar, Bengaluru 560038',
+        relationship: 'owner',
+        ...over,
+      },
+    });
+    ids.spots[title] = id;
+    return id;
+  }
+
+  const check = (spotId, body = {}) =>
+    request(app).post(`/api/v1/spot-verification/admin/${spotId}/check`).set(auth(ADMIN)).send(body);
+  const decide = (spotId, body) =>
+    request(app).post(`/api/v1/spot-verification/admin/${spotId}/desk`).set(auth(ADMIN)).send(body);
+
+  beforeAll(async () => {
+    // The desk review compares the document's name against the owner's
+    // verified Aadhaar name, so the owner needs one.
+    await prisma.owner_verifications.upsert({
+      where: { user_id: ids.owner },
+      update: { aadhaar_name: 'Rajesh Kumar' },
+      create: { user_id: ids.owner, status: 'approved', aadhaar_name: 'Rajesh Kumar' },
+    });
+  });
+
+  afterAll(async () => {
+    await prisma.owner_verifications.deleteMany({ where: { user_id: ids.owner } });
+  });
+
+  beforeEach(() => jest.clearAllMocks());
+
+  describe('running the checks without deciding', () => {
+    test('it stores the distance, the precision and the verdict', async () => {
+      const id = await submittedSpot('desk-check');
+      resolvesTo({ metresNorth: 80 });
+
+      const res = await check(id, { name_on_document: 'Shri Rajesh Kumar' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.address.verdict).toBe('consistent');
+      expect(res.body.data.address.metres).toBeCloseTo(80, 0);
+      expect(res.body.data.name.verdict).toBe('DIRECT_MATCH');
+      expect(res.body.data.blockers).toEqual([]);
+
+      const record = await recordFor(id);
+      expect(record.address_match_metres).toBe(80);
+      expect(record.address_match_verdict).toBe('consistent');
+      expect(record.geocode_precision).toBe('street');
+      expect(record.geocode_uncertainty_m).toBe(150);
+      expect(Number(record.geocoded_lat)).toBeCloseTo(PIN.latitude + 80 / 110540, 6);
+      expect(record.name_match).toBe('DIRECT_MATCH');
+      // It decided nothing.
+      expect(record.status).toBe('desk_pending');
+      expect(record.desk_reviewed_at).toBeNull();
+    });
+
+    test('it says plainly that none of this proves the document is genuine', async () => {
+      const id = await submittedSpot('desk-reminder');
+      resolvesTo({ metresNorth: 10 });
+
+      const res = await check(id);
+
+      expect(res.body.data.reminder).toMatch(/cannot tell you whether the document is genuine/i);
+      expect(res.body.data.reminder).toMatch(/field check/i);
+    });
+
+    test('a locality-sized hit is reported as unverifiable, not as agreement', async () => {
+      // What most Indian addresses actually resolve to.
+      const id = await submittedSpot('desk-coarse');
+      resolvesTo({ metresNorth: 300, precision: PRECISION.LOCALITY, uncertainty: 2200 });
+
+      const res = await check(id);
+
+      expect(res.body.data.address.verdict).toBe('unverifiable');
+      expect(res.body.data.address.explanation).toMatch(/neither confirms nor contradicts/);
+      // And it does not stand in the way of a pass. (Typing no name is its own
+      // blocker, which is why this looks at the address codes only.)
+      expect(res.body.data.blockers.map((b) => b.code).filter((c) => c.startsWith('ADDRESS_'))).toEqual([]);
+    });
+
+    test('an address that resolves nowhere is a blocker, not a pass', async () => {
+      const id = await submittedSpot('desk-unresolved');
+      resolvesToNothing();
+
+      const res = await check(id, { name_on_document: 'Rajesh Kumar' });
+
+      expect(res.body.data.address.verdict).toBe('unresolved');
+      expect(res.body.data.blockers.map((b) => b.code)).toContain('ADDRESS_UNRESOLVED');
+      expect((await recordFor(id)).address_match_metres).toBeNull();
+    });
+
+    test('an owner cannot run the checks', async () => {
+      const id = await submittedSpot('desk-forbidden');
+      expect((await request(app).post(`/api/v1/spot-verification/admin/${id}/check`).set(auth(OWNER))).status).toBe(403);
+    });
+  });
+
+  describe('passing', () => {
+    test('a clean pass sends the spot to the field stage, not live', async () => {
+      const id = await submittedSpot('desk-pass');
+      resolvesTo({ metresNorth: 60 });
+
+      const res = await decide(id, { decision: 'pass', name_on_document: 'Rajesh Kumar' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe('desk_approved');
+      expect(res.body.data.next).toMatch(/not visible to drivers until that passes/);
+
+      const record = await recordFor(id);
+      expect(record.status).toBe('desk_approved');
+      expect(record.desk_reviewed_by).toBeTruthy();
+      expect(record.desk_reviewed_at).toBeTruthy();
+      expect(record.desk_override_reason).toBeNull();
+      expect(record.name_on_document).toBe('Rajesh Kumar');
+      expect(record.address_match_verdict).toBe('consistent');
+
+      // The thing that matters: a desk pass is not visibility.
+      expect((await spotRow(id)).spot_verification_status).toBe('desk_approved');
+      expect(titlesIn((await request(app).get(NEARBY)).body)).not.toContain('desk-pass');
+    });
+
+    test('the decision re-measures rather than trusting what was stored', async () => {
+      const id = await submittedSpot('desk-remeasure');
+      // A check that found it close by...
+      resolvesTo({ metresNorth: 20 });
+      await check(id, { name_on_document: 'Rajesh Kumar' });
+      expect((await recordFor(id)).address_match_metres).toBe(20);
+
+      // ...and a decision taken when it resolves somewhere else entirely.
+      resolvesTo({ metresNorth: 4000 });
+      const res = await decide(id, { decision: 'pass', name_on_document: 'Rajesh Kumar' });
+
+      expect(res.status).toBe(409);
+      expect(res.body.blockers.map((b) => b.code)).toContain('ADDRESS_MISMATCH');
+      expect((await recordFor(id)).status).toBe('desk_pending');
+    });
+
+    test('a name that is not the same person blocks the pass', async () => {
+      const id = await submittedSpot('desk-name-block');
+      resolvesTo({ metresNorth: 10 });
+
+      const res = await decide(id, { decision: 'pass', name_on_document: 'Amit Sharma' });
+
+      expect(res.status).toBe(409);
+      expect(res.body.blockers.map((b) => b.code)).toEqual(['NAME_NO_MATCH']);
+      expect(res.body.how_to_proceed).toMatch(/override_reason/);
+      expect((await recordFor(id)).status).toBe('desk_pending');
+    });
+
+    test('a shared surname alone does not block — a human is reading it', async () => {
+      const id = await submittedSpot('desk-moderate');
+      resolvesTo({ metresNorth: 10 });
+
+      const res = await decide(id, { decision: 'pass', name_on_document: 'Suresh Kumar' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.name.verdict).toBe('MODERATE_PARTIAL_MATCH');
+      expect((await recordFor(id)).name_match).toBe('MODERATE_PARTIAL_MATCH');
+    });
+
+    test('an override is allowed, and is recorded against the spot', async () => {
+      const id = await submittedSpot('desk-override');
+      resolvesTo({ metresNorth: 4000 });
+
+      const res = await decide(id, {
+        decision: 'pass',
+        name_on_document: 'Rajesh Kumar',
+        override_reason: 'Bill is for the same plot; the street was renamed last year. Checked with the owner by phone.',
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.overridden).toEqual(['ADDRESS_MISMATCH']);
+
+      const record = await recordFor(id);
+      expect(record.status).toBe('desk_approved');
+      expect(record.desk_override_reason).toMatch(/street was renamed/);
+      // A pass that needed an override is not the same as a clean pass, and
+      // the log says which it was.
+      expect(record.review_log.map((e) => e.action)).toContain('passed_with_override');
+    });
+
+    test('a one-word override is not a reason', async () => {
+      const id = await submittedSpot('desk-weak-override');
+      resolvesTo({ metresNorth: 4000 });
+
+      const res = await decide(id, { decision: 'pass', name_on_document: 'Rajesh Kumar', override_reason: 'fine' });
+
+      expect(res.status).toBe(409);
+      expect((await recordFor(id)).status).toBe('desk_pending');
+    });
+
+    test('the name has to be typed', async () => {
+      const id = await submittedSpot('desk-no-name');
+      resolvesTo({ metresNorth: 10 });
+
+      const res = await decide(id, { decision: 'pass' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.message).toMatch(/name printed on the document/);
+    });
+
+    test('a place cannot be verified in the name of a person who is not', async () => {
+      // There is no name to check the document against, so this one does not
+      // yield to an override.
+      const id = await submittedSpot('desk-person-unverified');
+      await prisma.users.update({ where: { id: ids.owner }, data: { verification_status: 'pending' } });
+      resolvesTo({ metresNorth: 10 });
+
+      const res = await decide(id, {
+        decision: 'pass',
+        name_on_document: 'Rajesh Kumar',
+        override_reason: 'I am sure about this one, honestly, it is fine.',
+      });
+
+      expect(res.status).toBe(409);
+      expect(res.body.message).toMatch(/Verify the person before verifying their property/);
+
+      await prisma.users.update({ where: { id: ids.owner }, data: { verification_status: 'approved' } });
+    });
+
+    test('a grandfathered spot that passes the desk stays visible', async () => {
+      // It was live before any of this existed, and a desk pass is progress,
+      // not a reason to take it off the map while the field check is pending.
+      const id = await makeSpot(ids.owner, 'desk-grandfathered', 'grandfathered');
+      ids.spots['desk-grandfathered'] = id;
+      await prisma.spot_verifications.update({
+        where: { spot_id: id },
+        data: {
+          status: 'desk_pending',
+          submitted_at: new Date(),
+          doc_type: 'property_tax',
+          doc_public_id: 'parkstop/spot-docs/mock-gf',
+          claimed_address: '9 Grandfather Lane, Jayanagar, Bengaluru 560041',
+        },
+      });
+      resolvesTo({ metresNorth: 40 });
+
+      const res = await decide(id, { decision: 'pass', name_on_document: 'Rajesh Kumar' });
+
+      expect(res.status).toBe(200);
+      expect((await recordFor(id)).status).toBe('desk_approved');
+      expect((await spotRow(id)).spot_verification_status).toBe('grandfathered');
+      expect(titlesIn((await request(app).get(NEARBY)).body)).toContain('desk-grandfathered');
+    });
+  });
+
+  describe('rejecting', () => {
+    test('a rejection carries a reason the owner can act on', async () => {
+      const id = await submittedSpot('desk-reject');
+      resolvesTo({ metresNorth: 9000 });
+
+      const res = await decide(id, {
+        decision: 'reject',
+        reason: 'The electricity bill is for a different street. Send one for this address.',
+      });
+
+      expect(res.status).toBe(200);
+      const record = await recordFor(id);
+      expect(record.status).toBe('rejected');
+      expect(record.rejection_reason).toMatch(/different street/);
+      expect(record.desk_reviewed_by).toBeTruthy();
+
+      // The owner sees it, in their own words, on their own screen.
+      const mine = await request(app).get(`/api/v1/spot-verification/${id}`).set(auth(OWNER));
+      expect(mine.body.data.rejection_reason).toMatch(/different street/);
+      expect(mine.body.data.message).toMatch(/could not verify/i);
+    });
+
+    test('a rejected spot leaves the finder, and its pin becomes movable again', async () => {
+      const id = await submittedSpot('desk-reject-pin');
+      await prisma.parking_spots.update({ where: { id }, data: { spot_verification_status: 'grandfathered' } });
+      await prisma.spot_verifications.update({ where: { spot_id: id }, data: { grandfathered_at: new Date() } });
+
+      await decide(id, { decision: 'reject', reason: 'The document names a different person entirely.' });
+
+      expect((await spotRow(id)).spot_verification_status).toBe('rejected');
+      expect(titlesIn((await request(app).get(NEARBY)).body)).not.toContain('desk-reject-pin');
+
+      // So "your pin is in the wrong place" is a rejection the owner can act on.
+      const moved = await request(app)
+        .put(`/api/v1/spots/${id}`)
+        .set(auth(OWNER))
+        .send({ latitude: 28.61, longitude: 77.2 });
+      expect(moved.status).toBe(200);
+    });
+
+    test('a rejection needs more than a shrug', async () => {
+      const id = await submittedSpot('desk-reject-thin');
+
+      const res = await decide(id, { decision: 'reject', reason: 'no' });
+
+      expect(res.status).toBe(400);
+      expect((await recordFor(id)).status).toBe('desk_pending');
+    });
+  });
+
+  describe('what can be decided', () => {
+    test('only a submission waiting for a desk review', async () => {
+      const id = await submittedSpot('desk-twice');
+      resolvesTo({ metresNorth: 10 });
+      expect((await decide(id, { decision: 'pass', name_on_document: 'Rajesh Kumar' })).status).toBe(200);
+
+      const again = await decide(id, { decision: 'pass', name_on_document: 'Rajesh Kumar' });
+
+      expect(again.status).toBe(409);
+      expect(again.body.message).toMatch(/desk_approved/);
+    });
+
+    test('a decision that is neither pass nor reject is refused by the route', async () => {
+      const id = await submittedSpot('desk-nonsense');
+
+      const res = await decide(id, { decision: 'maybe', name_on_document: 'Rajesh Kumar' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.message).toBe('Validation failed');
+      expect(res.body.errors.map((e) => e.field)).toContain('decision');
+    });
+
+    test('an owner cannot decide on their own spot', async () => {
+      const id = await submittedSpot('desk-owner-decides');
+
+      const res = await request(app)
+        .post(`/api/v1/spot-verification/admin/${id}/desk`)
+        .set(auth(OWNER))
+        .send({ decision: 'pass', name_on_document: 'Rajesh Kumar' });
+
+      expect(res.status).toBe(403);
+    });
+  });
+
+  test('the admin detail view explains the stored numbers', async () => {
+    const id = await submittedSpot('desk-detail');
+    resolvesTo({ metresNorth: 300, precision: PRECISION.LOCALITY, uncertainty: 2200 });
+    await check(id, { name_on_document: 'Rajesh Kumar' });
+
+    const res = await request(app).get(`/api/v1/spot-verification/admin/${id}`).set(auth(ADMIN));
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.desk.geocode_precision).toBe('locality');
+    expect(res.body.data.desk.geocode_uncertainty_m).toBe(2200);
+    expect(res.body.data.desk.address_match_verdict).toBe('unverifiable');
+    // The sentence, so a screen does not have to reimplement the bands.
+    expect(res.body.data.desk.reading).toMatch(/neither confirms nor contradicts/);
   });
 });

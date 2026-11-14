@@ -44,6 +44,59 @@ router.get('/admin/backlog', authenticate, authorize('ADMIN'), C.adminBacklog);
 router.get('/admin/:spotId', authenticate, authorize('ADMIN'), [spotId(), validate], C.adminDetail);
 
 /**
+ * ADMIN — the desk review.
+ *
+ * `check` runs the two checks and stores what they found, deciding nothing. A
+ * POST because it costs an external geocode and writes to the row.
+ */
+router.post(
+  '/admin/:spotId/check',
+  authenticate,
+  authorize('ADMIN'),
+  [
+    spotId(),
+    body('name_on_document')
+      .optional()
+      .isString().withMessage('The name must be text')
+      .trim()
+      .isLength({ max: 150 }).withMessage('The name must be 150 characters or fewer'),
+    validate,
+  ],
+  C.adminCheck
+);
+
+router.post(
+  '/admin/:spotId/desk',
+  authenticate,
+  authorize('ADMIN'),
+  [
+    spotId(),
+    body('decision')
+      .isIn(['pass', 'reject'])
+      .withMessage('Decision must be pass or reject'),
+    body('name_on_document')
+      .optional()
+      .isString().withMessage('The name must be text')
+      .trim()
+      .isLength({ min: 2, max: 150 }).withMessage('The name must be 2 to 150 characters'),
+    // Both are free text an owner or an auditor will read, so they are bounded
+    // but not otherwise shaped.
+    body('reason')
+      .optional()
+      .isString().withMessage('The reason must be text')
+      .trim()
+      .isLength({ max: 500 }).withMessage('The reason must be 500 characters or fewer'),
+    body('override_reason')
+      .optional()
+      .isString().withMessage('The override reason must be text')
+      .trim()
+      .isLength({ max: 500 }).withMessage('The override reason must be 500 characters or fewer'),
+    validate,
+  ],
+  C.adminDeskDecision
+);
+
+/**
  * OWNER — submit a document for one spot, and see where it stands.
  *
  * Body validators as on the spot write path: anything present must be the

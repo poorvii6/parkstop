@@ -25,6 +25,9 @@ const prisma = require('../config/prisma');
 const logger = require('../utils/logger');
 const NotificationService = require('../services/notificationService');
 const Policy = require('../services/SpotVerificationPolicy');
+const { geocodeAddress } = require('../services/geocoding');
+const { compareNames, explainNameMatch } = require('../services/nameMatch');
+const { metresBetween } = require('../utils/geo');
 const {
   SPOT_VERIFICATION_STATUS: S,
   SPOT_DOC_TYPES,
@@ -408,6 +411,281 @@ async function adminBacklog(req, res) {
   }
 }
 
+/**
+ * The two desk checks: is this the same person, and is this the same place.
+ *
+ * Shared by the preview an admin runs before deciding and by the decision
+ * itself, so the numbers they were shown and the numbers that were stored are
+ * produced by the same code. Geocoding happens here and nowhere else in the
+ * request path — adminDetail stays a read, because a GET that makes an
+ * external call and writes a row is a trap for whoever next adds a refresh
+ * button to a screen.
+ *
+ * @returns {Promise<{address: object, name: object|null, blockers: object[], geocode: object|null}>}
+ */
+async function runDeskChecks({ record, spot, aadhaarName, nameOnDocument }) {
+  const geocode = await geocodeAddress(record.claimed_address);
+
+  const metres = geocode && spot.latitude !== null && spot.longitude !== null
+    ? metresBetween(Number(spot.latitude), Number(spot.longitude), Number(geocode.lat), Number(geocode.lon))
+    : null;
+
+  const address = {
+    ...Policy.addressVerdictFor({
+      metres,
+      precision: geocode?.precision || null,
+      uncertaintyM: geocode?.uncertainty_m || null,
+    }),
+    claimed_address: record.claimed_address,
+    resolved_to: geocode?.display_name || null,
+    precision: geocode?.precision || null,
+    uncertainty_m: geocode?.uncertainty_m || null,
+    source: geocode?.source || null,
+    geocoded_lat: geocode?.lat || null,
+    geocoded_lng: geocode?.lon || null,
+  };
+
+  const typed = String(nameOnDocument || '').trim();
+  const name = typed
+    ? (() => {
+      const result = compareNames(typed, aadhaarName);
+      return {
+        name_on_document: typed,
+        aadhaar_name: aadhaarName || null,
+        verdict: result.verdict,
+        matched: result.matched,
+        of: result.total,
+        explanation: explainNameMatch(result),
+      };
+    })()
+    : null;
+
+  const blockers = Policy.deskPassBlockers({
+    nameVerdict: name?.verdict || null,
+    addressVerdict: address.verdict,
+  });
+
+  return { address, name, blockers, geocode };
+}
+
+/** The spot, its record and the owner's verified name, for a desk review. */
+async function deskContext(spotId) {
+  const record = await prisma.spot_verifications.findUnique({
+    where: { spot_id: spotId },
+    include: {
+      parking_spots: {
+        select: {
+          id: true, title: true, latitude: true, longitude: true,
+          users: {
+            select: {
+              id: true, verification_status: true,
+              owner_verification: { select: { aadhaar_name: true } },
+            },
+          },
+        },
+      },
+    },
+  });
+  if (!record) return null;
+
+  return {
+    record,
+    spot: record.parking_spots,
+    owner: record.parking_spots?.users,
+    aadhaarName: record.parking_spots?.users?.owner_verification?.aadhaar_name || null,
+  };
+}
+
+/**
+ * Run the checks and store what they found, without deciding anything.
+ *
+ * This is what the admin screen calls when it opens a submission: it geocodes
+ * the claimed address, measures it against the pin, compares a typed name if
+ * one was given, and writes all of it to the record. A POST because it costs
+ * an external request and changes a row.
+ */
+async function adminCheck(req, res) {
+  try {
+    const spotId = parseInt(req.params.spotId, 10);
+    if (!Number.isInteger(spotId)) return fail(res, 400, 'Spot id must be a number.');
+
+    const ctx = await deskContext(spotId);
+    if (!ctx) return fail(res, 404, 'No verification record for this spot.');
+    if (!ctx.record.claimed_address) return fail(res, 409, 'This spot has no submitted address to check.');
+
+    const checks = await runDeskChecks({
+      record: ctx.record,
+      spot: ctx.spot,
+      aadhaarName: ctx.aadhaarName,
+      nameOnDocument: req.body?.name_on_document,
+    });
+
+    const updated = await saveAndSync(
+      ctx.record,
+      {
+        geocoded_lat: checks.geocode ? Number(checks.geocode.lat) : null,
+        geocoded_lng: checks.geocode ? Number(checks.geocode.lon) : null,
+        geocode_source: checks.geocode?.source || null,
+        geocode_precision: checks.geocode?.precision || null,
+        geocode_uncertainty_m: checks.geocode?.uncertainty_m ?? null,
+        address_match_metres: checks.address.metres,
+        address_match_verdict: checks.address.verdict,
+        ...(checks.name ? { name_on_document: checks.name.name_on_document, name_match: checks.name.verdict } : {}),
+      },
+      {
+        stage: 'desk',
+        action: 'checked',
+        by: req.user.id,
+        note: `address ${checks.address.verdict}${checks.name ? `, name ${checks.name.verdict}` : ''}`,
+      }
+    );
+
+    return ok(res, {
+      spot_id: spotId,
+      status: updated.status,
+      address: checks.address,
+      name: checks.name,
+      blockers: checks.blockers,
+      // Said plainly, because it is the one thing a reviewer must not forget.
+      reminder: 'These checks cannot tell you whether the document is genuine. Only the field check can test the record behind it.',
+    });
+  } catch (err) {
+    logger.error('spotVerification.adminCheck error:', err);
+    return fail(res, 500, 'Could not run the checks.');
+  }
+}
+
+/**
+ * The desk decision: an admin has read the document.
+ *
+ * A pass sends the spot to the FIELD stage, not live — `desk_approved` is not
+ * a status a driver may see. The checks are re-run here rather than trusting
+ * whatever adminCheck stored, so a decision is always made against a fresh
+ * measurement and a name the admin typed in the same breath.
+ */
+async function adminDeskDecision(req, res) {
+  try {
+    const spotId = parseInt(req.params.spotId, 10);
+    if (!Number.isInteger(spotId)) return fail(res, 400, 'Spot id must be a number.');
+
+    const decision = String(req.body?.decision || '').toLowerCase();
+    if (!['pass', 'reject'].includes(decision)) {
+      return fail(res, 400, 'Decision must be pass or reject.');
+    }
+
+    const ctx = await deskContext(spotId);
+    if (!ctx) return fail(res, 404, 'No verification record for this spot.');
+    if (ctx.record.status !== S.DESK_PENDING) {
+      return fail(res, 409, `Only a submission waiting for a desk review can be decided (this one is ${ctx.record.status}).`);
+    }
+
+    // ── reject ────────────────────────────────────────────────────────────
+    if (decision === 'reject') {
+      const reason = String(req.body?.reason || '').trim();
+      if (reason.length < 10) {
+        return fail(res, 400, 'Give the owner a clear reason they can act on (at least 10 characters).');
+      }
+
+      const updated = await saveAndSync(
+        ctx.record,
+        {
+          status: S.REJECTED,
+          rejection_reason: reason.slice(0, 500),
+          desk_reviewed_by: req.user.id,
+          desk_reviewed_at: new Date(),
+        },
+        { stage: 'desk', action: 'rejected', by: req.user.id, note: reason.slice(0, 200) }
+      );
+
+      NotificationService.sendPushNotification(ctx.owner?.id, {
+        title: 'Your spot needs a different document',
+        body: reason.slice(0, 140),
+        data: { type: 'spot_verification_rejected', spotId },
+      }).catch(() => {});
+
+      logger.info(`Spot ${spotId} desk review rejected by admin ${req.user.id}`);
+      return ok(res, { spot_id: spotId, status: updated.status }, 'Sent back to the owner with a reason');
+    }
+
+    // ── pass ──────────────────────────────────────────────────────────────
+
+    // A place is verified in a PERSON's name. If we have not verified the
+    // person, there is no name to check the document against and nothing to
+    // override — this one does not yield.
+    if (ctx.owner?.verification_status !== 'approved') {
+      return fail(res, 409, 'This owner is not verified yet. Verify the person before verifying their property.');
+    }
+
+    const nameOnDocument = String(req.body?.name_on_document || '').trim();
+    if (nameOnDocument.length < 2) {
+      return fail(res, 400, 'Type the name printed on the document.');
+    }
+
+    const checks = await runDeskChecks({
+      record: ctx.record,
+      spot: ctx.spot,
+      aadhaarName: ctx.aadhaarName,
+      nameOnDocument,
+    });
+
+    const override = String(req.body?.override_reason || '').trim();
+    if (checks.blockers.length && override.length < 10) {
+      return fail(res, 409, 'This submission cannot pass as it stands.', {
+        blockers: checks.blockers,
+        address: checks.address,
+        name: checks.name,
+        how_to_proceed: 'If you are passing it anyway, send override_reason explaining why (at least 10 characters). It is recorded against the spot.',
+      });
+    }
+
+    const updated = await saveAndSync(
+      ctx.record,
+      {
+        status: S.DESK_APPROVED,
+        name_on_document: nameOnDocument,
+        name_match: checks.name.verdict,
+        geocoded_lat: checks.geocode ? Number(checks.geocode.lat) : null,
+        geocoded_lng: checks.geocode ? Number(checks.geocode.lon) : null,
+        geocode_source: checks.geocode?.source || null,
+        geocode_precision: checks.geocode?.precision || null,
+        geocode_uncertainty_m: checks.geocode?.uncertainty_m ?? null,
+        address_match_metres: checks.address.metres,
+        address_match_verdict: checks.address.verdict,
+        desk_override_reason: checks.blockers.length ? override.slice(0, 500) : null,
+        desk_reviewed_by: req.user.id,
+        desk_reviewed_at: new Date(),
+        rejection_reason: null,
+      },
+      {
+        stage: 'desk',
+        action: checks.blockers.length ? 'passed_with_override' : 'passed',
+        by: req.user.id,
+        note: checks.blockers.length
+          ? `over ${checks.blockers.map((b) => b.code).join(', ')}: ${override.slice(0, 200)}`
+          : `name ${checks.name.verdict}, address ${checks.address.verdict}`,
+      }
+    );
+
+    logger.info(
+      `Spot ${spotId} desk review passed by admin ${req.user.id}`
+      + `${checks.blockers.length ? ` WITH OVERRIDE of ${checks.blockers.map((b) => b.code).join(', ')}` : ''}`
+    );
+
+    return ok(res, {
+      spot_id: spotId,
+      status: updated.status,
+      address: checks.address,
+      name: checks.name,
+      overridden: checks.blockers.map((b) => b.code),
+      // Nobody should read desk_approved as live.
+      next: 'Waiting for the field check. The spot is not visible to drivers until that passes.',
+    }, 'Desk review passed');
+  } catch (err) {
+    logger.error('spotVerification.adminDeskDecision error:', err);
+    return fail(res, 500, 'Could not record the decision.');
+  }
+}
+
 /** Everything an admin needs to review one spot, including the document. */
 async function adminDetail(req, res) {
   try {
@@ -480,11 +758,27 @@ async function adminDetail(req, res) {
         name_on_document: record.name_on_document,
         name_match: record.name_match,
         address_match_metres: record.address_match_metres,
+        address_match_verdict: record.address_match_verdict,
         geocoded_lat: record.geocoded_lat,
         geocoded_lng: record.geocoded_lng,
         geocode_source: record.geocode_source,
+        // What the address resolved TO. The metres above cannot be read
+        // without it: 800 m from a house means something, 800 m from the
+        // middle of a 4 km suburb means nothing.
+        geocode_precision: record.geocode_precision,
+        geocode_uncertainty_m: record.geocode_uncertainty_m,
+        override_reason: record.desk_override_reason,
         reviewed_by: record.desk_reviewed_by,
         reviewed_at: record.desk_reviewed_at,
+        // Re-stated from the stored numbers, so a screen that shows this does
+        // not have to reimplement the bands.
+        reading: record.address_match_metres === null && !record.address_match_verdict
+          ? null
+          : Policy.addressVerdictFor({
+            metres: record.address_match_metres,
+            precision: record.geocode_precision,
+            uncertaintyM: record.geocode_uncertainty_m,
+          }).explanation,
       },
       field: {
         office: record.field_office,
@@ -510,6 +804,8 @@ module.exports = {
   adminQueue,
   adminBacklog,
   adminDetail,
+  adminCheck,
+  adminDeskDecision,
   // exported for the tests and for stages 2 and 3
   getOrCreateRecord,
   saveAndSync,

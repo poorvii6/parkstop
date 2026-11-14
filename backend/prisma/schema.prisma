@@ -171,25 +171,41 @@ model spot_verifications {
   /// which a driver may see, so without this a spot would drop out of the
   /// finder as a reward for complying. While this is set and no verdict has
   /// landed, the spot stays visible. See SpotVerificationPolicy.
-  grandfathered_at       DateTime? @db.Timestamp(6)
+  grandfathered_at DateTime? @db.Timestamp(6)
 
   // ── Desk review: an admin reads the document (stage 2) ──────────────────
   /// The name as printed on the document, typed by the admin.
-  name_on_document     String?   @db.VarChar(150)
+  name_on_document      String?   @db.VarChar(150)
   /// DIRECT_MATCH | GOOD_PARTIAL_MATCH | MODERATE_PARTIAL_MATCH | NO_MATCH,
   /// against owner_verifications.aadhaar_name. Advises the admin; it does not
   /// decide, because a human typed the input off a photograph.
-  name_match           String?   @db.VarChar(30)
+  name_match            String?   @db.VarChar(30)
   /// Where claimed_address geocoded to, kept so address_match_metres can be
   /// explained months later instead of being an unaccountable number.
-  geocoded_lat         Decimal?  @db.Decimal(10, 8)
-  geocoded_lng         Decimal?  @db.Decimal(11, 8)
-  geocode_source       String?   @db.VarChar(20)
+  geocoded_lat          Decimal?  @db.Decimal(10, 8)
+  geocoded_lng          Decimal?  @db.Decimal(11, 8)
+  geocode_source        String?   @db.VarChar(20)
+  /// What the address resolved TO: building | point | street | locality |
+  /// region | unknown. Without it address_match_metres is unreadable: 800 m
+  /// from a house is damning, 800 m from the middle of a 4 km suburb is
+  /// nothing at all. See services/geocoding.js for what Nominatim actually
+  /// does with Indian addresses.
+  geocode_precision     String?   @db.VarChar(20)
+  /// How big that thing was, as a radius in metres. A coarse hit is allowed
+  /// its own size before any distance counts against the owner.
+  geocode_uncertainty_m Int?
   /// Metres from the geocoded address to the spot's pin. Mostly a measure of
   /// geocoder precision, so it flags for a human and never auto-decides.
-  address_match_metres Int?
-  desk_reviewed_by     Int?
-  desk_reviewed_at     DateTime? @db.Timestamp(6)
+  address_match_metres  Int?
+  /// The verdict the reviewing admin was shown: consistent | review | mismatch
+  /// | unverifiable | unresolved. Stored rather than recomputed, so widening
+  /// the bands later does not silently rewrite what was decided.
+  address_match_verdict String?   @db.VarChar(20)
+  /// Set when an admin passed a desk review over a blocker, with their reason
+  /// in review_log. A pass that needed one is not the same as a clean pass.
+  desk_override_reason  String?   @db.VarChar(500)
+  desk_reviewed_by      Int?
+  desk_reviewed_at      DateTime? @db.Timestamp(6)
 
   // ── Field check: our team at the regional office (stage 3) ─────────────
   field_office       String?   @db.VarChar(120)
