@@ -268,7 +268,7 @@ class SpotController {
         images,
         amenities,
         spotter_id: req.user.id
-      });
+      }, req.user.role);
 
       res.status(201).json({
         success: true,
@@ -277,6 +277,9 @@ class SpotController {
       });
 
     } catch (error) {
+      if (error.statusCode === 400) {
+        return res.status(400).json({ success: false, message: error.message });
+      }
       logger.error('Create spot error:', error);
       res.status(500).json({
         success: false,
@@ -398,7 +401,9 @@ class SpotController {
         });
       }
 
-      const updated = await ParkingSpot.update(req.params.id, req.user.id, req.body);
+      // The role decides whether location_type in the body is honoured: it
+      // sets the commission rate, so it is admin-only.
+      const updated = await ParkingSpot.update(req.params.id, req.user.id, req.body, req.user.role);
 
       res.json({
         success: true,
@@ -407,6 +412,11 @@ class SpotController {
       });
 
     } catch (error) {
+      // A rejected field is the caller's fault, not ours. Answering 500 told
+      // them the server broke and gave them nothing to correct.
+      if (error.statusCode === 400) {
+        return res.status(400).json({ success: false, message: error.message });
+      }
       logger.error('Update spot error:', error);
       res.status(500).json({
         success: false,
