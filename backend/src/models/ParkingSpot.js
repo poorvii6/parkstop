@@ -53,9 +53,74 @@ function withLiveAvailability(row) {
   };
 }
 
+/**
+ * price_per_hour decides what every booking of this spot costs, and it had no
+ * validation on update at all: `price_per_hour ? parseFloat(...) : undefined`
+ * let -50 straight through, and a non-numeric string became NaN. On create the
+ * controller checked `!price || price <= 0`, which passes 'abc' ('abc' <= 0 is
+ * false) and then writes NaN.
+ *
+ * Validated in the model rather than the route so both doors are covered and a
+ * future caller cannot miss it. statusCode travels with the error so the
+ * controller can answer 400 instead of a blanket 500.
+ */
+function assertValidPrice(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) {
+    const err = new Error('price_per_hour must be a positive number');
+    err.statusCode = 400;
+    throw err;
+  }
+  return Math.round(n * 100) / 100;
+}
+
+/**
+ * What location_type to write, given who is asking.
+ *
+ * location_type sets the commission rate: CommissionService charges 15% for
+ * 'rural' against a 20% default. Both create and update passed the caller's
+ * own value into normalizeLocationType, so an owner calling PUT /spots/:id
+ * directly could set 'rural' on their spot and cut ParkStop's fee on every
+ * booking of it. It is our revenue, decided by the person who collects the
+ * other side of it.
+ *
+ * Only an ADMIN may set it now. For anyone else an update leaves the column
+ * alone (undefined) and a create defaults to urban. The attempt is logged
+ * rather than refused, so an owner editing their spot does not get an error
+ * about a field the app may be sending back unchanged — but a deliberate
+ * attempt is still visible.
+ */
+function locationTypeFor(actorRole, requested, { isCreate }) {
+  const { normalizeLocationType, LOCATION_TYPES } = require('../constants/spotTypes');
+  const isAdmin = String(actorRole || '').toUpperCase() === 'ADMIN';
+
+  if (isAdmin) {
+    // An admin's value is still validated; it just is not ignored.
+    return requested ? normalizeLocationType(requested) : (isCreate ? LOCATION_TYPES.URBAN : undefined);
+  }
+
+  // Deliberately not normalizeLocationType here: the value is being discarded,
+  // and throwing on garbage we are not going to use would turn a harmless
+  // stale field into a failed save.
+  const asked = String(requested || '').toLowerCase().trim();
+  if (asked && asked !== LOCATION_TYPES.URBAN) {
+    logger.warn(
+      `location_type '${asked}' requested by a non-admin (role ${actorRole || 'unknown'}) ` +
+      `was ignored — it sets the commission rate and is admin-only`
+    );
+  }
+
+  return isCreate ? LOCATION_TYPES.URBAN : undefined;
+}
+
 class ParkingSpot {
 
-  static async create(data) {
+  /**
+   * @param {string|null} [actorRole]  the caller's role. Anything other than
+   *   'ADMIN' cannot choose location_type. Defaults to null, i.e. not an
+   *   admin, so a caller that forgets gets the safe behaviour.
+   */
+  static async create(data, actorRole = null) {
     try {
       const {
         spotter_id,
@@ -73,15 +138,15 @@ class ParkingSpot {
         images = []
       } = data;
 
-      const { normalizeLocationType } = require('../constants/spotTypes');
-      const normalizedLocation = normalizeLocationType(location_type);
+      const normalizedLocation = locationTypeFor(actorRole, location_type, { isCreate: true });
+      const validatedPrice = assertValidPrice(price_per_hour);
 
       const spot = await prisma.parking_spots.create({
         data: {
           spotter_id: parseInt(spotter_id),
           title,
           description,
-          price_per_hour: parseFloat(price_per_hour),
+          price_per_hour: validatedPrice,
           latitude: parseFloat(latitude),
           longitude: parseFloat(longitude),
           address,
@@ -272,7 +337,11 @@ class ParkingSpot {
       .filter((s) => s.available_slots > 0);
   }
 
-  static async update(spotId, userId, updates) {
+  /**
+   * @param {string|null} [actorRole]  see create. location_type is admin-only;
+   *   for anyone else the column is left as it is.
+   */
+  static async update(spotId, userId, updates, actorRole = null) {
     const {
       title,
       description,
@@ -292,15 +361,21 @@ class ParkingSpot {
     const lng = longitude !== undefined && longitude !== null && longitude !== '' ? Number(longitude) : undefined;
     const coordsOk = lat !== undefined && lng !== undefined && Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
 
-    const { normalizeLocationType } = require('../constants/spotTypes');
-    const normalizedLocation = location_type ? normalizeLocationType(location_type) : undefined;
+    const normalizedLocation = locationTypeFor(actorRole, location_type, { isCreate: false });
+
+    // Absent means "leave it alone"; present means it must be a real price.
+    // A present-but-rubbish value is refused rather than quietly ignored, so a
+    // client sending -50 is told, instead of believing it worked.
+    const validatedPrice = price_per_hour === undefined || price_per_hour === null || price_per_hour === ''
+      ? undefined
+      : assertValidPrice(price_per_hour);
 
     return prisma.parking_spots.update({
       where: { id: parseInt(spotId) },
       data: {
         title,
         description,
-        price_per_hour: price_per_hour ? parseFloat(price_per_hour) : undefined,
+        price_per_hour: validatedPrice,
         address,
         location_type: normalizedLocation,
         amenities: Array.isArray(amenities) ? amenities : undefined,
