@@ -32,6 +32,7 @@ const {
   SPOT_VERIFICATION_STATUS: S,
   SPOT_DOC_TYPES,
   RELATIONSHIPS,
+  TENANT_DOC_TYPES,
   AWAITING_REVIEW_STATUSES,
 } = require('../constants/spotVerification');
 
@@ -203,6 +204,88 @@ async function uploadDocument(req, res) {
   }
 }
 
+/**
+ * The landlord's no-objection letter, for a spot that is rented.
+ *
+ * A separate upload because it is a separate document about a different
+ * person: the main document proves an address, this one says the person who
+ * owns that address agrees to it being let as parking. The landlord's name is
+ * taken with it because an NOC with no name on it says nothing.
+ *
+ * Be clear about what it is worth: nothing here verifies the landlord. We hold
+ * a letter and a name, neither checked against any record — the field check is
+ * what tests whether the property record matches, and even that does not
+ * confirm the signature on an NOC. It is the weakest evidence in the whole
+ * flow, and it is required rather than trusted.
+ */
+async function uploadLandlordNoc(req, res) {
+  try {
+    const spot = await spotFor(req, res);
+    if (!spot) return undefined;
+
+    if (!req.file?.buffer) return fail(res, 400, 'Please add a photo of the letter from your landlord.');
+
+    const landlordName = String(req.body?.landlord_name || '').trim();
+    if (landlordName.length < 2) return fail(res, 400, 'Enter the name of the landlord who signed the letter.');
+
+    const record = await getOrCreateRecord(spot.id);
+    const blocked = editBlocked(record);
+    if (blocked) return fail(res, 409, blocked);
+
+    if (!process.env.CLOUDINARY_CLOUD_NAME) return fail(res, 503, 'File uploads are not configured on the server.');
+
+    const uploaded = await new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        { folder: 'parkstop/spot-docs', type: 'authenticated', resource_type: 'image' },
+        (error, result) => (error ? reject(error) : resolve(result))
+      );
+      stream.end(req.file.buffer);
+    });
+
+    if (record.landlord_noc_public_id && record.landlord_noc_public_id !== uploaded.public_id) {
+      cloudinary.uploader.destroy(record.landlord_noc_public_id, { type: 'authenticated' }).catch(() => {});
+    }
+
+    const updated = await saveAndSync(
+      record,
+      {
+        status: record.status === S.NOT_STARTED ? S.IN_PROGRESS : record.status,
+        landlord_noc_public_id: uploaded.public_id,
+        landlord_name: landlordName.slice(0, 150),
+        rejection_reason: null,
+      },
+      { stage: 'owner', action: 'landlord_noc_uploaded', by: req.user.id, note: landlordName.slice(0, 100) }
+    );
+
+    return ok(res, summarizeForOwner(spot, updated), 'Landlord letter saved');
+  } catch (err) {
+    logger.error('spotVerification.uploadLandlordNoc error:', err);
+    return fail(res, 500, 'Something went wrong. Please try again.');
+  }
+}
+
+/**
+ * Whether this submission needs the landlord's consent, and what is missing.
+ *
+ * The union of two conditions, on purpose. A stated tenant needs it for the
+ * obvious reason. A rent agreement needs it whatever the owner ticked, because
+ * a rent agreement IS a tenant's document — somebody describing themselves as
+ * the owner while submitting one has either mis-tapped or is hoping nobody
+ * reads it, and both are handled by asking for the letter.
+ */
+function missingTenantConsent(record) {
+  const isTenant = record.relationship === RELATIONSHIPS.TENANT
+    || TENANT_DOC_TYPES.includes(record.doc_type);
+  if (!isTenant) return null;
+
+  const missing = [];
+  if (!record.landlord_noc_public_id) missing.push('the letter from your landlord');
+  if (!record.landlord_name) missing.push("the landlord's name");
+  if (!missing.length) return null;
+
+  return `This spot is rented, so we need ${missing.join(' and ')} before we can check it.`;
+}
+
 /** Submit the spot for review. This is when the 48-hour clock starts. */
 async function submit(req, res) {
   try {
@@ -216,6 +299,12 @@ async function submit(req, res) {
     if (!record.doc_public_id || !record.claimed_address) {
       return fail(res, 400, 'Add a document for this address before submitting.');
     }
+
+    // A rented spot without the landlord's consent is not a submission we can
+    // act on, so it is refused here rather than wasting the owner's 48 hours
+    // and an admin's review before telling them.
+    const needsConsent = missingTenantConsent(record);
+    if (needsConsent) return fail(res, 400, needsConsent);
     if (spot.latitude === null || spot.longitude === null) {
       // The desk check measures the document's address against the pin. With
       // no pin there is nothing to measure, and the spot could never be found
@@ -686,6 +775,137 @@ async function adminDeskDecision(req, res) {
   }
 }
 
+/**
+ * The field check: our team went to the regional office.
+ *
+ * This is the only thing in the whole feature that can make a spot live, and
+ * the only step that tests anything a forger cannot simply print. The desk
+ * review says the document names the right person and points at roughly the
+ * right place; this says the record behind it exists.
+ *
+ * What it still does not establish, so that nobody reads `approved` as more
+ * than it is: that the record names THIS person as the current holder, that
+ * the holder may let the space (society rules, municipal permission), or —
+ * for a tenant — that the signature on the landlord's letter is real.
+ *
+ * A result is recorded either way. "We went and found nothing" is a finding,
+ * not a failure to act, and it is written down with the office that was
+ * checked so the next person does not repeat the visit.
+ */
+async function adminFieldDecision(req, res) {
+  try {
+    const spotId = parseInt(req.params.spotId, 10);
+    if (!Number.isInteger(spotId)) return fail(res, 400, 'Spot id must be a number.');
+
+    const ctx = await deskContext(spotId);
+    if (!ctx) return fail(res, 404, 'No verification record for this spot.');
+
+    // Both stages, in order. A field check on a submission nobody has read is
+    // a visit made on the strength of an unexamined document.
+    if (ctx.record.status !== S.DESK_APPROVED) {
+      return fail(res, 409, ctx.record.status === S.DESK_PENDING
+        ? 'The desk review has to pass before the field check. Read the document first.'
+        : `Only a spot waiting for its field check can be recorded (this one is ${ctx.record.status}).`);
+    }
+
+    const office = String(req.body?.office || '').trim();
+    if (office.length < 3) return fail(res, 400, 'Record which office was checked.');
+
+    const recordFound = req.body?.record_found;
+    if (typeof recordFound !== 'boolean') {
+      return fail(res, 400, 'Say whether the record was found: record_found must be true or false.');
+    }
+
+    const reference = String(req.body?.reference || '').trim();
+    const notes = String(req.body?.notes || '').trim();
+
+    // ── the record was not found ──────────────────────────────────────────
+    if (!recordFound) {
+      const reason = String(req.body?.reason || '').trim();
+      if (reason.length < 10) {
+        return fail(res, 400, 'Give the owner a clear reason they can act on (at least 10 characters).');
+      }
+
+      const updated = await saveAndSync(
+        ctx.record,
+        {
+          status: S.REJECTED,
+          field_office: office.slice(0, 120),
+          field_record_found: false,
+          field_reference: reference ? reference.slice(0, 100) : null,
+          field_notes: notes ? notes.slice(0, 1000) : null,
+          field_checked_by: req.user.id,
+          field_checked_at: new Date(),
+          rejection_reason: reason.slice(0, 500),
+        },
+        { stage: 'field', action: 'record_not_found', by: req.user.id, note: `${office}: ${notes.slice(0, 150)}` }
+      );
+
+      NotificationService.sendPushNotification(ctx.owner?.id, {
+        title: 'We could not confirm your spot',
+        body: reason.slice(0, 140),
+        data: { type: 'spot_verification_rejected', spotId },
+      }).catch(() => {});
+
+      logger.info(`Spot ${spotId} field check found no record at ${office} (admin ${req.user.id})`);
+      return ok(res, { spot_id: spotId, status: updated.status }, 'Recorded: no record found');
+    }
+
+    // ── the record was found ──────────────────────────────────────────────
+
+    // A found record has a reference. Without one there is nothing for anyone
+    // to check again later, and "found it, trust me" is not a record.
+    if (reference.length < 3) {
+      return fail(res, 400, 'Record the registration reference for the record you found.');
+    }
+
+    const pending = {
+      ...ctx.record,
+      field_record_found: true,
+      field_checked_at: new Date(),
+    };
+    // The belt to the status check's braces: `approved` is written in one
+    // place and only when both stages have actually passed.
+    if (!Policy.deskAndFieldPassed(pending)) {
+      logger.error(`Spot ${spotId} reached the field pass without both stages — refusing to publish`);
+      return fail(res, 409, 'This spot has not passed both checks, so it cannot go live.');
+    }
+
+    const updated = await saveAndSync(
+      ctx.record,
+      {
+        status: S.APPROVED,
+        field_office: office.slice(0, 120),
+        field_record_found: true,
+        field_reference: reference.slice(0, 100),
+        field_notes: notes ? notes.slice(0, 1000) : null,
+        field_checked_by: req.user.id,
+        field_checked_at: pending.field_checked_at,
+        rejection_reason: null,
+      },
+      { stage: 'field', action: 'record_found', by: req.user.id, note: `${office} ref ${reference.slice(0, 60)}` }
+    );
+
+    NotificationService.sendPushNotification(ctx.owner?.id, {
+      title: 'Your spot is live ✅',
+      body: `${ctx.spot?.title} is verified and drivers can book it now.`,
+      data: { type: 'spot_verification_approved', spotId },
+    }).catch(() => {});
+
+    logger.info(`Spot ${spotId} approved after field check at ${office} (admin ${req.user.id})`);
+    return ok(res, {
+      spot_id: spotId,
+      status: updated.status,
+      visible_to_drivers: Policy.driverVisibleStatusFor(updated),
+      means: 'A person we verified submitted a document in their name for an address near this pin, an admin read it, '
+        + 'and our team found the record at the regional office. It does not mean the document is genuine.',
+    }, 'Spot verified and live');
+  } catch (err) {
+    logger.error('spotVerification.adminFieldDecision error:', err);
+    return fail(res, 500, 'Could not record the field check.');
+  }
+}
+
 /** Everything an admin needs to review one spot, including the document. */
 async function adminDetail(req, res) {
   try {
@@ -806,6 +1026,8 @@ module.exports = {
   adminDetail,
   adminCheck,
   adminDeskDecision,
+  adminFieldDecision,
+  uploadLandlordNoc,
   // exported for the tests and for stages 2 and 3
   getOrCreateRecord,
   saveAndSync,

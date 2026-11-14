@@ -186,6 +186,19 @@ describe('what the owner is told', () => {
     expect(message(S.APPROVED)).toMatch(/Verified/);
   });
 
+  test('a desk pass is reported as a different thing from waiting', () => {
+    // "Nobody has looked at this yet" and "somebody is on their way to an
+    // office about it" are different facts, and the owner is told which.
+    const waiting = message(S.DESK_PENDING, hoursAgo(10));
+    const checked = message(S.DESK_APPROVED, hoursAgo(10));
+
+    expect(waiting).not.toBe(checked);
+    expect(checked).toMatch(/document has been checked/i);
+    expect(checked).toMatch(/confirming the record locally/i);
+    // And it still does not claim to be live.
+    expect(checked).not.toMatch(/verified|live on ParkStop/i);
+  });
+
   test('every status has a sentence of its own', () => {
     const seen = new Set();
     for (const status of ALL_SPOT_VERIFICATION_STATUSES) {
@@ -194,9 +207,7 @@ describe('what the owner is told', () => {
       expect(m.length).toBeGreaterThan(10);
       seen.add(m);
     }
-    // desk_pending and desk_approved deliberately share one sentence: the
-    // owner does not care which of our two stages it is sitting in.
-    expect(seen.size).toBe(ALL_SPOT_VERIFICATION_STATUSES.length - 1);
+    expect(seen.size).toBe(ALL_SPOT_VERIFICATION_STATUSES.length);
   });
 });
 
@@ -435,5 +446,62 @@ describe('what stands in the way of a desk pass', () => {
     for (const b of Policy.deskPassBlockers({ nameVerdict: NAME_MATCH.NONE, addressVerdict: V.MISMATCH })) {
       expect(b.message.length).toBeGreaterThan(20);
     }
+  });
+});
+
+/**
+ * Both stages, or neither.
+ *
+ * A pure function rather than an implicit consequence of the status machine,
+ * because "a desk pass AND a field pass" is the whole promise, and a future
+ * second path to `approved` must not be able to skip a stage by accident.
+ */
+describe('deskAndFieldPassed', () => {
+  const desk = { desk_reviewed_at: new Date('2026-11-14T09:00:00Z'), status: S.DESK_APPROVED };
+  const field = { field_record_found: true, field_checked_at: new Date('2026-11-14T15:00:00Z') };
+
+  test('both stages passed', () => {
+    expect(Policy.deskAndFieldPassed({ ...desk, ...field })).toBe(true);
+  });
+
+  test('a desk pass alone is not enough — the field check is the point', () => {
+    expect(Policy.deskAndFieldPassed({ ...desk })).toBe(false);
+  });
+
+  test('a field pass alone is not enough either', () => {
+    expect(Policy.deskAndFieldPassed({ ...field })).toBe(false);
+  });
+
+  test('a field check nobody has done is not a pass', () => {
+    // null is "nobody has looked yet". It must not be one boolean coercion
+    // away from publishing a spot.
+    expect(Policy.deskAndFieldPassed({ ...desk, field_record_found: null, field_checked_at: null })).toBe(false);
+    expect(Policy.deskAndFieldPassed({ ...desk, field_record_found: undefined })).toBe(false);
+  });
+
+  test('a record that was looked for and NOT found is not a pass', () => {
+    expect(Policy.deskAndFieldPassed({ ...desk, field_record_found: false, field_checked_at: new Date() })).toBe(false);
+  });
+
+  test('a truthy non-true value is not a pass', () => {
+    // 'true', 1 and 'yes' are what a careless client sends. Exactly true, or no.
+    for (const value of ['true', 1, 'yes', {}]) {
+      expect(Policy.deskAndFieldPassed({ ...desk, field_record_found: value, field_checked_at: new Date() })).toBe(false);
+    }
+  });
+
+  test('a field pass recorded with no timestamp is not a pass', () => {
+    expect(Policy.deskAndFieldPassed({ ...desk, field_record_found: true, field_checked_at: null })).toBe(false);
+  });
+
+  test('a rejected spot cannot be live even with both stamps on it', () => {
+    // A spot sent back after its field check keeps its desk timestamp; the
+    // verdict is what governs.
+    expect(Policy.deskAndFieldPassed({ ...desk, ...field, status: S.REJECTED })).toBe(false);
+  });
+
+  test('an empty record is not a pass', () => {
+    expect(Policy.deskAndFieldPassed({})).toBe(false);
+    expect(Policy.deskAndFieldPassed(null)).toBe(false);
   });
 });

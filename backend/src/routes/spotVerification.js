@@ -97,6 +97,46 @@ router.post(
 );
 
 /**
+ * ADMIN — the field check, and the only route that can make a spot live.
+ *
+ * `record_found` is validated as a real boolean rather than coerced: "was the
+ * record there?" has two answers and no default, and a missing field must not
+ * read as either.
+ */
+router.post(
+  '/admin/:spotId/field',
+  authenticate,
+  authorize('ADMIN'),
+  [
+    spotId(),
+    body('record_found')
+      .isBoolean({ strict: true })
+      .withMessage('record_found must be true or false'),
+    body('office')
+      .isString().withMessage('The office must be text')
+      .trim()
+      .isLength({ min: 3, max: 120 }).withMessage('Record which office was checked (3 to 120 characters)'),
+    body('reference')
+      .optional()
+      .isString().withMessage('The reference must be text')
+      .trim()
+      .isLength({ max: 100 }).withMessage('The reference must be 100 characters or fewer'),
+    body('notes')
+      .optional()
+      .isString().withMessage('The notes must be text')
+      .trim()
+      .isLength({ max: 1000 }).withMessage('The notes must be 1000 characters or fewer'),
+    body('reason')
+      .optional()
+      .isString().withMessage('The reason must be text')
+      .trim()
+      .isLength({ max: 500 }).withMessage('The reason must be 500 characters or fewer'),
+    validate,
+  ],
+  C.adminFieldDecision
+);
+
+/**
  * OWNER — submit a document for one spot, and see where it stands.
  *
  * Body validators as on the spot write path: anything present must be the
@@ -125,6 +165,27 @@ router.post(
     validate,
   ],
   C.uploadDocument
+);
+
+/**
+ * The landlord's no-objection letter, for a rented spot. A separate upload,
+ * because it is a separate document about a different person.
+ */
+router.post(
+  '/:spotId/landlord-noc',
+  authenticate,
+  authorize('SPOTTER', 'ADMIN'),
+  single('document'),
+  [
+    spotId(),
+    body('landlord_name')
+      .isString().withMessage("The landlord's name must be text")
+      .trim()
+      .isLength({ min: 2, max: 150 })
+      .withMessage("Enter the landlord's name (2 to 150 characters)"),
+    validate,
+  ],
+  C.uploadLandlordNoc
 );
 
 router.post(

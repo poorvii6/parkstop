@@ -179,6 +179,25 @@ function addressVerdictFor({ metres, precision, uncertaintyM }) {
 }
 
 /**
+ * May this spot go live? Both stages, or neither.
+ *
+ * A pure function rather than an implicit consequence of the status machine,
+ * because "a desk pass AND a field pass" is the whole promise of the feature
+ * and it should be checkable in one place. The controller asserts it before
+ * anything writes `approved`, so a future second path to that status cannot
+ * skip a stage by accident.
+ *
+ * `field_record_found` must be exactly true. Null is "nobody has looked yet",
+ * which is not a pass, and the difference matters: a spot whose field check
+ * has not happened must not be one boolean coercion away from being live.
+ */
+function deskAndFieldPassed(record) {
+  const deskPassed = !!record?.desk_reviewed_at && record?.status !== SPOT_VERIFICATION_STATUS.REJECTED;
+  const fieldPassed = record?.field_record_found === true && !!record?.field_checked_at;
+  return deskPassed && fieldPassed;
+}
+
+/**
  * What stands in the way of passing a desk review.
  *
  * Only two things, and both yield to an admin who says why in writing: a name
@@ -257,11 +276,18 @@ function ownerMessageFor({ status, submittedAt, now = new Date() }) {
     case S.IN_PROGRESS:
       return 'Your document is saved. Submit it for review to get this spot live.';
     case S.DESK_PENDING:
-    case S.DESK_APPROVED:
       if (wait.sla === SLA.OVERDUE) {
         return 'Under review. This is taking longer than the 48 hours we promised — we are on it.';
       }
       return `Under review. Expected live within ${Math.max(1, Math.ceil(wait.hours_left))} hour(s).`;
+    case S.DESK_APPROVED:
+      // A different thing is happening now, and saying so is the difference
+      // between "nobody has looked at this" and "somebody is on their way to
+      // an office about it".
+      if (wait.sla === SLA.OVERDUE) {
+        return 'Your document has been checked. Our team is confirming the record locally, and this is taking longer than the 48 hours we promised.';
+      }
+      return `Your document has been checked. Our team is confirming the record locally — expected live within ${Math.max(1, Math.ceil(wait.hours_left))} hour(s).`;
     case S.APPROVED:
       return 'Verified. Drivers can see and book this spot.';
     case S.REJECTED:
@@ -326,6 +352,7 @@ module.exports = {
   waitFor,
   addressVerdictFor,
   deskPassBlockers,
+  deskAndFieldPassed,
   driverVisibleStatusFor,
   ownerMessageFor,
   ownerSummary,

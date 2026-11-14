@@ -549,8 +549,11 @@ describe('the 48-hour promise is measured', () => {
     expect(desk.body.data.items.every((i) => i.status === 'desk_pending')).toBe(true);
 
     const field = await queue(ADMIN, '?stage=field');
-    // Nothing has passed a desk review yet — stage 2 does that.
-    expect(field.body.data.items).toHaveLength(0);
+    // Only spots that have passed a desk review, which is nothing from this
+    // describe. Asserted by content rather than by an empty list, so that
+    // later describes creating desk-approved spots cannot break it.
+    expect(field.body.data.items.every((i) => i.status === 'desk_approved')).toBe(true);
+    expect(field.body.data.items.map((i) => i.spot_id)).not.toContain(ids.spots.unverified);
   });
 
   test('only spots waiting on us are in it', async () => {
@@ -1063,5 +1066,480 @@ describe('the desk review', () => {
     expect(res.body.data.desk.address_match_verdict).toBe('unverifiable');
     // The sentence, so a screen does not have to reimplement the bands.
     expect(res.body.data.desk.reading).toMatch(/neither confirms nor contradicts/);
+  });
+});
+
+// ──────────────────── stage 3: the field check and tenants ────────────────────
+
+/**
+ * The field check is the only thing that can make a spot live, and the only
+ * step that tests something a forger cannot print.
+ */
+describe('the field check', () => {
+  const { geocodeAddress } = require('../../src/services/geocoding');
+  const { PRECISION } = jest.requireActual('../../src/services/geocoding');
+
+  const resolvesNear = () => geocodeAddress.mockResolvedValue({
+    lat: String(PIN.latitude + 0.0005), lon: String(PIN.longitude),
+    precision: PRECISION.STREET, uncertainty_m: 150, source: 'nominatim',
+    display_name: 'Somewhere, Bengaluru', bbox: null, place_rank: 26, kind: 'highway/residential',
+  });
+
+  /** A spot that has passed its desk review and is waiting for the field. */
+  async function deskApprovedSpot(title, over = {}) {
+    const id = await makeSpot(ids.owner, title, 'not_started');
+    ids.spots[title] = id;
+    await prisma.spot_verifications.update({
+      where: { spot_id: id },
+      data: {
+        status: 'desk_approved',
+        submitted_at: new Date(),
+        doc_type: 'electricity_bill',
+        doc_public_id: 'parkstop/spot-docs/mock-field',
+        claimed_address: '42 Verification Road, Indiranagar, Bengaluru 560038',
+        relationship: 'owner',
+        name_on_document: 'Rajesh Kumar',
+        name_match: 'DIRECT_MATCH',
+        address_match_metres: 55,
+        address_match_verdict: 'consistent',
+        desk_reviewed_by: ids.owner,
+        desk_reviewed_at: new Date(),
+        ...over,
+      },
+    });
+    return id;
+  }
+
+  const field = (spotId, body) =>
+    request(app).post(`/api/v1/spot-verification/admin/${spotId}/field`).set(auth(ADMIN)).send(body);
+
+  const FOUND = {
+    decision: 'pass',
+    office: 'Sub-Registrar Office, Indiranagar',
+    record_found: true,
+    reference: 'SRO/IND/2019/4471',
+    notes: 'Khata in the same name. Clerk confirmed the survey number.',
+  };
+
+  beforeAll(async () => {
+    await prisma.owner_verifications.upsert({
+      where: { user_id: ids.owner },
+      update: { aadhaar_name: 'Rajesh Kumar' },
+      create: { user_id: ids.owner, status: 'approved', aadhaar_name: 'Rajesh Kumar' },
+    });
+  });
+
+  afterAll(async () => {
+    await prisma.owner_verifications.deleteMany({ where: { user_id: ids.owner } });
+  });
+
+  beforeEach(() => jest.clearAllMocks());
+
+  describe('a record that was found', () => {
+    test('the spot goes live, and that is the only route to live', async () => {
+      const id = await deskApprovedSpot('field-pass');
+
+      const res = await field(id, FOUND);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.status).toBe('approved');
+      expect(res.body.data.visible_to_drivers).toBe('approved');
+
+      const record = await recordFor(id);
+      expect(record.status).toBe('approved');
+      expect(record.field_office).toBe(FOUND.office);
+      expect(record.field_record_found).toBe(true);
+      expect(record.field_reference).toBe(FOUND.reference);
+      expect(record.field_notes).toMatch(/survey number/);
+      expect(record.field_checked_by).toBeTruthy();
+      expect(record.field_checked_at).toBeTruthy();
+
+      // Live to drivers, at last.
+      expect((await spotRow(id)).spot_verification_status).toBe('approved');
+      expect(titlesIn((await request(app).get(NEARBY)).body)).toContain('field-pass');
+    });
+
+    test('the response says what "approved" means, and what it does not', async () => {
+      const id = await deskApprovedSpot('field-means');
+
+      const res = await field(id, FOUND);
+
+      expect(res.body.data.means).toMatch(/found the record at the regional office/);
+      expect(res.body.data.means).toMatch(/does not mean the document is genuine/);
+    });
+
+    test('a found record needs a reference — "trust me" is not a record', async () => {
+      const id = await deskApprovedSpot('field-no-ref');
+
+      const res = await field(id, { ...FOUND, reference: '' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.message).toMatch(/registration reference/);
+      expect((await recordFor(id)).status).toBe('desk_approved');
+    });
+
+    test('the office that was checked is recorded, or nothing is', async () => {
+      const id = await deskApprovedSpot('field-no-office');
+
+      const res = await field(id, { ...FOUND, office: '' });
+
+      expect(res.status).toBe(400);
+      expect((await recordFor(id)).field_checked_at).toBeNull();
+    });
+
+    test('the owner is told their spot is live', async () => {
+      const id = await deskApprovedSpot('field-owner-view');
+      await field(id, FOUND);
+
+      const mine = await request(app).get(`/api/v1/spot-verification/${id}`).set(auth(OWNER));
+
+      expect(mine.body.data.status).toBe('approved');
+      expect(mine.body.data.is_live).toBe(true);
+      expect(mine.body.data.message).toMatch(/Verified/);
+      expect(mine.body.data.waiting_hours).toBeNull();
+    });
+
+    test('and the pin is frozen again, because drivers are navigating to it', async () => {
+      const id = await deskApprovedSpot('field-pin');
+      await field(id, FOUND);
+
+      const moved = await request(app)
+        .put(`/api/v1/spots/${id}`)
+        .set(auth(OWNER))
+        .send({ latitude: 28.61, longitude: 77.2 });
+
+      expect(moved.status).toBe(400);
+      expect(moved.body.message).toMatch(/cannot be moved while it is live/);
+    });
+  });
+
+  describe('a record that was not found', () => {
+    test('it is recorded as a finding, with a reason the owner can act on', async () => {
+      const id = await deskApprovedSpot('field-fail');
+
+      const res = await field(id, {
+        office: 'Sub-Registrar Office, Indiranagar',
+        record_found: false,
+        notes: 'No khata under this survey number. Clerk checked 2015-2026.',
+        reason: 'We could not find a property record for this address at the local office.',
+      });
+
+      expect(res.status).toBe(200);
+      const record = await recordFor(id);
+      expect(record.status).toBe('rejected');
+      // "We went and found nothing" is a finding, written down with the office
+      // so the next person does not repeat the visit.
+      expect(record.field_office).toBe('Sub-Registrar Office, Indiranagar');
+      expect(record.field_record_found).toBe(false);
+      expect(record.field_checked_at).toBeTruthy();
+      expect(record.field_notes).toMatch(/No khata/);
+      expect(record.rejection_reason).toMatch(/could not find a property record/);
+
+      expect(titlesIn((await request(app).get(NEARBY)).body)).not.toContain('field-fail');
+    });
+
+    test('the owner sees the reason, not the internal notes', async () => {
+      const id = await deskApprovedSpot('field-fail-privacy');
+      await field(id, {
+        office: 'SRO Indiranagar',
+        record_found: false,
+        notes: 'Clerk suspects the document is fabricated; flagged internally.',
+        reason: 'We could not find a property record for this address.',
+      });
+
+      const mine = await request(app).get(`/api/v1/spot-verification/${id}`).set(auth(OWNER));
+
+      expect(mine.body.data.rejection_reason).toMatch(/could not find a property record/);
+      expect(JSON.stringify(mine.body)).not.toMatch(/fabricated|flagged internally/);
+    });
+
+    test('a failure needs a reason', async () => {
+      const id = await deskApprovedSpot('field-fail-thin');
+
+      const res = await field(id, { office: 'SRO Indiranagar', record_found: false, reason: 'no' });
+
+      expect(res.status).toBe(400);
+      expect((await recordFor(id)).status).toBe('desk_approved');
+    });
+  });
+
+  describe('both stages, in order', () => {
+    test('a spot waiting for its desk review cannot have a field check', async () => {
+      // A visit made on the strength of a document nobody has read.
+      const id = await makeSpot(ids.owner, 'field-too-early', 'not_started');
+      ids.spots['field-too-early'] = id;
+      await prisma.spot_verifications.update({
+        where: { spot_id: id },
+        data: { status: 'desk_pending', submitted_at: new Date(), doc_public_id: 'x', claimed_address: 'somewhere long enough' },
+      });
+
+      const res = await field(id, FOUND);
+
+      expect(res.status).toBe(409);
+      expect(res.body.message).toMatch(/desk review has to pass before the field check/);
+      expect((await recordFor(id)).field_checked_at).toBeNull();
+    });
+
+    test('an already-approved spot cannot be field-checked again', async () => {
+      const id = await deskApprovedSpot('field-twice');
+      expect((await field(id, FOUND)).status).toBe(200);
+
+      const again = await field(id, FOUND);
+
+      expect(again.status).toBe(409);
+      expect(again.body.message).toMatch(/approved/);
+    });
+
+    test('record_found must be said, not left to a default', async () => {
+      const id = await deskApprovedSpot('field-no-answer');
+
+      const res = await field(id, { office: 'SRO Indiranagar' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.message).toBe('Validation failed');
+      expect(res.body.errors.map((e) => e.field)).toContain('record_found');
+    });
+
+    test('a string "true" is not an answer either', async () => {
+      const id = await deskApprovedSpot('field-string-true');
+
+      const res = await field(id, { office: 'SRO Indiranagar', record_found: 'true', reference: 'X/1' });
+
+      expect(res.status).toBe(400);
+      // Refused at the DOOR, by the strict boolean validator, not downstream:
+      // the controller re-checks as well (see the unit test for its own
+      // guards), so a test that only looked for a 400 would pass with the
+      // route's strictness removed.
+      expect(res.body.message).toBe('Validation failed');
+      expect(res.body.errors.map((e) => e.field)).toContain('record_found');
+      expect((await recordFor(id)).status).toBe('desk_approved');
+    });
+
+    test('a status of desk_approved with no desk review behind it cannot publish', async () => {
+      // The belt to the status check's braces. The desk endpoint always stamps
+      // desk_reviewed_at, so this state is unreachable through the API today —
+      // which is exactly why it is worth pinning: a future second path to
+      // desk_approved must not be able to publish a spot nobody read.
+      const id = await deskApprovedSpot('field-no-desk-stamp', { desk_reviewed_at: null, desk_reviewed_by: null });
+
+      const res = await field(id, FOUND);
+
+      expect(res.status).toBe(409);
+      expect(res.body.message).toMatch(/has not passed both checks/);
+      expect((await recordFor(id)).status).toBe('desk_approved');
+      expect((await spotRow(id)).spot_verification_status).not.toBe('approved');
+    });
+
+    test('an owner cannot record a field check on their own spot', async () => {
+      const id = await deskApprovedSpot('field-owner-records');
+
+      const res = await request(app)
+        .post(`/api/v1/spot-verification/admin/${id}/field`)
+        .set(auth(OWNER))
+        .send(FOUND);
+
+      expect(res.status).toBe(403);
+      expect((await recordFor(id)).status).toBe('desk_approved');
+    });
+
+    test('the field queue is the spots waiting for a visit', async () => {
+      const id = await deskApprovedSpot('field-queued');
+
+      const res = await request(app)
+        .get('/api/v1/spot-verification/admin/queue?stage=field')
+        .set(auth(ADMIN));
+
+      const rows = res.body.data.items.filter((i) => i.spot_id === id);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].stage).toBe('field');
+      // Still on the clock: the owner was promised a live spot, not a desk pass.
+      expect(rows[0].waiting_hours).not.toBeNull();
+    });
+  });
+
+  test('a grandfathered spot that passes the field check becomes properly approved', async () => {
+    const id = await makeSpot(ids.owner, 'field-grandfathered', 'grandfathered');
+    ids.spots['field-grandfathered'] = id;
+    await prisma.spot_verifications.update({
+      where: { spot_id: id },
+      data: {
+        status: 'desk_approved',
+        submitted_at: new Date(),
+        doc_public_id: 'parkstop/spot-docs/mock-gf2',
+        claimed_address: '9 Grandfather Lane, Jayanagar, Bengaluru 560041',
+        desk_reviewed_by: ids.owner,
+        desk_reviewed_at: new Date(),
+      },
+    });
+
+    await field(id, FOUND);
+
+    // It was visible all along; now it is visible for a reason.
+    expect((await spotRow(id)).spot_verification_status).toBe('approved');
+    expect((await recordFor(id)).grandfathered_at).toBeTruthy();
+    expect(titlesIn((await request(app).get(NEARBY)).body)).toContain('field-grandfathered');
+  });
+
+  test('the admin detail view carries the field result and the whole log', async () => {
+    const id = await deskApprovedSpot('field-detail');
+    resolvesNear();
+    await field(id, FOUND);
+
+    const res = await request(app).get(`/api/v1/spot-verification/admin/${id}`).set(auth(ADMIN));
+
+    expect(res.body.data.field).toMatchObject({
+      office: FOUND.office,
+      record_found: true,
+      reference: FOUND.reference,
+    });
+    expect(res.body.data.field.checked_at).toBeTruthy();
+    expect(res.body.data.review_log.map((e) => e.action)).toContain('record_found');
+  });
+});
+
+/**
+ * Tenants are allowed, with the landlord's written consent.
+ *
+ * Worth being clear about what that consent is worth: we hold a letter and a
+ * name, neither checked against any record. It is the weakest evidence in the
+ * flow, and it is required rather than trusted.
+ */
+describe('a tenant needs the landlord\'s consent', () => {
+  const uploadDoc = (spotId, over = {}) =>
+    request(app)
+      .post(`/api/v1/spot-verification/${spotId}/document`)
+      .set(auth(OWNER))
+      .field('doc_type', over.doc_type ?? 'rent_agreement')
+      .field('address', over.address ?? '42 Tenant Road, Indiranagar, Bengaluru 560038')
+      .field('relationship', over.relationship ?? 'tenant')
+      .attach('document', Buffer.from('rent agreement'), 'agreement.jpg');
+
+  const uploadNoc = (spotId, over = {}) => {
+    const req = request(app)
+      .post(`/api/v1/spot-verification/${spotId}/landlord-noc`)
+      .set(auth(OWNER));
+    if (over.landlord_name !== undefined) req.field('landlord_name', over.landlord_name);
+    else req.field('landlord_name', 'Ramesh Gupta');
+    return over.noFile ? req : req.attach('document', Buffer.from('noc letter'), 'noc.jpg');
+  };
+
+  const submit = (spotId) =>
+    request(app).post(`/api/v1/spot-verification/${spotId}/submit`).set(auth(OWNER));
+
+  async function tenantSpot(title) {
+    const id = await makeSpot(ids.owner, title, 'not_started');
+    ids.spots[title] = id;
+    return id;
+  }
+
+  test('a tenant submission without the letter is refused', async () => {
+    const id = await tenantSpot('tenant-no-noc');
+    expect((await uploadDoc(id)).status).toBe(200);
+
+    const res = await submit(id);
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/rented, so we need the letter from your landlord/);
+    expect(res.body.message).toMatch(/landlord's name/);
+    // The clock never started.
+    expect((await recordFor(id)).submitted_at).toBeNull();
+  });
+
+  test('a rent agreement needs the letter even if the owner ticked "owner"', async () => {
+    // A rent agreement IS a tenant's document, whatever was ticked.
+    const id = await tenantSpot('tenant-mislabelled');
+    expect((await uploadDoc(id, { relationship: 'owner' })).status).toBe(200);
+
+    const res = await submit(id);
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/rented/);
+  });
+
+  test('a stated tenant needs it even with an electricity bill in their name', async () => {
+    const id = await tenantSpot('tenant-with-bill');
+    expect((await uploadDoc(id, { doc_type: 'electricity_bill', relationship: 'tenant' })).status).toBe(200);
+
+    expect((await submit(id)).status).toBe(400);
+  });
+
+  test('with the letter and the name, it submits', async () => {
+    const id = await tenantSpot('tenant-complete');
+    await uploadDoc(id);
+
+    const noc = await uploadNoc(id);
+    expect(noc.status).toBe(200);
+
+    const record = await recordFor(id);
+    expect(record.landlord_noc_public_id).toMatch(/^parkstop\/spot-docs\//);
+    expect(record.landlord_name).toBe('Ramesh Gupta');
+
+    const res = await submit(id);
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe('desk_pending');
+  });
+
+  test('the letter needs a name on it', async () => {
+    const id = await tenantSpot('tenant-noc-no-name');
+    await uploadDoc(id);
+
+    const res = await uploadNoc(id, { landlord_name: '' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe('Validation failed');
+    expect(res.body.errors.map((e) => e.field)).toContain('landlord_name');
+  });
+
+  test('the letter needs to be a letter', async () => {
+    const id = await tenantSpot('tenant-noc-no-file');
+    await uploadDoc(id);
+
+    const res = await uploadNoc(id, { noFile: true });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/photo of the letter/);
+  });
+
+  test('an owner-occupied spot needs no letter', async () => {
+    const id = await tenantSpot('owner-no-noc-needed');
+    await uploadDoc(id, { doc_type: 'electricity_bill', relationship: 'owner' });
+
+    expect((await submit(id)).status).toBe(200);
+  });
+
+  test('another owner cannot attach a letter to a spot that is not theirs', async () => {
+    const id = await tenantSpot('tenant-foreign-noc');
+
+    const res = await request(app)
+      .post(`/api/v1/spot-verification/${id}/landlord-noc`)
+      .set(auth(OTHER))
+      .field('landlord_name', 'Ramesh Gupta')
+      .attach('document', Buffer.from('noc'), 'noc.jpg');
+
+    expect(res.status).toBe(403);
+  });
+
+  test('the letter cannot be swapped while the spot is under review', async () => {
+    const id = await tenantSpot('tenant-noc-locked');
+    await uploadDoc(id);
+    await uploadNoc(id);
+    await submit(id);
+
+    const res = await uploadNoc(id, { landlord_name: 'Someone Else' });
+
+    expect(res.status).toBe(409);
+    expect((await recordFor(id)).landlord_name).toBe('Ramesh Gupta');
+  });
+
+  test('an admin sees the letter as a signed URL, like the main document', async () => {
+    const id = await tenantSpot('tenant-noc-admin');
+    await uploadDoc(id);
+    await uploadNoc(id);
+
+    const res = await request(app).get(`/api/v1/spot-verification/admin/${id}`).set(auth(ADMIN));
+
+    expect(res.body.data.submission.landlord_noc_url).toMatch(/^https:\/\/signed\.test\//);
+    expect(res.body.data.submission.landlord_name).toBe('Ramesh Gupta');
+    expect(res.body.data.submission.relationship).toBe('tenant');
   });
 });
