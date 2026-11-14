@@ -170,6 +170,11 @@ describe('dropping a leading house number', () => {
     '90 Feet Road, Dharavi, Mumbai',
     '100 feet road indiranagar bangalore 560038',
     '80 ft road koramangala bangalore 560095',
+    // "Futa" is feet in Hindi: Delhi and the NCR print the same convention.
+    '100 Futa Road, Delhi',
+    '60 Futa Road, Shahdara, Delhi',
+    '100 foota road ghaziabad',
+    '80 Phuta Road, Noida',
   ])('%s is left exactly as it is', (input) => {
     expect(strip(input)).toBe(input);
   });

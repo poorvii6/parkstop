@@ -116,11 +116,19 @@ const LEADING_ORDINAL = /^\d+(?:st|nd|rd|th)\b/i;
  * plausible hit at the wrong address, which is exactly the outcome that got the
  * "last few words only" fallback rejected.
  *
- * Narrow on purpose: a dimension word only. "42 Main Road" genuinely is house
- * 42, so Main, Cross and Block are NOT here. See the PR for the rest of the
- * family and what is still undecided.
+ * "Futa" is the same word in Hindi and prints the same way in Delhi and the
+ * NCR: "100 Futa Road", also spelled Foota and Phuta.
+ *
+ * Narrow on purpose: a DIMENSION word only, because there is no house numbered
+ * "100 Feet" or "100 Futa" and so no ambiguity to resolve. "42 Main Road"
+ * genuinely is house 42, so Main, Cross and Block are NOT here — protecting
+ * them would stop house numbers on those roads being stripped at all, which is
+ * the commoner case by a long way. There are real roads named "<number> Cross
+ * Road" with no ordinal suffix ("12 Cross Road, Jakkur", where stripping lands
+ * 15 km away) and the honest fix for those, if it ever matters, is a list of
+ * specific road names rather than a pattern.
  */
-const LEADING_ROAD_WIDTH = /^\d+\s*(?:feet|foot|ft)(?![a-z])/i;
+const LEADING_ROAD_WIDTH = /^\d+\s*(?:feet|foot|ft|futa|foota|phuta)(?![a-z])/i;
 
 /**
  * Drop a leading house, flat, plot or door number — the part Nominatim cannot
@@ -269,6 +277,18 @@ async function geocodeAddress(query) {
 
   // The one retry. A house or flat number is not something Nominatim can use,
   // and leaving it on is the difference between a street and nothing at all.
+  //
+  // DO NOT "IMPROVE" THIS BY TRYING BOTH FORMS AND KEEPING WHICHEVER LANDS
+  // NEARER THE SPOT'S PIN. It is a tempting optimisation — the caller knows
+  // the pin and the geocoder does not — and it would quietly destroy the only
+  // thing this measurement is for. The question being asked is "does the
+  // document's address agree with the pin?"; choosing, among several readings
+  // of the address, the one that agrees best with the pin answers "yes" by
+  // construction. The check would confirm itself and measure nothing.
+  //
+  // For the same reason the retry is a single deterministic transformation
+  // that does not know the pin exists, and the one that answered is recorded
+  // in `source` so a stored result can be explained.
   const withoutHouseNumber = dropLeadingHouseNumber(q);
   if (withoutHouseNumber && withoutHouseNumber !== q) {
     try {
