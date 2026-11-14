@@ -28,6 +28,7 @@ const reviewRoutes = require('./routes/reviews');
 const disputeRoutes = require('./routes/disputes');
 const notificationRoutes = require('./routes/notifications');
 const ownerVerificationRoutes = require('./routes/ownerVerification');
+const spotVerificationRoutes = require('./routes/spotVerification');
 const adminRoutes = require('./routes/admin'); // website admin views
 
 const app = express();
@@ -197,6 +198,8 @@ const API_PREFIX = '/api/v1';
 
 app.use(`${API_PREFIX}/auth`, authRoutes);
 app.use(`${API_PREFIX}/owner-verification`, ownerVerificationRoutes);
+// The PERSON is verified above; this verifies each PLACE they list.
+app.use(`${API_PREFIX}/spot-verification`, spotVerificationRoutes);
 app.use(`${API_PREFIX}/spots`, spotRoutes);
 app.use(`${API_PREFIX}/bookings`, bookingRoutes);
 app.use(`${API_PREFIX}/locations`, locationRoutes);

@@ -6,6 +6,7 @@ const prisma = require('../config/prisma');
 const logger = require('../utils/logger');
 const { authenticate, authorize } = require('../middleware/auth');
 const NotificationService = require('../services/notificationService');
+const { isVisibleToDrivers } = require('../constants/spotVerification');
 
 const router = express.Router();
 router.use(authenticate, authorize('ADMIN'));
@@ -96,7 +97,11 @@ router.get('/spots', async (req, res) => {
       where,
       orderBy: { created_at: 'desc' },
       take: 200,
-      include: { users: { select: { id: true, full_name: true, email: true, verification_status: true } }, _count: { select: { bookings: true } } },
+      include: {
+        users: { select: { id: true, full_name: true, email: true, verification_status: true } },
+        spot_verification: { select: { status: true, submitted_at: true, grandfathered_at: true } },
+        _count: { select: { bookings: true } },
+      },
     });
     res.json({
       success: true,
@@ -105,6 +110,18 @@ router.get('/spots', async (req, res) => {
         price_per_hour: n(s.price_per_hour), total_slots: s.total_slots, is_active: !!s.is_active, deleted_at: s.deleted_at,
         images: Array.isArray(s.images) ? s.images : [], created_at: s.created_at, bookings: s._count.bookings,
         owner: s.users ? { id: s.users.id, name: s.users.full_name, email: s.users.email, verification_status: s.users.verification_status } : null,
+        // The PLACE's verification, which is not the owner's. `is_live` is the
+        // honest answer to "can a driver see this right now", and the two can
+        // differ: a spot is live only if both are in order.
+        verification: {
+          spot_status: s.spot_verification_status,
+          record_status: s.spot_verification?.status || null,
+          submitted_at: s.spot_verification?.submitted_at || null,
+          grandfathered: !!s.spot_verification?.grandfathered_at,
+          is_live: isVisibleToDrivers(s.spot_verification_status)
+            && s.users?.verification_status === 'approved'
+            && !!s.is_active && !s.deleted_at,
+        },
       })),
     });
   } catch (err) { logger.error('Admin spots error:', err); fail(res, 500, 'Could not load spots.'); }

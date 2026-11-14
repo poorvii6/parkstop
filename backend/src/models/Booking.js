@@ -3,6 +3,7 @@ const logger = require('../utils/logger');
 const PricingService = require('../services/PricingService');
 const ParkingSpot = require('./ParkingSpot');
 const BookingRefundPolicy = require('../services/BookingRefundPolicy');
+const { isVisibleToDrivers } = require('../constants/spotVerification');
 
 // The entry and exit codes belong to the driver: they hand them over at the
 // gate to prove they are there. An owner who could read them could check a
@@ -63,6 +64,15 @@ class Booking {
         select: { verification_status: true }
       });
       if (owner?.verification_status !== 'approved') {
+        throw new Error('This parking spot is not available for booking yet.');
+      }
+
+      // And the SPOT's own address has to be verified, not just the person.
+      // The finder hides an unverified spot; this is what stops a booking made
+      // by spot id — a deep link, a saved spot, a stale list on a phone that
+      // has not refreshed. Read off the row we hold the lock on, so it cannot
+      // change between the check and the insert.
+      if (!isVisibleToDrivers(spot.spot_verification_status)) {
         throw new Error('This parking spot is not available for booking yet.');
       }
 

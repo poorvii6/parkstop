@@ -101,6 +101,8 @@ describe('the reservation hold is anchored to arrival, not to tapping Book', () 
   const spotRow = {
     id: 9, is_active: true, price_per_hour: 50, location_type: 'urban',
     car_slots: 2, bike_slots: 2, available_slots: 3, total_slots: 4,
+    // Bookable means the SPOT's address is verified, not only the owner.
+    spot_verification_status: 'approved',
   };
   const runCreate = (start, end, payment_mode = 'online', openBooking = null) => {
     let captured = null;

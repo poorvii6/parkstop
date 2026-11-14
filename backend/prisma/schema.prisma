@@ -83,40 +83,136 @@ model locations {
 }
 
 model parking_spots {
-  id              Int           @id @default(autoincrement())
+  id              Int       @id @default(autoincrement())
   spotter_id      Int?
-  title           String        @db.VarChar(100)
+  title           String    @db.VarChar(100)
   description     String?
-  price_per_hour  Decimal       @db.Decimal(10, 2)
-  latitude        Decimal?      @db.Decimal(10, 8)
-  longitude       Decimal?      @db.Decimal(11, 8)
-  is_available    Boolean?      @default(true)
-  created_at      DateTime?     @default(now()) @db.Timestamp(6)
+  price_per_hour  Decimal   @db.Decimal(10, 2)
+  latitude        Decimal?  @db.Decimal(10, 8)
+  longitude       Decimal?  @db.Decimal(11, 8)
+  is_available    Boolean?  @default(true)
+  created_at      DateTime? @default(now()) @db.Timestamp(6)
   address         String?
-  base_price      Decimal?      @db.Decimal
-  total_slots     Int?          @default(1)
-  available_slots Int?          @default(1)
-  location_type   String?       @db.VarChar(20)
-  is_active       Boolean?      @default(true)
-  updated_at      DateTime?     @default(now()) @db.Timestamp(6)
+  base_price      Decimal?  @db.Decimal
+  total_slots     Int?      @default(1)
+  available_slots Int?      @default(1)
+  location_type   String?   @db.VarChar(20)
+  is_active       Boolean?  @default(true)
+  updated_at      DateTime? @default(now()) @db.Timestamp(6)
   // Set when the owner deletes the spot. A deleted spot is never switched back
   // on by "go online" and is hidden from the owner's lists.
-  deleted_at      DateTime?     @db.Timestamp(6)
-  amenities       Json?         @default("[]")
-  bike_slots      Int?          @default(0)
-  car_slots       Int?          @default(1)
-  images          Json?         @default("[]")
-  slot_names      Json?         @default("[]")
-  bookings        bookings[]
-  saved_spots     saved_spots[]
-  users           users?        @relation(fields: [spotter_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  reviews         reviews[]
+  deleted_at      DateTime? @db.Timestamp(6)
+  amenities       Json?     @default("[]")
+  bike_slots      Int?      @default(0)
+  car_slots       Int?      @default(1)
+  images          Json?     @default("[]")
+  slot_names      Json?     @default("[]")
+
+  /// This SPOT's own verification state, mirrored from spot_verifications.status
+  /// so the finder can filter in SQL without a join -- the same trick
+  /// users.verification_status plays for the person. Deliberately NOT called
+  /// verification_status: findNearby already joins users, which has a column of
+  /// that name, and an unqualified reference to it would be ambiguous.
+  /// See constants/spotVerification.js for the states and what 'approved' means.
+  spot_verification_status String? @default("not_started") @db.VarChar(20)
+
+  bookings          bookings[]
+  saved_spots       saved_spots[]
+  users             users?              @relation(fields: [spotter_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  reviews           reviews[]
+  spot_verification spot_verifications?
 
   @@index([spotter_id])
   @@index([is_active])
   @@index([is_available])
   @@index([latitude, longitude])
   @@index([location_type])
+  @@index([spot_verification_status])
+}
+
+/// Per-spot property verification: one row per spot, the record behind
+/// parking_spots.spot_verification_status.
+///
+/// Owner verification approves a PERSON. This verifies a PLACE: a document for
+/// this address, in this person's name, read by an admin (desk) and confirmed
+/// against the local record by our team (field). Both stages must pass before
+/// a spot is visible or bookable.
+///
+/// A separate table rather than columns on parking_spots because findNearby
+/// does `SELECT parking_spots.*` on every map query, and none of this belongs
+/// in that row.
+model spot_verifications {
+  id      Int    @id @default(autoincrement())
+  spot_id Int    @unique
+  /// not_started | in_progress | desk_pending | desk_approved | approved | rejected | grandfathered
+  status  String @default("not_started") @db.VarChar(20)
+
+  // ── What the owner submitted ────────────────────────────────────────────
+  doc_type               String?   @db.VarChar(30)
+  /// Private Cloudinary id (type: authenticated). Admins get a signed URL;
+  /// the document itself is never public.
+  doc_public_id          String?   @db.VarChar(255)
+  /// The address printed on the document, typed by the owner. The spot's own
+  /// `address` column is not a substitute: every active spot in production has
+  /// one shorter than ten characters.
+  claimed_address        String?   @db.VarChar(300)
+  /// owner | tenant. A tenant needs the landlord's consent (stage 3).
+  relationship           String?   @db.VarChar(10)
+  landlord_name          String?   @db.VarChar(150)
+  landlord_noc_public_id String?   @db.VarChar(255)
+  /// When the owner submitted. The 48-hour clock runs from here.
+  submitted_at           DateTime? @db.Timestamp(6)
+
+  /// Set by the backfill on spots that were live in the finder before per-spot
+  /// verification existed, and never cleared.
+  ///
+  /// It is what stops such a spot DISAPPEARING the moment its owner starts the
+  /// process: `status` moves to in_progress and then desk_pending, neither of
+  /// which a driver may see, so without this a spot would drop out of the
+  /// finder as a reward for complying. While this is set and no verdict has
+  /// landed, the spot stays visible. See SpotVerificationPolicy.
+  grandfathered_at       DateTime? @db.Timestamp(6)
+
+  // ── Desk review: an admin reads the document (stage 2) ──────────────────
+  /// The name as printed on the document, typed by the admin.
+  name_on_document     String?   @db.VarChar(150)
+  /// DIRECT_MATCH | GOOD_PARTIAL_MATCH | MODERATE_PARTIAL_MATCH | NO_MATCH,
+  /// against owner_verifications.aadhaar_name. Advises the admin; it does not
+  /// decide, because a human typed the input off a photograph.
+  name_match           String?   @db.VarChar(30)
+  /// Where claimed_address geocoded to, kept so address_match_metres can be
+  /// explained months later instead of being an unaccountable number.
+  geocoded_lat         Decimal?  @db.Decimal(10, 8)
+  geocoded_lng         Decimal?  @db.Decimal(11, 8)
+  geocode_source       String?   @db.VarChar(20)
+  /// Metres from the geocoded address to the spot's pin. Mostly a measure of
+  /// geocoder precision, so it flags for a human and never auto-decides.
+  address_match_metres Int?
+  desk_reviewed_by     Int?
+  desk_reviewed_at     DateTime? @db.Timestamp(6)
+
+  // ── Field check: our team at the regional office (stage 3) ─────────────
+  field_office       String?   @db.VarChar(120)
+  field_record_found Boolean?
+  field_reference    String?   @db.VarChar(100)
+  field_notes        String?   @db.VarChar(1000)
+  field_checked_by   Int?
+  field_checked_at   DateTime? @db.Timestamp(6)
+
+  /// What the owner is told to fix.
+  rejection_reason String? @db.VarChar(500)
+  /// Append-only {at, by, stage, action, note}. The columns above hold the
+  /// CURRENT state; this survives a resubmission, so who did what and when is
+  /// still answerable after the second attempt overwrites the first.
+  review_log       Json?   @default("[]")
+
+  created_at DateTime @default(now()) @db.Timestamp(6)
+  updated_at DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  parking_spots parking_spots @relation(fields: [spot_id], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([submitted_at])
 }
 
 model payment_methods {

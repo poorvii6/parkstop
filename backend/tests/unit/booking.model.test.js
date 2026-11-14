@@ -133,6 +133,9 @@ describe('Booking.create', () => {
     total_slots: 2,
     price_per_hour: 50,
     location_type: 'urban',
+    // A bookable spot is one whose own address has been verified, not just
+    // one whose owner has been. See the gate below.
+    spot_verification_status: 'approved',
     ...overrides,
   });
 
@@ -230,6 +233,52 @@ describe('Booking.create', () => {
       Booking.create({ user_id: 1, spot_id: 10, ...validWindow() })
     ).rejects.toThrow('not available for booking yet');
     expect(mockTx.bookings.create).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The owner being verified is no longer enough. The finder hides a spot
+   * whose own address has not been checked, and this is what stops the booking
+   * that does not come through the finder: a deep link, a saved spot, a stale
+   * list on a phone that has not refreshed.
+   */
+  describe('the SPOT itself has to be verified, not just its owner', () => {
+    const refused = ['not_started', 'in_progress', 'desk_pending', 'desk_approved', 'rejected', null, undefined];
+
+    test.each(refused)('refuses a spot whose verification is %s', async (status) => {
+      mockTx.parking_spots.findUnique.mockResolvedValue(activeSpot({ spot_verification_status: status }));
+
+      await expect(
+        Booking.create({ user_id: 1, spot_id: 10, ...validWindow() })
+      ).rejects.toThrow('not available for booking yet');
+      expect(mockTx.bookings.create).not.toHaveBeenCalled();
+    });
+
+    test('a desk pass alone is not enough — the field check is the point', async () => {
+      mockTx.parking_spots.findUnique.mockResolvedValue(activeSpot({ spot_verification_status: 'desk_approved' }));
+      await expect(
+        Booking.create({ user_id: 1, spot_id: 10, ...validWindow() })
+      ).rejects.toThrow('not available for booking yet');
+    });
+
+    test('a grandfathered spot is still bookable — it was live before this existed', async () => {
+      mockTx.parking_spots.findUnique.mockResolvedValue(activeSpot({ spot_verification_status: 'grandfathered' }));
+      mockTx.bookings.create.mockImplementation(({ data }) => Promise.resolve({ id: 1, ...data }));
+
+      const booking = await Booking.create({ user_id: 1, spot_id: 10, ...validWindow() });
+      expect(booking.id).toBe(1);
+    });
+
+    test('the status is read off the locked row, not fetched again', async () => {
+      // The row is already held FOR UPDATE, so reading the status from it is
+      // what makes the check and the insert agree. A second query could see a
+      // different answer.
+      mockTx.parking_spots.findUnique.mockResolvedValue(activeSpot({ spot_verification_status: 'rejected' }));
+
+      await expect(
+        Booking.create({ user_id: 1, spot_id: 10, ...validWindow() })
+      ).rejects.toThrow('not available for booking yet');
+      expect(mockTx.parking_spots.findUnique).toHaveBeenCalledTimes(1);
+    });
   });
 
   test('rejects an invalid duration (end <= start)', async () => {

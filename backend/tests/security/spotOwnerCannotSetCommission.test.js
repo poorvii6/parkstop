@@ -551,56 +551,96 @@ describe('coordinates have to be coordinates', () => {
 });
 
 /**
- * Moving the pin of a live spot.
+ * A LIVE spot cannot be moved.
  *
- * Owner verification approves a PERSON, not a place — nothing re-checks the
- * location afterwards. So once an owner is approved, their spots are visible
- * to drivers (findNearby filters on verification_status = 'approved') and the
- * pin is fixed: a different place is a different listing.
+ * This guard used to key on the OWNER being approved, because that was the
+ * only verification there was. It now keys on the SPOT being visible to
+ * drivers, against the same VISIBLE_SPOT_STATUSES list the finder filters on.
  *
- * The alternative — allow the move and reset verification — is not available
- * here: verification_status is a column on USERS, so resetting it would hide
- * every other spot the owner lists and send them back through KYC over a
- * 20-metre correction.
+ * The owner's own status no longer decides it, in either direction — the last
+ * two tests here are the whole point of the change.
  */
-describe('a verified owner cannot move a spot', () => {
-  const atPin = (verification_status, rest = {}) => {
+describe('a live spot cannot be moved', () => {
+  /**
+   * @param spot_verification_status  the SPOT's state — what the rule reads
+   * @param owner                     the PERSON's state — deliberately irrelevant
+   */
+  const atPin = (spot_verification_status, { owner = 'approved', ...rest } = {}) => {
     prisma.parking_spots.findUnique.mockResolvedValue({
       latitude: 12.97, longitude: 77.59, total_slots: 2, car_slots: 1, bike_slots: 0,
-      users: { verification_status },
+      spot_verification_status,
+      users: { verification_status: owner },
       ...rest,
     });
   };
 
   beforeEach(() => { prisma.bookings.count.mockResolvedValue(0); });
 
-  test('an approved owner moving the pin is refused', async () => {
+  const move = (role = 'SPOTTER') =>
+    ParkingSpot.update(1, 7, { latitude: 28.61, longitude: 77.20 }, role);
+
+  test('an approved spot cannot be moved', async () => {
     atPin('approved');
 
-    await expect(
-      ParkingSpot.update(1, 7, { latitude: 28.61, longitude: 77.20 }, 'SPOTTER')
-    ).rejects.toThrow(/cannot be moved now that your account is verified/);
+    await expect(move()).rejects.toThrow(/cannot be moved while it is live on ParkStop/);
+    expect(prisma.parking_spots.update).not.toHaveBeenCalled();
+  });
+
+  test('a grandfathered spot cannot be moved either — it is live to drivers', async () => {
+    // Not checked yet, but visible and bookable today, so moving it relocates
+    // a listing people are already navigating to.
+    atPin('grandfathered');
+
+    await expect(move()).rejects.toThrow(/cannot be moved while it is live/);
     expect(prisma.parking_spots.update).not.toHaveBeenCalled();
   });
 
   test('the refusal says what the owner can do instead', async () => {
     atPin('approved');
-
-    await expect(
-      ParkingSpot.update(1, 7, { latitude: 28.61, longitude: 77.20 }, 'SPOTTER')
-    ).rejects.toThrow(/List the new location as a new spot, or contact ParkStop support/);
+    await expect(move()).rejects.toThrow(/List the new location as a new spot, or contact ParkStop support/);
   });
 
-  test('an approved owner can still edit everything else', async () => {
-    // The whole point of the tolerance: the app sends the coordinates back
-    // unchanged with every save, and that must not be read as a move.
+  const pinFree = ['not_started', 'in_progress', 'rejected', null];
+
+  test.each(pinFree)('a spot that is %s is not live, so its pin is free', async (status) => {
+    atPin(status);
+
+    await ParkingSpot.update(1, 7, { latitude: 28.61, longitude: 77.20 }, 'SPOTTER');
+
+    expect(written(prisma.parking_spots.update).latitude).toBe(28.61);
+  });
+
+  const underReview = ['desk_pending', 'desk_approved'];
+
+  test.each(underReview)('a spot that is %s is frozen while we check it', async (status) => {
+    // The desk check measures the document's address against THIS pin. If the
+    // pin could move after that measurement, the check it passed was about
+    // somewhere else — submit, wait, then relocate.
+    atPin(status);
+
+    await expect(move()).rejects.toThrow(/cannot be moved while we are checking its address/);
+    expect(prisma.parking_spots.update).not.toHaveBeenCalled();
+  });
+
+  test('a rejected spot can be moved, so "wrong pin" is a fixable rejection', async () => {
+    // The point of allowing it: an admin can send a spot back BECAUSE the pin
+    // is in the wrong place, and the owner can then act on that.
+    atPin('rejected');
+
+    await ParkingSpot.update(1, 7, { latitude: 28.61, longitude: 77.20 }, 'SPOTTER');
+
+    expect(written(prisma.parking_spots.update).latitude).toBe(28.61);
+  });
+
+  test('an approved spot can still have everything else edited', async () => {
+    // The app sends the coordinates back unchanged with every save, and that
+    // must not be read as a move.
     atPin('approved');
 
     await ParkingSpot.update(1, 7, { title: 'Renamed', latitude: 12.97, longitude: 77.59 }, 'SPOTTER');
 
     const d = written(prisma.parking_spots.update);
     expect(d.title).toBe('Renamed');
-    // The column is not rewritten at all when nothing actually moved.
     expect(d.latitude).toBeUndefined();
   });
 
@@ -613,42 +653,25 @@ describe('a verified owner cannot move a spot', () => {
 
   test('a shift just past the tolerance IS a move', async () => {
     atPin('approved');
-    // ~17 metres north. The guard is a tolerance, not a loophole to walk a
-    // spot across the city ten metres at a time... which it still is, slowly;
-    // see the PR notes.
     await expect(
       ParkingSpot.update(1, 7, { latitude: 12.97015, longitude: 77.59 }, 'SPOTTER')
     ).rejects.toThrow(/cannot be moved/);
   });
 
-  test('an UNVERIFIED owner can still move it — nothing is live yet', async () => {
-    atPin(null);
-
-    await ParkingSpot.update(1, 7, { latitude: 28.61, longitude: 77.20 }, 'SPOTTER');
-
-    expect(written(prisma.parking_spots.update).latitude).toBe(28.61);
-  });
-
-  test('a pending owner can still move it', async () => {
-    atPin('pending');
-    await ParkingSpot.update(1, 7, { latitude: 28.61, longitude: 77.20 }, 'SPOTTER');
-    expect(written(prisma.parking_spots.update).latitude).toBe(28.61);
-  });
-
-  test('an ADMIN can move a verified spot', async () => {
+  test('an ADMIN can move a live spot', async () => {
     atPin('approved');
 
-    await ParkingSpot.update(1, 7, { latitude: 28.61, longitude: 77.20 }, 'ADMIN');
+    await move('ADMIN');
 
     expect(written(prisma.parking_spots.update).latitude).toBe(28.61);
   });
 
   test('setting a pin for the first time is a fix, not a move', async () => {
-    // A spot with no coordinates is invisible in the finder — it cannot pass
-    // the bounding box — so refusing this would strand the listing for good.
+    // A spot with no coordinates can never appear in the finder — it cannot
+    // pass the bounding box — so refusing this would strand the listing.
     atPin('approved', { latitude: null, longitude: null });
 
-    await ParkingSpot.update(1, 7, { latitude: 28.61, longitude: 77.20 }, 'SPOTTER');
+    await move();
 
     expect(written(prisma.parking_spots.update).latitude).toBe(28.61);
   });
@@ -659,5 +682,26 @@ describe('a verified owner cannot move a spot', () => {
     expect(prisma.parking_spots.findUnique).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 1 } })
     );
+  });
+
+  // ── the re-key itself ───────────────────────────────────────────────────
+
+  test('a VERIFIED OWNER can position the pin of a brand new spot', async () => {
+    // This was broken while the rule keyed on the owner: an approved owner's
+    // new listing was invisible to everyone AND frozen, so the only way to
+    // correct a mis-tapped pin was to delete the spot and start again.
+    atPin('not_started', { owner: 'approved' });
+
+    await move();
+
+    expect(written(prisma.parking_spots.update).latitude).toBe(28.61);
+  });
+
+  test('an UNVERIFIED owner cannot move a live spot', async () => {
+    // The other direction: the spot is what drivers navigate to, so a
+    // grandfathered spot is frozen even if its owner is not approved.
+    atPin('grandfathered', { owner: null });
+
+    await expect(move()).rejects.toThrow(/cannot be moved while it is live/);
   });
 });
