@@ -1,5 +1,6 @@
 const prisma = require('../config/prisma');
 const logger = require('../utils/logger');
+const { VISIBLE_SPOT_STATUSES } = require('../constants/spotVerification');
 
 class SavedSpotController {
   /**
@@ -8,10 +9,27 @@ class SavedSpotController {
   static async getSavedSpots(req, res) {
     try {
       const userId = req.user.id;
-      
+
+      // This list had NO filter at all — not the spot's verification, not the
+      // owner's, not even is_active. So it returned deleted spots, switched-off
+      // spots and spots the finder hides, each as a bookable card. A saved spot
+      // is a shortcut into the booking flow, so it has to answer the same
+      // question the finder does.
+      //
+      // Hidden rather than shown as unavailable: the finder treats an
+      // unverified spot as not existing, and two screens giving a driver
+      // different answers about the same spot is worse than one of them being
+      // briefly empty. The saved_spots row stays, so the card comes back by
+      // itself if the spot is approved later.
       const savedSpots = await prisma.saved_spots.findMany({
         where: {
-          user_id: userId
+          user_id: userId,
+          parking_spots: {
+            is_active: true,
+            deleted_at: null,
+            spot_verification_status: { in: VISIBLE_SPOT_STATUSES },
+            users: { verification_status: 'approved' },
+          },
         },
         include: {
           parking_spots: true

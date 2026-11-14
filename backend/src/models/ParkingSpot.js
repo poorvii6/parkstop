@@ -1,5 +1,11 @@
 const prisma = require('../config/prisma');
 const logger = require('../utils/logger');
+const {
+  SPOT_VERIFICATION_STATUS,
+  VISIBLE_SPOT_STATUSES,
+  isPinFrozen,
+} = require('../constants/spotVerification');
+const SpotVerificationPolicy = require('../services/SpotVerificationPolicy');
 
 /** Booking states that are physically holding a bay right now. */
 const OCCUPYING_STATUSES = ['reserved', 'active', 'checkout_pending'];
@@ -284,7 +290,17 @@ class ParkingSpot {
           bike_slots: newBike,
           images: Array.isArray(images) ? images : [],
           is_available: true,
-          is_active: true
+          is_active: true,
+
+          // A new spot is not visible to drivers until its own address is
+          // verified, however verified its owner already is. The record is
+          // created with the spot, in the same statement, so there is no such
+          // thing as a spot without one and nothing has to get-or-create it
+          // later.
+          spot_verification_status: SPOT_VERIFICATION_STATUS.NOT_STARTED,
+          spot_verification: {
+            create: { status: SPOT_VERIFICATION_STATUS.NOT_STARTED },
+          },
         }
       });
 
@@ -338,6 +354,10 @@ class ParkingSpot {
       WHERE is_active = true
         AND u.balance >= -500
         AND u.verification_status = 'approved'
+        -- The PERSON is approved above; this is the PLACE. Qualified with the
+        -- table name because users carries a verification_status too and an
+        -- unqualified reference would be ambiguous.
+        AND parking_spots.spot_verification_status = ANY(${VISIBLE_SPOT_STATUSES})
         AND latitude BETWEEN ${lat - latDelta} AND ${lat + latDelta}
         AND longitude BETWEEN ${lng - lngDelta} AND ${lng + lngDelta}
         AND (
@@ -404,6 +424,8 @@ class ParkingSpot {
       WHERE is_active = true
         AND u.balance >= -500
         AND u.verification_status = 'approved'
+        -- A fallback suggestion is still a spot we are sending someone to.
+        AND parking_spots.spot_verification_status = ANY(${VISIBLE_SPOT_STATUSES})
         AND (
           6371 *
           acos(
@@ -430,6 +452,9 @@ class ParkingSpot {
     const spots = await prisma.parking_spots.findMany({
       where: {
         is_active: true,
+        // The spot's own verification, not just the owner's. A NULL status is
+        // not in the list, so a row that missed the backfill stays hidden.
+        spot_verification_status: { in: VISIBLE_SPOT_STATUSES },
         users: {
           balance: { gte: -500 },
           // Only verified owners' spots are shown to drivers.
@@ -526,6 +551,7 @@ class ParkingSpot {
           select: {
             latitude: true, longitude: true,
             total_slots: true, car_slots: true, bike_slots: true,
+            spot_verification_status: true,
             users: { select: { verification_status: true } },
           },
         })
@@ -570,27 +596,33 @@ class ParkingSpot {
 
     // Moving the pin of a live spot.
     //
-    // Owner verification approves a PERSON, not a place, so nothing re-checks
-    // the location afterwards: an owner verified at one address could move the
-    // pin across the city, or onto a driveway they have no claim to, and the
-    // listing stays approved and bookable the whole time. Once an owner is
-    // approved their spots are visible to drivers — findNearby filters on
-    // `u.verification_status = 'approved'` — so from that point the pin is
-    // fixed, and a different place is a different listing.
+    // The pin is what a driver navigates to, so once a spot is live it is
+    // fixed: a different place is a different listing.
     //
-    // The alternative was to allow the move and reset verification instead.
-    // That is not implementable here: verification_status lives on USERS, not
-    // on parking_spots, so resetting it would hide every other spot the owner
-    // lists and push them back into the KYC queue over a 20-metre correction.
-    // Doing it properly needs a per-spot column and an admin review queue,
-    // which is a migration and a screen, not a guard.
+    // KEYED ON THE SPOT, NOT THE OWNER. It had to be the owner before, because
+    // nothing else existed — but owner verification approves a PERSON, and a
+    // person approved at one address could move any of their pins across the
+    // city with the listing staying live throughout. Now that each spot has
+    // its own verified address, the freeze belongs to the spot: isPinFrozen
+    // holds it while the spot is live to drivers OR waiting on a review, and
+    // lifts it otherwise.
+    //
+    // Two things fall out of that, both wanted:
+    //
+    //   - a verified owner can position the pin of a BRAND NEW spot. Under the
+    //     old rule they could not: the spot was invisible to everyone and the
+    //     pin was frozen anyway, so the only way to correct a mis-tap was to
+    //     delete the listing and start again.
+    //   - "your pin is in the wrong place" becomes a fixable rejection. A
+    //     rejected spot is not visible, so its pin is movable again, and the
+    //     owner can act on the reason they were given.
     let allowCoords = movingPin;
     if (movingPin && current) {
       const hasStoredPin = current.latitude !== null && current.longitude !== null;
       const moved = hasStoredPin
         ? metresBetween(Number(current.latitude), Number(current.longitude), lat, lng)
         : Infinity;
-      const approved = current.users?.verification_status === 'approved';
+      const pinFrozen = isPinFrozen(current.spot_verification_status);
 
       if (hasStoredPin && moved <= PIN_MOVE_TOLERANCE_M) {
         // Within tolerance nothing actually moved: the app sends the
@@ -604,16 +636,24 @@ class ParkingSpot {
         logger.info(`Spot ${spotId} had no pin; coordinates set for the first time`);
       } else if (isAdmin) {
         logger.info(`Spot ${spotId} pin moved ${Math.round(moved)}m by an admin`);
-      } else if (approved) {
+      } else if (pinFrozen) {
+        const underReview = !VISIBLE_SPOT_STATUSES.includes(current.spot_verification_status);
         const err = new Error(
-          'This spot cannot be moved now that your account is verified, because drivers ' +
-          'are already navigating to it. List the new location as a new spot, or contact ' +
-          'ParkStop support to move this one.'
+          underReview
+            ? 'This spot cannot be moved while we are checking its address. The address you ' +
+              'sent us is being checked against this pin. Wait for the result, or contact ' +
+              'ParkStop support.'
+            : 'This spot cannot be moved while it is live on ParkStop, because drivers are ' +
+              'already navigating to it. List the new location as a new spot, or contact ' +
+              'ParkStop support to move this one.'
         );
         err.statusCode = 400;
         throw err;
       } else {
-        logger.info(`Spot ${spotId} pin moved ${Math.round(moved)}m by an unverified owner — allowed, not live yet`);
+        logger.info(
+          `Spot ${spotId} pin moved ${Math.round(moved)}m — allowed, the spot is ` +
+          `${current.spot_verification_status || 'unverified'} and not live to drivers`
+        );
       }
     }
 
@@ -827,6 +867,17 @@ class ParkingSpot {
         images: true,
         latitude: true,
         longitude: true,
+        // Where this spot's own address verification stands. Without it the
+        // owner's list shows a spot that looks live and is not, with nothing
+        // on screen to say why.
+        spot_verification_status: true,
+        spot_verification: {
+          select: {
+            status: true, submitted_at: true, rejection_reason: true,
+            grandfathered_at: true, doc_type: true, doc_public_id: true,
+            claimed_address: true, relationship: true,
+          },
+        },
       }
     });
 
@@ -931,7 +982,14 @@ class ParkingSpot {
       pending_earnings: Number(pendingEarnings._sum.spotter_earning || 0),
       revenue_trend: trend,
       surge_factor: Number(avgSurge.toFixed(1)),
-      inventory: activeSpots,
+      // Each spot carries its own verification state, in the same shape the
+      // per-spot endpoint returns, so the owner's list and the spot's own
+      // screen cannot disagree. `spot_verification` itself is dropped: it
+      // holds the document id, which is nobody's business on a list screen.
+      inventory: activeSpots.map(({ spot_verification, ...spot }) => ({
+        ...spot,
+        verification: SpotVerificationPolicy.ownerSummary(spot, spot_verification),
+      })),
       recent_traffic: recentTraffic,
       occupancy_rate: occupancyRate,
       avg_duration: avgDuration,

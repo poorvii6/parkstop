@@ -10,6 +10,7 @@ import MapLibreView from '../../components/MapLibreView';
 import apiClient from '../../api/client';
 import { presentError } from '../../utils/authErrors';
 import { useOnlineRefresh } from '../../hooks/useOnlineRefresh';
+import SpotVerificationBadge from '../../components/spotter/SpotVerificationBadge';
 import { SC, TF, SP, RAD, SS } from '../../constants/SpotterTheme';
 
 export default function SpotsScreen() {
@@ -351,6 +352,8 @@ export default function SpotsScreen() {
                       </TouchableOpacity>
                     </View>
                   </View>
+                  {/* Whether a driver can actually see this spot, and why not. */}
+                  <SpotVerificationBadge v={spot.verification} />
                   <View style={s.spotStatsRow}>
                     <View style={s.spotStat}>
                       <Text style={s.spotStatValue}>{spot.total_slots}</Text>
@@ -372,6 +375,25 @@ export default function SpotsScreen() {
         ) : (
           /* ── CREATE FORM ─────────────────────────────────────── */
           <View style={SS.glassCard}>
+            {/*
+              Said BEFORE the form, not after submitting.
+              A new spot is not visible to drivers until its own address is
+              checked -- being a verified owner is not enough, because
+              verification approves a person and this is a place. Burying that
+              until the end would mean someone fills in a listing believing it
+              goes live when they tap Create.
+            */}
+            {!editingSpotId && (
+              <View style={s.verifyNotice}>
+                <Ionicons name="information-circle" size={18} color={SC.info} />
+                <Text style={s.verifyNoticeText}>
+                  New spots are not visible to drivers straight away. After you create this
+                  one, send us a document for its address — an electricity bill, property tax
+                  receipt or rent agreement in your name. We check it and the spot goes live,
+                  usually within 48 hours.
+                </Text>
+              </View>
+            )}
             <View style={SS.inputGroup}>
               <Text style={SS.inputLabel}>SPOT NAME *</Text>
               <TextInput
@@ -601,6 +623,24 @@ export default function SpotsScreen() {
 }
 
 const s = StyleSheet.create({
+  verifyNotice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: SC.infoSoft,
+    borderColor: SC.info + '55',
+    borderWidth: 1,
+    borderRadius: RAD.sm,
+    padding: 12,
+    marginBottom: SP.lg,
+  },
+  verifyNoticeText: {
+    flex: 1,
+    color: SC.textPrimary,
+    opacity: 0.9,
+    fontSize: 12,
+    lineHeight: 17,
+  },
   toggleRow: {
     flexDirection: 'row',
     gap: 10,

@@ -51,7 +51,7 @@ const PIN = { latitude: 12.97159812, longitude: 77.59456234 };
 
 const ids = {};
 
-async function makeOwner(owner, { approved }) {
+async function makeOwner(owner, { approved, spotStatus = 'not_started' }) {
   await request(app).post('/api/v1/auth/register').send({
     email: owner.email,
     name: owner.uid,
@@ -82,6 +82,10 @@ async function makeOwner(owner, { approved }) {
       location_type: 'urban',
       is_active: true,
       amenities: [],
+      // The pin freeze keys on the SPOT being live, not on its owner, so the
+      // spot's own verification is what these fixtures have to set.
+      spot_verification_status: spotStatus,
+      spot_verification: { create: { status: spotStatus } },
     },
   });
 
@@ -89,8 +93,11 @@ async function makeOwner(owner, { approved }) {
 }
 
 beforeAll(async () => {
-  ids.plain = await makeOwner(PLAIN, { approved: false });
-  ids.verified = await makeOwner(VERIFIED, { approved: true });
+  // Not live: the route-layer tests are about body shape, and a spot that is
+  // not visible to drivers keeps the pin freeze out of the way.
+  ids.plain = await makeOwner(PLAIN, { approved: false, spotStatus: 'not_started' });
+  // Live: verified owner AND a verified address, which is what freezes the pin.
+  ids.verified = await makeOwner(VERIFIED, { approved: true, spotStatus: 'approved' });
 });
 
 afterAll(async () => {
@@ -376,13 +383,17 @@ describe('capacity cannot be cut below the cars already parked', () => {
 /**
  * The pin freeze, end to end — and the flow it must NOT break.
  *
+ * Keyed on the SPOT being live to drivers, not on its owner being verified.
+ * The owner here is approved AND the spot's address is verified, which is what
+ * it takes for a driver to be sent to it.
+ *
  * The owner's edit screen prefills latitude and longitude from the dashboard
  * and posts them back with every save, so the coordinates make a round trip
  * through Decimal(10,8) -> JSON -> parseFloat on every title change. If that
  * counted as moving the pin, a verified owner could not edit their own spot at
  * all.
  */
-describe('a verified owner cannot move their spot', () => {
+describe('a live spot cannot be moved', () => {
   const spotId = () => ids.verified.spotId;
   const putVerified = (body) => put(VERIFIED, spotId(), body);
 
@@ -420,7 +431,7 @@ describe('a verified owner cannot move their spot', () => {
     const res = await putVerified({ latitude: 28.61, longitude: 77.2 });
 
     expect(res.status).toBe(400);
-    expect(res.body.message).toMatch(/cannot be moved now that your account is verified/);
+    expect(res.body.message).toMatch(/cannot be moved while it is live on ParkStop/);
     expect(res.body.message).toMatch(/new spot|support/i);
 
     const row = await spotRow(spotId());
