@@ -98,6 +98,31 @@ const HOUSE_NUMBER = /^#?\s*\d+[a-z]?(?:\s*[/-]\s*(?:\d+[a-z]?|[a-z])\b)?\s*[,.]
 const LEADING_ORDINAL = /^\d+(?:st|nd|rd|th)\b/i;
 
 /**
+ * A road named after its WIDTH, which is a Bengaluru convention and one of the
+ * commonest address shapes in this market: "100 Feet Road", "80 Feet Road",
+ * "60 Feet Road", and the same in Mumbai ("90 Feet Road, Dharavi").
+ *
+ * The number IS the name. Stripping it fails in the worst available way,
+ * measured against the live API:
+ *
+ *   "100 Feet Road, Indiranagar"  -> "Feet Road, Indiranagar"
+ *        -> 80 Feet Road, Old Thippasandra. 0.8 km away.
+ *   "80 Feet Road, Koramangala"   -> "Feet Road, Koramangala"
+ *        -> 100 feet Road, Koramangala. 0.4 km away.
+ *   "90 Feet Road, Dharavi"       -> "Feet Road, Dharavi"
+ *        -> 60 Feet Road. 0.7 km away.
+ *
+ * In each case the answer is a NEIGHBOURING ROAD OF THE SAME FAMILY — a clean,
+ * plausible hit at the wrong address, which is exactly the outcome that got the
+ * "last few words only" fallback rejected.
+ *
+ * Narrow on purpose: a dimension word only. "42 Main Road" genuinely is house
+ * 42, so Main, Cross and Block are NOT here. See the PR for the rest of the
+ * family and what is still undecided.
+ */
+const LEADING_ROAD_WIDTH = /^\d+\s*(?:feet|foot|ft)(?![a-z])/i;
+
+/**
  * Drop a leading house, flat, plot or door number — the part Nominatim cannot
  * use and that makes it return nothing at all.
  *
@@ -114,6 +139,12 @@ function dropLeadingHouseNumber(address) {
   // it alone. "No 42, 3rd Cross Road" is a house number followed by a street,
   // and the 42 goes.
   if (!hadPrefixWord && LEADING_ORDINAL.test(afterWord)) return original;
+
+  // A width is never a house number, whatever precedes it, so this one is not
+  // conditional on the prefix word: in "No 42, 100 Feet Road" the 42 has
+  // already been consumed by the time we look, and what is left begins with
+  // the road's own name.
+  if (LEADING_ROAD_WIDTH.test(afterWord)) return original;
 
   const match = afterWord.match(HOUSE_NUMBER);
   if (!match) return original;

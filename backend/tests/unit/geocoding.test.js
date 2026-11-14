@@ -150,6 +150,60 @@ describe('dropping a leading house number', () => {
     expect(strip(input)).toBe(input);
   });
 
+  /**
+   * A road named after its WIDTH. The number is the name, and this is one of
+   * the commonest address shapes in Bengaluru.
+   *
+   * Exact assertions, because the failure is not a missing result: measured
+   * against the live API, "Feet Road, Indiranagar" resolves to 80 Feet Road in
+   * Old Thippasandra, 0.8 km from the 100 Feet Road that was asked for, and
+   * "Feet Road, Koramangala" resolves to 100 feet Road, 0.4 km from the 80
+   * Feet Road that was asked for. A clean, plausible hit at the wrong address.
+   */
+  test.each([
+    '100 Feet Road, Indiranagar',
+    '80 Feet Road, Koramangala',
+    '60 Feet Road, Jayanagar',
+    '100 Ft Road, Indiranagar',
+    '100 Feet Ring Road, Banashankari',
+    '200 Feet Radial Road, Chennai',
+    '90 Feet Road, Dharavi, Mumbai',
+    '100 feet road indiranagar bangalore 560038',
+    '80 ft road koramangala bangalore 560095',
+  ])('%s is left exactly as it is', (input) => {
+    expect(strip(input)).toBe(input);
+  });
+
+  test('a house number in front of a Feet road is still stripped', () => {
+    // The road keeps its number; the house loses its own.
+    expect(strip('No 42, 100 Feet Road, Indiranagar')).toBe('100 Feet Road, Indiranagar');
+    expect(strip('42 100 Feet Road Indiranagar')).toBe('100 Feet Road Indiranagar');
+  });
+
+  test('a word merely starting with "ft" is not read as a width', () => {
+    expect(strip('12 Ftizgerald Lane, Bengaluru')).toBe('Ftizgerald Lane, Bengaluru');
+  });
+
+  test('a width is protected even behind a "No", unlike an ordinal', () => {
+    // The ordinal guard is skipped when a prefix word is present, because
+    // "No 42, 3rd Cross Road" has a real house number to strip. A width never
+    // does: there is no house numbered "100 Feet".
+    expect(strip('No 100 Feet Road, Indiranagar')).toBe('No 100 Feet Road, Indiranagar');
+  });
+
+  /**
+   * The control, and the reason the width rule is narrow rather than a rule
+   * about numbers before road words: "42 Main Road" genuinely is house 42.
+   * Protecting Main, Cross or Block would make every house number on them
+   * unstrippable.
+   */
+  test.each([
+    ['42 Main Road, Bengaluru', 'Main Road, Bengaluru'],
+    ['21 Church Street, Bengaluru', 'Church Street, Bengaluru'],
+  ])('%s is a house number and is stripped', (input, expected) => {
+    expect(strip(input)).toBe(expected);
+  });
+
   test('a number with nothing useful after it is left alone', () => {
     // Searching for the remnant would be worse than searching for the whole.
     expect(strip('42')).toBe('42');
