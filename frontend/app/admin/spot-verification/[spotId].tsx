@@ -578,7 +578,7 @@ function CheckReadout({ checks }: { checks: CheckResult }) {
             {n.note ? <Text style={s.readNote}>{n.note}</Text> : null}
             <Text style={s.readMeta}>
               Checked against {n.checked_against === 'landlord_name' ? 'the landlord\'s name' : 'the Aadhaar name'}
-              {n.via_variant ? ' · spelling variant' : ''}
+              {n.via_variant ? (n.weak_variant ? ' · WEAK spelling match' : ' · spelling variant') : ''}
               {n.exact_full_matches === 0 && n.matched > 0 ? ' · initials only' : ''}
             </Text>
           </View>

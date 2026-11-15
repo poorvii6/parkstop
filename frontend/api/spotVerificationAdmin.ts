@@ -84,6 +84,8 @@ export type NameCheck = {
   of: number;
   conflicting: number;
   via_variant: boolean;
+  /** The spelling match rested on a two-letter key — thin evidence. */
+  weak_variant: boolean;
   exact_full_matches: number;
   deceased_holder: boolean;
   explanation: string;

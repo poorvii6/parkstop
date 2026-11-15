@@ -1,4 +1,18 @@
 /**
+ * THIS FILE TESTS THE GATE **ON**.
+ *
+ * Per-spot verification ships behind SPOT_VERIFICATION_GATE and defaults to
+ * OFF, so every assertion here about a spot being hidden, a pin being frozen
+ * or a promise being made has to say which world it is in. Set before the
+ * constants module is required, because that is where the flag is read.
+ *
+ * The OFF path has its own coverage — tests/unit/spotGate.test.js and the
+ * gate-off block in tests/integration/spotVerificationHardening.test.js —
+ * because off is what is about to be in production.
+ */
+process.env.SPOT_VERIFICATION_GATE = 'on';
+
+/**
  * Unit tests for the Booking model — the highest-risk money/state logic.
  *
  * Prisma, the pricing/payment services, and the logger are mocked, so these run

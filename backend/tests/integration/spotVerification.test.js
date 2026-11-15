@@ -1,4 +1,18 @@
 /**
+ * THIS FILE TESTS THE GATE **ON**.
+ *
+ * Per-spot verification ships behind SPOT_VERIFICATION_GATE and defaults to
+ * OFF, so every assertion here about a spot being hidden, a pin being frozen
+ * or a promise being made has to say which world it is in. Set before the
+ * constants module is required, because that is where the flag is read.
+ *
+ * The OFF path has its own coverage — tests/unit/spotGate.test.js and the
+ * gate-off block in tests/integration/spotVerificationHardening.test.js —
+ * because off is what is about to be in production.
+ */
+process.env.SPOT_VERIFICATION_GATE = 'on';
+
+/**
  * Per-spot verification, end to end: the gate, the clock and the queue.
  *
  * Owner verification approves a PERSON. Every spot here belongs to an owner

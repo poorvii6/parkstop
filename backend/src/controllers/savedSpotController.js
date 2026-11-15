@@ -1,6 +1,6 @@
 const prisma = require('../config/prisma');
 const logger = require('../utils/logger');
-const { VISIBLE_SPOT_STATUSES } = require('../constants/spotVerification');
+const { driverVisibilityWhere } = require('../constants/spotVerification');
 
 class SavedSpotController {
   /**
@@ -27,7 +27,8 @@ class SavedSpotController {
           parking_spots: {
             is_active: true,
             deleted_at: null,
-            spot_verification_status: { in: VISIBLE_SPOT_STATUSES },
+            // Absent when the spot gate is off, so nothing is filtered out.
+            ...driverVisibilityWhere(),
             users: { verification_status: 'approved' },
           },
         },

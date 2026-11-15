@@ -1,4 +1,18 @@
 /**
+ * THIS FILE TESTS THE GATE **ON**.
+ *
+ * Its pin-freeze cases assert the SPOT-keyed rule — "cannot be moved while it
+ * is live on ParkStop" — which only applies when SPOT_VERIFICATION_GATE is
+ * "on". With the gate off the freeze is keyed on the OWNER being approved,
+ * exactly as before stage 1, and that path is covered in
+ * tests/integration/spotGateOff.test.js.
+ *
+ * Set before the constants module is required, because that is where the flag
+ * is read.
+ */
+process.env.SPOT_VERIFICATION_GATE = 'on';
+
+/**
  * The spot write routes reject junk at the door.
  *
  * PUT /spots/:id had NO body validators at all — only the id was checked — so

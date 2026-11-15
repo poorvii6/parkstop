@@ -2,8 +2,9 @@ const prisma = require('../config/prisma');
 const logger = require('../utils/logger');
 const {
   SPOT_VERIFICATION_STATUS,
-  VISIBLE_SPOT_STATUSES,
-  isPinFrozen,
+  driverVisibilityWhere,
+  driverVisibilitySql,
+  pinFreezeReason,
 } = require('../constants/spotVerification');
 const SpotVerificationPolicy = require('../services/SpotVerificationPolicy');
 
@@ -352,10 +353,11 @@ class ParkingSpot {
       WHERE is_active = true
         AND u.balance >= -500
         AND u.verification_status = 'approved'
-        -- The PERSON is approved above; this is the PLACE. Qualified with the
-        -- table name because users carries a verification_status too and an
-        -- unqualified reference would be ambiguous.
-        AND parking_spots.spot_verification_status = ANY(${VISIBLE_SPOT_STATUSES})
+        -- The PERSON is approved above; this is the PLACE. A fragment rather
+        -- than a clause written here, because the spot gate ships OFF and
+        -- then this filter has to be ABSENT rather than widened. See
+        -- driverVisibilitySql.
+        ${driverVisibilitySql()}
         AND latitude BETWEEN ${lat - latDelta} AND ${lat + latDelta}
         AND longitude BETWEEN ${lng - lngDelta} AND ${lng + lngDelta}
         AND (
@@ -423,7 +425,7 @@ class ParkingSpot {
         AND u.balance >= -500
         AND u.verification_status = 'approved'
         -- A fallback suggestion is still a spot we are sending someone to.
-        AND parking_spots.spot_verification_status = ANY(${VISIBLE_SPOT_STATUSES})
+        ${driverVisibilitySql()}
         AND (
           6371 *
           acos(
@@ -452,7 +454,7 @@ class ParkingSpot {
         is_active: true,
         // The spot's own verification, not just the owner's. A NULL status is
         // not in the list, so a row that missed the backfill stays hidden.
-        spot_verification_status: { in: VISIBLE_SPOT_STATUSES },
+        ...driverVisibilityWhere(),
         users: {
           balance: { gte: -500 },
           // Only verified owners' spots are shown to drivers.
@@ -620,7 +622,18 @@ class ParkingSpot {
       const moved = hasStoredPin
         ? metresBetween(Number(current.latitude), Number(current.longitude), lat, lng)
         : Infinity;
-      const pinFrozen = isPinFrozen(current.spot_verification_status);
+      /**
+       * One call, and the gate decides which rule applies.
+       *
+       * With the gate ON the freeze is keyed on the SPOT; with it OFF it is
+       * keyed on the OWNER being approved, exactly as before stage 1. Both
+       * the decision and the sentence come from pinFreezeReason, so this
+       * block cannot tell an owner something true only of the other state.
+       */
+      const frozen = pinFreezeReason({
+        spotStatus: current.spot_verification_status,
+        ownerApproved: current.users?.verification_status === 'approved',
+      });
 
       if (hasStoredPin && moved <= PIN_MOVE_TOLERANCE_M) {
         // Within tolerance nothing actually moved: the app sends the
@@ -634,17 +647,8 @@ class ParkingSpot {
         logger.info(`Spot ${spotId} had no pin; coordinates set for the first time`);
       } else if (isAdmin) {
         logger.info(`Spot ${spotId} pin moved ${Math.round(moved)}m by an admin`);
-      } else if (pinFrozen) {
-        const underReview = !VISIBLE_SPOT_STATUSES.includes(current.spot_verification_status);
-        const err = new Error(
-          underReview
-            ? 'This spot cannot be moved while we are checking its address. The address you ' +
-              'sent us is being checked against this pin. Wait for the result, or contact ' +
-              'ParkStop support.'
-            : 'This spot cannot be moved while it is live on ParkStop, because drivers are ' +
-              'already navigating to it. List the new location as a new spot, or contact ' +
-              'ParkStop support to move this one.'
-        );
+      } else if (frozen) {
+        const err = new Error(frozen.message);
         err.statusCode = 400;
         throw err;
       } else {

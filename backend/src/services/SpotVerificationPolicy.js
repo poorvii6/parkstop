@@ -15,6 +15,7 @@ const {
   AWAITING_REVIEW_STATUSES,
   RELATIONSHIPS,
   TENANT_DOC_TYPES,
+  isSpotGateEnabled,
   isVisibleToDrivers,
   isPinFrozen,
 } = require('../constants/spotVerification');
@@ -418,6 +419,30 @@ function ownerMessageFor({ status, submittedAt, now = new Date() }) {
   const S = SPOT_VERIFICATION_STATUS;
   const wait = waitFor({ status, submittedAt, now });
 
+  /**
+   * With the gate off there is nothing to promise, because the spot is
+   * already live — telling an owner "expected live within 31 hours" about a
+   * listing drivers can already book would be false in the one direction that
+   * matters. The submission is still recorded and still reviewed; it just
+   * does not gate anything yet.
+   */
+  if (!isSpotGateEnabled()) {
+    switch (status) {
+      case S.APPROVED:
+        return 'Verified. Drivers can see and book this spot.';
+      case S.REJECTED:
+        return 'We could not verify this spot from the document you sent. See what to fix, then '
+          + 'submit it again. Your spot is still live in the meantime.';
+      case S.DESK_PENDING:
+      case S.DESK_APPROVED:
+        return 'Live on ParkStop. We are checking the document you sent — your spot stays visible '
+          + 'while we do.';
+      default:
+        return 'Live on ParkStop. Send us a document for this address when you can, so we can '
+          + 'verify it.';
+    }
+  }
+
   switch (status) {
     case S.NOT_STARTED:
       return 'Add a document for this address to get this spot verified. Drivers cannot see it yet.';
@@ -541,6 +566,7 @@ function ownerSummary(spot, record, now = new Date()) {
   const editable = !AWAITING_REVIEW_STATUSES.includes(status)
     && status !== SPOT_VERIFICATION_STATUS.APPROVED;
   const gaps = submissionGaps(record, spot);
+  const gateOn = isSpotGateEnabled();
 
   return {
     spot_id: spot?.id,
@@ -585,10 +611,19 @@ function ownerSummary(spot, record, now = new Date()) {
     can_submit: editable && gaps.length === 0,
     /** Whether the owner may change anything at all right now. */
     editable,
+    /**
+     * Whether this spot's own verification gates anything yet.
+     *
+     * The screen reads this rather than inferring it. With the gate off the
+     * spot is visible regardless of its status, so a countdown would be
+     * promising something already delivered — `hours_left` and
+     * `promised_hours` go quiet and the message says it is live.
+     */
+    gate_enforced: gateOn,
     submitted_at: submittedAt,
     waiting_hours: wait.waiting_hours,
-    hours_left: wait.hours_left,
-    promised_hours: SLA_HOURS,
+    hours_left: gateOn ? wait.hours_left : null,
+    promised_hours: gateOn ? SLA_HOURS : null,
     rejection_reason: status === SPOT_VERIFICATION_STATUS.REJECTED ? (record?.rejection_reason || null) : null,
     pin_locked: isPinFrozen(visible),
   };

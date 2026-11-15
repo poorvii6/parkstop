@@ -18,6 +18,8 @@
  * it does not mean the owner is allowed to let the space (society rules,
  * municipal permission).
  */
+const { Prisma } = require('@prisma/client');
+
 const { PROPERTY_DOC_TYPE_KEYS, TENANCY_DOC_TYPE_KEYS, labelForDocType } = require('./propertyDocTypes');
 
 const SPOT_VERIFICATION_STATUS = {
@@ -90,7 +92,90 @@ const RELATIONSHIPS = { OWNER: 'owner', TENANT: 'tenant' };
  */
 const TENANT_DOC_TYPES = TENANCY_DOC_TYPE_KEYS;
 
-const isVisibleToDrivers = (status) => VISIBLE_SPOT_STATUSES.includes(status);
+// ───────────────────────────── the gate switch ─────────────────────────────
+
+/** The Railway variable. */
+const GATE_VARIABLE = 'SPOT_VERIFICATION_GATE';
+/** The ONLY value that turns it on. Anything else, including unset, is off. */
+const GATE_ON_VALUE = 'on';
+
+/**
+ * THE ONE PLACE THE FLAG IS READ. Nothing else in the codebase may look at
+ * process.env.SPOT_VERIFICATION_GATE — everything asks the questions below
+ * instead, and gets a domain answer rather than a boolean.
+ *
+ * WHY THERE IS A FLAG AT ALL. Railway deploys from main, so merging makes the
+ * gate live on the server the moment the branch lands. But the owner's upload
+ * screen needs a native rebuild (expo-document-picker), and app releases do
+ * not land at the same instant a server deploy does. In the gap, an owner on
+ * the installed build would submit a spot, watch it go invisible, and have no
+ * screen to fix it with — the gate with no door, arriving through the release
+ * gap instead of through the code.
+ *
+ * So: DEFAULT OFF. Merging to main changes no behaviour. Then the app ships,
+ * then this one variable is set, and stages 1-4b apply.
+ *
+ * WHAT 'OFF' MEANS, exactly. Precisely the behaviour on the commit before
+ * stage 1 (3d8e04f):
+ *
+ *   - a spot's own verification status hides NOTHING from drivers, and does
+ *     not stop a booking
+ *   - the pin freeze is keyed on the OWNER being approved, which is what it
+ *     was keyed on before stage 1
+ *   - the owner is promised no 48 hours, because there is nothing to promise:
+ *     the spot is already live
+ *
+ * WHAT 'OFF' DOES NOT MEAN. The feature is not disabled. Every endpoint
+ * works, submissions are recorded, the desk and field reviews decide, the
+ * admin queue lists, the clock is still measured for admins. Only the
+ * CONSEQUENCES FOR DRIVERS AND OWNERS are held back, so the whole flow can be
+ * exercised end to end before anybody is subject to it.
+ *
+ * GRANDFATHERED SPOTS ARE UNAFFECTED EITHER WAY. They are visible with the
+ * gate on and visible with it off.
+ *
+ * A function rather than a constant read at load time, so a test can exercise
+ * both states in one run. The off path is the one about to be in production,
+ * so a suite that only ran with the gate on would be testing the wrong thing.
+ */
+const isSpotGateEnabled = () =>
+  String(process.env[GATE_VARIABLE] || '').trim().toLowerCase() === GATE_ON_VALUE;
+
+/**
+ * May a driver see a spot in this state?
+ *
+ * With the gate off the question does not apply, so the answer is yes — the
+ * spot's own verification is not what decides visibility, exactly as before
+ * stage 1. The owner still has to be approved; that check is separate and
+ * older and is untouched by this flag.
+ */
+const isVisibleToDrivers = (status) =>
+  !isSpotGateEnabled() || VISIBLE_SPOT_STATUSES.includes(status);
+
+/**
+ * The driver-visibility filter as a Prisma `where` fragment — spread into a
+ * query rather than written out at each call site, so the gate's shape is
+ * decided here and not in four models.
+ *
+ * `{}` when the gate is off: no clause, so nothing is filtered out.
+ */
+const driverVisibilityWhere = () => (isSpotGateEnabled()
+  ? { spot_verification_status: { in: VISIBLE_SPOT_STATUSES } }
+  : {});
+
+/**
+ * The same filter for the raw finder queries, as a composable SQL fragment.
+ *
+ * `Prisma.empty` when the gate is off, which removes the clause and renumbers
+ * the remaining parameters correctly — a filter that is absent rather than
+ * one that is widened, so a row with a NULL status is visible too. That
+ * matters: `= ANY(array)` is false for NULL, so merely putting every status
+ * in the list would still hide a row that somehow missed the backfill, and
+ * "off" has to mean no change at all.
+ */
+const driverVisibilitySql = () => (isSpotGateEnabled()
+  ? Prisma.sql`AND parking_spots.spot_verification_status = ANY(${VISIBLE_SPOT_STATUSES})`
+  : Prisma.empty);
 
 /**
  * Whether the pin is fixed, given the spot's driver-visible status.
@@ -108,7 +193,57 @@ const isVisibleToDrivers = (status) => VISIBLE_SPOT_STATUSES.includes(status);
  * owner can actually act on.
  */
 const isPinFrozen = (status) =>
-  VISIBLE_SPOT_STATUSES.includes(status) || AWAITING_REVIEW_STATUSES.includes(status);
+  isSpotGateEnabled()
+  && (VISIBLE_SPOT_STATUSES.includes(status) || AWAITING_REVIEW_STATUSES.includes(status));
+
+/**
+ * Why this pin cannot be moved, or null if it can.
+ *
+ * ONE function for the whole decision, because the rule is genuinely
+ * DIFFERENT in the two states and the caller must not be the place that
+ * chooses between them:
+ *
+ *   gate ON   keyed on the SPOT. Frozen while it is live to drivers or
+ *             waiting on a review — the desk check measures the document's
+ *             address against this pin, so a pin that could move after the
+ *             measurement would mean the check passed about somewhere else.
+ *   gate OFF  keyed on the OWNER being approved, which is exactly what it was
+ *             keyed on before stage 1 (ParkingSpot.js at 3d8e04f). Restoring
+ *             the old rule rather than leaving the pin free, because "off"
+ *             means no change — not fewer protections than before.
+ *
+ * Returns the sentence as well as the reason, so the two states cannot drift
+ * into telling an owner something that is true of the other one.
+ */
+function pinFreezeReason({ spotStatus, ownerApproved }) {
+  if (!isSpotGateEnabled()) {
+    if (!ownerApproved) return null;
+    return {
+      code: 'OWNER_APPROVED',
+      message: 'This spot cannot be moved now that your account is verified, because drivers '
+        + 'are already navigating to it. List the new location as a new spot, or contact '
+        + 'ParkStop support to move this one.',
+    };
+  }
+
+  if (AWAITING_REVIEW_STATUSES.includes(spotStatus)) {
+    return {
+      code: 'UNDER_REVIEW',
+      message: 'This spot cannot be moved while we are checking its address. The address you '
+        + 'sent us is being checked against this pin. Wait for the result, or contact '
+        + 'ParkStop support.',
+    };
+  }
+  if (VISIBLE_SPOT_STATUSES.includes(spotStatus)) {
+    return {
+      code: 'LIVE',
+      message: 'This spot cannot be moved while it is live on ParkStop, because drivers are '
+        + 'already navigating to it. List the new location as a new spot, or contact '
+        + 'ParkStop support to move this one.',
+    };
+  }
+  return null;
+}
 
 module.exports = {
   SPOT_VERIFICATION_STATUS,
@@ -118,8 +253,14 @@ module.exports = {
   SPOT_DOC_TYPES,
   RELATIONSHIPS,
   TENANT_DOC_TYPES,
+  GATE_VARIABLE,
+  GATE_ON_VALUE,
+  isSpotGateEnabled,
   isVisibleToDrivers,
+  driverVisibilityWhere,
+  driverVisibilitySql,
   isPinFrozen,
+  pinFreezeReason,
   // Re-exported so a screen or controller that already imports the spot
   // constants does not need a second require to turn a type into words.
   labelForDocType,

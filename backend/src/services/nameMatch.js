@@ -178,8 +178,24 @@ function transliterationKey(token) {
   let s = String(token || '').toUpperCase().replace(/[^A-Z]/g, '');
   if (!s) return '';
 
-  // 1. Gowda / Gouda. V and W are the same sound as U in these spellings.
-  s = s.replace(/[WV]/g, 'U');
+  /**
+   * 1. W and V, and they are NOT the same problem.
+   *
+   * The first version collapsed both to U, and that was wrong in a way the
+   * collision table caught: it turned RAVI into R-A-U-I, whose interior is
+   * then all vowels, so RAVI, RAI and ROY all reduced to the same key. Ravi
+   * is a given name and Rai and Roy are surnames.
+   *
+   * W is a glide only when it CLOSES a syllable — after a vowel and not
+   * followed by one. That is Gowda/Gouda (o-w-d), and there it becomes U.
+   *
+   * Between two vowels it is a consonant: Pavan/Pawan (a-w-a), where
+   * collapsing to U would strip the sound out entirely and leave P_N. So
+   * everywhere else W and V are ONE consonant (Pavan/Pawan, Vishwa/Vishva)
+   * and keep their consonant weight through step 8.
+   */
+  s = s.replace(/([AEIOU])W(?![AEIOU])/g, '$1U');
+  s = s.replace(/W/g, 'V');
 
   // 2. Y is a glide, written I as often as not: Reddy/Reddi, Nayak/Naik.
   //    Doing it here also means step 8 treats it as the vowel it is.
@@ -218,25 +234,53 @@ function transliterationKey(token) {
 const MIN_VARIANT_LENGTH = 3;
 
 /**
- * Are these two tokens one name spelled two ways?
+ * THE CONFIDENCE FLOOR: how much a key of this length is worth.
  *
- * Keys agreeing, and nothing else — no distance, no partial credit. Short
- * tokens are excluded because a two-letter key carries too little to be
- * evidence of anything, and so are initials.
+ * A key is a lossy reduction, and a SHORT key has thrown away most of the
+ * name. Measured against a corpus of 182 common Indian names (the collision
+ * table in tests/unit/nameMatch.test.js), every wrong merge sits at a key of
+ * two characters — KHAN/KHANNA, SYED/SUDHA, JAYA/JAI — while at three
+ * characters and above essentially every collision is a genuine spelling
+ * variant.
+ *
+ * Two characters CANNOT simply be rejected: Gowda/Gouda, Naik/Nayak and
+ * Syed/Sayed all reduce to two, and they are three of the pairs this exists
+ * to catch. So the floor does not block — it LABELS. A variant match on a
+ * two-character key is reported as weak, the explanation says so, and the
+ * verdict stays MODERATE_PARTIAL_MATCH, which already means "a human reads
+ * the document and decides".
+ *
+ * That is the safe direction, and it is why this is a tightening rather than
+ * a fix: an over-merge lands on a flagged verdict, never on a clean pass.
  */
-function sameNameDifferentSpelling(a, b) {
+const STRONG_KEY_LENGTH = 3;
+
+/**
+ * Are these two tokens one name spelled two ways, and how much is that worth?
+ *
+ * Keys agreeing, and nothing else — no distance, no partial credit. Initials
+ * and tokens under three characters are excluded outright.
+ *
+ * @returns {{same: boolean, key: string|null, strong: boolean}}
+ */
+function nameSpellingMatch(a, b) {
   const left = String(a || '').toUpperCase().replace(/[^A-Z]/g, '');
   const right = String(b || '').toUpperCase().replace(/[^A-Z]/g, '');
+  const none = { same: false, key: null, strong: false };
 
-  if (left.length < MIN_VARIANT_LENGTH || right.length < MIN_VARIANT_LENGTH) return false;
-  if (isInitial(left) || isInitial(right)) return false;
+  if (left.length < MIN_VARIANT_LENGTH || right.length < MIN_VARIANT_LENGTH) return none;
+  if (isInitial(left) || isInitial(right)) return none;
 
   const keyA = transliterationKey(left);
   const keyB = transliterationKey(right);
-  if (!keyA || !keyB || keyA.length < 2) return false;
+  if (!keyA || !keyB || keyA.length < 2) return none;
+  if (keyA !== keyB) return none;
 
-  return keyA === keyB;
+  return { same: true, key: keyA, strong: keyA.length >= STRONG_KEY_LENGTH };
 }
+
+/** Are these two tokens one name spelled two ways? */
+const sameNameDifferentSpelling = (a, b) => nameSpellingMatch(a, b).same;
 
 /**
  * Compare two names.
@@ -269,6 +313,8 @@ function compareNames(a, b) {
   let matched = 0;
   let viaInitial = false;
   let viaVariant = false;
+  /** A variant that matched only on a short, low-information key. */
+  let weakVariant = false;
   /**
    * Full tokens that matched letter for letter.
    *
@@ -299,6 +345,9 @@ function compareNames(a, b) {
     // One name, two spellings. Ramesha and Ramesh, Laxman and Lakshmana.
     const variant = spare.findIndex((other) => sameNameDifferentSpelling(token, other));
     if (variant !== -1) {
+      // A two-character key has thrown away most of the name, so the match is
+      // recorded as weak and said to be weak. See the confidence floor above.
+      if (!nameSpellingMatch(token, spare[variant]).strong) weakVariant = true;
       spare.splice(variant, 1);
       matched += 1;
       viaVariant = true;
@@ -375,6 +424,13 @@ function compareNames(a, b) {
     via_initial: viaInitial,
     /** At least one token matched only by being the same name spelled differently. */
     via_variant: viaVariant,
+    /**
+     * That variant match rested on a two-character key, which is weak
+     * evidence — most of the name was discarded to reach it. Still
+     * MODERATE_PARTIAL_MATCH, so a human already has to read the document;
+     * this tells them how much the machine's agreement is worth.
+     */
+    weak_variant: weakVariant,
     /** Whole names that matched letter for letter. */
     exact_full_matches: exactFullMatches,
     /** Parts of the shorter name that the longer one contradicts. */
@@ -404,9 +460,13 @@ function explainNameMatch(result) {
         : 'Every part of the shorter name matches; the other name carries more parts.';
     case NAME_MATCH.MODERATE_PARTIAL:
       if (result.via_variant) {
-        return 'These look like the same name spelled two ways (a trailing vowel, sh/s, ksh/x, '
-          + 'a doubled consonant or an -appa ending). Ordinary on Indian documents — '
-          + 'read the document and decide.';
+        const base = 'These look like the same name spelled two ways (a trailing vowel, w/v, '
+          + 'y/i, an h after a consonant, ksh/x, a doubled consonant or an -appa ending). '
+          + 'Ordinary on Indian documents — read the document and decide.';
+        return result.weak_variant
+          ? `${base} WEAK: they agree only on a two-letter skeleton, which many `
+            + 'different names share. Treat this as little more than a coincidence.'
+          : base;
       }
       if (result.via_initial && result.exact_full_matches === 0) {
         return 'Everything matched, but only through initials — not one whole name agreed. '
@@ -430,6 +490,8 @@ module.exports = {
   normalizeName,
   namesDeceasedHolder,
   transliterationKey,
+  STRONG_KEY_LENGTH,
+  nameSpellingMatch,
   sameNameDifferentSpelling,
   compareNames,
   explainNameMatch,

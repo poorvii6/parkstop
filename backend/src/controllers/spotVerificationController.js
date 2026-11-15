@@ -668,6 +668,8 @@ async function runDeskChecks({
         of: result.total,
         conflicting: result.conflicting,
         via_variant: result.via_variant,
+        /** The variant agreed only on a short key — thin evidence. */
+        weak_variant: result.weak_variant,
         exact_full_matches: result.exact_full_matches,
         /** The document names a holder recorded as deceased. */
         deceased_holder: result.deceased_holder,
