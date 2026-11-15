@@ -9,24 +9,43 @@ const { SPOT_DOC_TYPES, RELATIONSHIPS } = require('../constants/spotVerification
 
 const router = express.Router();
 
-// Held in memory only long enough to send to Cloudinary, same as the
-// per-person documents.
-const imageUpload = multer({
+/**
+ * Held in memory only long enough to send to Cloudinary, same as the
+ * per-person documents. Nothing is ever written to disk.
+ *
+ * PDFs ARE ACCEPTED, and that is not a convenience. A khata certificate,
+ * encumbrance certificate or BBMP tax receipt comes off the Karnataka portals
+ * as a PDF. While only images were allowed, every honest owner had to
+ * screenshot one — and a screenshot is different bytes every single time, so
+ * doc_sha256 matched nothing and the duplicate-document check was defeated by
+ * the normal path rather than by anyone attacking it. A re-downloaded PDF is
+ * far more likely to be byte-identical. It is also simply easier for an admin
+ * to read a name off.
+ *
+ * 15 MB because a multi-page scanned deed is bigger than a photo, and a
+ * refusal at the upload step is the one failure an owner cannot work around.
+ */
+const DOC_MIME = /^(image\/(jpe?g|png|webp)|application\/pdf)$/;
+const MAX_DOC_BYTES = 15 * 1024 * 1024;
+
+const docUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 8 * 1024 * 1024 },
+  limits: { fileSize: MAX_DOC_BYTES },
   fileFilter: (req, file, cb) => {
-    if (!/^image\/(jpe?g|png|webp)$/.test(file.mimetype)) {
-      return cb(new Error('Only JPG, PNG or WebP images are allowed'));
+    if (!DOC_MIME.test(file.mimetype)) {
+      return cb(new Error('Please upload a PDF, or a JPG, PNG or WebP photo.'));
     }
     cb(null, true);
   },
 });
 const single = (field) => (req, res, next) =>
-  imageUpload.single(field)(req, res, (err) => {
+  docUpload.single(field)(req, res, (err) => {
     if (err) {
       return res.status(400).json({
         success: false,
-        message: err.code === 'LIMIT_FILE_SIZE' ? 'Image is too large (max 8 MB).' : err.message,
+        message: err.code === 'LIMIT_FILE_SIZE'
+          ? 'That file is too large (max 15 MB).'
+          : err.message,
       });
     }
     next();

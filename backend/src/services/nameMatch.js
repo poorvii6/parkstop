@@ -40,8 +40,44 @@ const REVIEW_NAME_MATCH = [NAME_MATCH.MODERATE_PARTIAL];
 /** Dropped before comparing: they say nothing about who the person is. */
 const HONORIFICS = new Set([
   'MR', 'MRS', 'MS', 'MISS', 'SHRI', 'SRI', 'SMT', 'SMT.', 'KUM', 'DR', 'PROF',
-  'M/S', 'MESSRS', 'LATE', 'SAINT', 'ST',
+  'M/S', 'MESSRS', 'SAINT', 'ST',
 ]);
+
+/**
+ * "LATE RAMESH KUMAR" — the holder on this document is DEAD.
+ *
+ * This used to sit in HONORIFICS and be thrown away with the Shris and the
+ * Smts, which made "LATE RAMESH KUMAR" against a verified "RAMESH KUMAR" come
+ * back DIRECT_MATCH, explained as "The names are the same." They are not the
+ * same: one of them is a deceased person.
+ *
+ * It matters here more than almost anywhere. An inherited khata still in a dead
+ * parent's name is ordinary in Bengaluru, and sons very often carry the
+ * father's name — so the one case where the document emphatically does NOT
+ * establish that the applicant owns the place is also the case most likely to
+ * score a perfect name match.
+ *
+ * It is still removed before the strings are compared, because the name itself
+ * is worth comparing. What changed is that it is REPORTED: the verdict can
+ * never be DIRECT, the explanation says so, and the desk review raises its own
+ * blocker asking for the inheritance papers.
+ */
+const DECEASED_MARKERS = new Set(['LATE', 'LT']);
+
+/**
+ * Does this string name a holder recorded as deceased?
+ *
+ * Read off the raw value rather than the normalised tokens, because the marker
+ * is exactly what normalising removes.
+ */
+function namesDeceasedHolder(value) {
+  return String(value || '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z\s/]/g, ' ')
+    .split(/\s+/)
+    .some((t) => DECEASED_MARKERS.has(t));
+}
 
 /**
  * Relationship markers on Indian documents: "S/O RAMESH" is son of Ramesh.
@@ -74,6 +110,9 @@ function normalizeName(value) {
   for (let i = 0; i < raw.length; i += 1) {
     const t = raw[i];
     if (HONORIFICS.has(t)) continue;
+    // Removed from the comparison, but NOT forgotten — namesDeceasedHolder
+    // reads it off the raw string and the verdict is capped because of it.
+    if (DECEASED_MARKERS.has(t)) continue;
 
     // "RAJESH KUMAR S/O RAMESH KUMAR" — everything from the marker on names a
     // parent or spouse, not the holder, so the rest of the string goes.
@@ -87,6 +126,99 @@ function normalizeName(value) {
 
 /** A single letter stands for a name we were not given in full. */
 const isInitial = (token) => token.length === 1;
+
+const VOWELS = new Set(['A', 'E', 'I', 'O', 'U']);
+
+/**
+ * One name, reduced to a shape that survives being spelled a different way.
+ *
+ * WHY THIS IS NOT EDIT DISTANCE. The pairs that must be treated as the same
+ * name and the pair that must not are not separable by how many characters
+ * differ — the ordering actively runs the wrong way:
+ *
+ *   LAKSHMANA / LAXMAN     4 edits apart, and the SAME name
+ *   ANITA     / SUNITA     2 edits apart, and DIFFERENT people
+ *
+ * So a distance threshold that accepts Lakshmana would accept Anita/Sunita
+ * several times over. The variation in Kannada, Tamil and Urdu names rendered
+ * in English is not random noise; it is a small set of known substitutions.
+ * Those are what this encodes, and nothing else.
+ *
+ * The rules, applied in this order to both sides:
+ *
+ *   1. X -> KSH        LAXMAN -> LAKSHMAN
+ *   2. drop a trailing -APPA   KRISHNAPPA -> KRISHN   (Kannada suffix)
+ *   3. SH -> S         RAMESH -> RAMES, KRISHNA -> KRISNA
+ *   4. collapse doubled consonants   MOHAMMAD -> MOHAMAD
+ *   5. drop a trailing vowel   RAMESHA -> RAMESH
+ *
+ * Order matters: -APPA is stripped before doubled consonants, or KRISHNAPPA
+ * becomes KRISHNAPA and the suffix is no longer there to find.
+ *
+ * Step 5 is why RAMESHA/RAMESH and VENKATESHA/VENKATESH collapse together, and
+ * it is safe because a trailing vowel is the single commonest optional
+ * character in these transliterations. It is NOT safe in the other direction:
+ * nothing here drops a LEADING character, which is exactly what would be
+ * needed to make ANITA and SUNITA agree.
+ */
+function transliterationSkeleton(token) {
+  let s = String(token || '').toUpperCase();
+
+  // 1. Laxman and Lakshman are the same man.
+  s = s.replace(/X/g, 'KSH');
+
+  // 2. -appa / -anna are affectionate Kannada suffixes on a given name:
+  //    Krishna becomes Krishnappa, Siddha becomes Siddappa. Only stripped
+  //    when enough of a name is left to still be a name.
+  const suffix = s.match(/^(.{3,})(APPA|ANNA)$/);
+  if (suffix) [, s] = suffix;
+
+  // 3. Krishna / Krisna, Shiva / Siva, Ramesh / Rames.
+  s = s.replace(/SH/g, 'S');
+
+  // 4. Mohammad / Mohamad, Siddique / Sidique.
+  s = s.replace(/([BCDFGJKLMNPQRSTVWXZ])\1+/g, '$1');
+
+  // 5. Ramesha / Ramesh, Venkatesha / Venkatesh, Lakshmana / Lakshman.
+  //    Only a trailing vowel, and never the whole token.
+  if (s.length > 2 && VOWELS.has(s[s.length - 1])) s = s.slice(0, -1);
+
+  return s;
+}
+
+/**
+ * Are these two tokens one name spelled two ways?
+ *
+ * The skeletons agreeing is the main test. The one extra allowance is a single
+ * vowel swapped for another vowel at the same position — MOHAMMAD against
+ * MOHAMMED, which is the commonest Urdu/Arabic rendering difference there is
+ * and which no consonant rule can reach.
+ *
+ * That allowance is tightly bounded on purpose: same length, exactly one
+ * differing position, and both characters must be vowels. It cannot insert,
+ * delete or change a consonant, so it can never turn ANITA into SUNITA (a
+ * leading insertion) or RAJESH into RAMESH (a consonant swap).
+ */
+function sameNameDifferentSpelling(a, b) {
+  if (isInitial(a) || isInitial(b)) return false;
+
+  const left = transliterationSkeleton(a);
+  const right = transliterationSkeleton(b);
+  if (!left || !right) return false;
+  if (left === right) return true;
+
+  if (left.length !== right.length) return false;
+
+  let differing = 0;
+  for (let i = 0; i < left.length; i += 1) {
+    if (left[i] === right[i]) continue;
+    // A consonant that disagrees is a different name, however close.
+    if (!VOWELS.has(left[i]) || !VOWELS.has(right[i])) return false;
+    differing += 1;
+    if (differing > 1) return false;
+  }
+  return differing === 1;
+}
 
 /**
  * Compare two names.
@@ -118,12 +250,23 @@ function compareNames(a, b) {
   const spare = [...longer];
   let matched = 0;
   let viaInitial = false;
+  let viaVariant = false;
+  /**
+   * Full tokens that matched letter for letter.
+   *
+   * Counted because an initial standing for a name is not evidence of much.
+   * "R K" against "RAJESH KRISHNA" matched everything it was given and used to
+   * come out GOOD_PARTIAL_MATCH, which is in GOOD_NAME_MATCH — proceed, no
+   * flag — on the strength of two single letters. Not one whole name agreed.
+   */
+  let exactFullMatches = 0;
 
   for (const token of shorter) {
     const exact = spare.indexOf(token);
     if (exact !== -1) {
       spare.splice(exact, 1);
       matched += 1;
+      if (!isInitial(token)) exactFullMatches += 1;
       continue;
     }
     // An initial on either side may stand for a full token.
@@ -133,6 +276,14 @@ function compareNames(a, b) {
       spare.splice(expands, 1);
       matched += 1;
       viaInitial = true;
+      continue;
+    }
+    // One name, two spellings. Ramesha and Ramesh, Laxman and Lakshmana.
+    const variant = spare.findIndex((other) => sameNameDifferentSpelling(token, other));
+    if (variant !== -1) {
+      spare.splice(variant, 1);
+      matched += 1;
+      viaVariant = true;
     }
   }
 
@@ -165,20 +316,33 @@ function compareNames(a, b) {
    * and the override is recorded against the spot.
    */
   const conflicting = shorter.length - matched;
+  /** "LATE RAMESH KUMAR": the holder on one of these is recorded as dead. */
+  const deceased = namesDeceasedHolder(a) || namesDeceasedHolder(b);
 
   let verdict;
-  if (sameSet && !viaInitial) {
+  if (sameSet && !viaInitial && !viaVariant && !deceased) {
     verdict = NAME_MATCH.DIRECT;
-  } else if (matched === shorter.length && shorter.length >= 2) {
+  } else if (
+    matched === shorter.length
+    && shorter.length >= 2
+    // At least one whole name has to agree letter for letter. Two initials
+    // lining up is not a name match.
+    && exactFullMatches >= 1
+    // A spelling variant is a judgement for the human, never a clean pass.
+    && !viaVariant
+  ) {
     // Everything we were given matches; the other name just says more, or
     // spells out an initial.
     verdict = NAME_MATCH.GOOD_PARTIAL;
   } else if (conflicting > 0) {
     verdict = NAME_MATCH.NONE;
   } else if (matched / total >= 0.5) {
-    // Containment only: one name is a subset of the other. Weak — a lone
-    // "Ramesh" names a great many people — so it is flagged for the human who
-    // is already reading the document, and not blocked.
+    // Everything agreed, but not cleanly: a different spelling, or only
+    // initials, or one name simply saying less than the other. All of them are
+    // ordinary on Indian documents and none of them is confirmation, so this
+    // is flagged for the human who is already reading the document rather than
+    // blocked. Blocking it would mean an override on most honest submissions,
+    // and an override that is always required is not a signal.
     verdict = NAME_MATCH.MODERATE_PARTIAL;
   } else {
     verdict = NAME_MATCH.NONE;
@@ -191,13 +355,28 @@ function compareNames(a, b) {
     tokens_a: tokensA,
     tokens_b: tokensB,
     via_initial: viaInitial,
+    /** At least one token matched only by being the same name spelled differently. */
+    via_variant: viaVariant,
+    /** Whole names that matched letter for letter. */
+    exact_full_matches: exactFullMatches,
     /** Parts of the shorter name that the longer one contradicts. */
     conflicting,
+    /** One side names a holder recorded as deceased. Never a DIRECT match. */
+    deceased_holder: deceased,
   };
 }
 
 /** One line an admin can read next to the two names. */
 function explainNameMatch(result) {
+  // Said first and said plainly, whatever the rest of the comparison found.
+  // A perfect name match on a dead holder is the most misleading result this
+  // function can produce, so it never gets to speak first.
+  if (result.deceased_holder) {
+    return 'The document names a LATE holder — the person it names is recorded as deceased. '
+      + 'However well the name matches, this does not show the applicant owns the property. '
+      + 'Ask for the inheritance or khata-transfer papers.';
+  }
+
   switch (result.verdict) {
     case NAME_MATCH.DIRECT:
       return 'The names are the same.';
@@ -206,6 +385,15 @@ function explainNameMatch(result) {
         ? 'Every part we were given matches, with an initial standing for a full name.'
         : 'Every part of the shorter name matches; the other name carries more parts.';
     case NAME_MATCH.MODERATE_PARTIAL:
+      if (result.via_variant) {
+        return 'These look like the same name spelled two ways (a trailing vowel, sh/s, ksh/x, '
+          + 'a doubled consonant or an -appa ending). Ordinary on Indian documents — '
+          + 'read the document and decide.';
+      }
+      if (result.via_initial && result.exact_full_matches === 0) {
+        return 'Everything matched, but only through initials — not one whole name agreed. '
+          + 'An initial fits a great many people.';
+      }
       return `Only ${result.matched} of ${result.total} parts match, and nothing contradicts. `
         + 'A short name like this fits many people — read the document and decide.';
     default:
@@ -220,7 +408,11 @@ module.exports = {
   NAME_MATCH,
   GOOD_NAME_MATCH,
   REVIEW_NAME_MATCH,
+  DECEASED_MARKERS,
   normalizeName,
+  namesDeceasedHolder,
+  transliterationSkeleton,
+  sameNameDifferentSpelling,
   compareNames,
   explainNameMatch,
 };

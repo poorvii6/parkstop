@@ -17,7 +17,12 @@
  *   npx jest tests/unit/spotVerificationController.guards.test.js
  */
 jest.mock('../../src/config/prisma', () => ({
-  spot_verifications: { findUnique: jest.fn(), update: jest.fn(), create: jest.fn(), count: jest.fn() },
+  spot_verifications: {
+    findUnique: jest.fn(), update: jest.fn(), create: jest.fn(), count: jest.fn(),
+    // The field pass looks for the same registration reference on another
+    // spot. Default to "nowhere else"; the duplicate case sets its own.
+    findMany: jest.fn().mockResolvedValue([]),
+  },
   parking_spots: { findUnique: jest.fn(), update: jest.fn() },
   users: { findMany: jest.fn().mockResolvedValue([]) },
   $transaction: jest.fn(),
@@ -163,5 +168,70 @@ describe('the field check refuses what the route would have caught', () => {
     expect(r.statusCode).toBe(409);
     expect(r.body.message).toMatch(/has not passed both checks/);
     expect(written).toBeNull();
+  });
+
+  test('an owner cannot be their own field checker', async () => {
+    // req() is admin id 9; make the spot's owner the same person.
+    prisma.spot_verifications.findUnique.mockResolvedValue(deskApprovedRecord({
+      parking_spots: {
+        ...deskApprovedRecord().parking_spots,
+        users: { id: 9, verification_status: 'approved', owner_verification: { aadhaar_name: 'Rajesh Kumar' } },
+      },
+    }));
+    const r = res();
+
+    await C.adminFieldDecision(
+      req({ office: 'Sub-Registrar Office, Indiranagar', record_found: true, reference: 'SRO/IND/2019/4471' }),
+      r
+    );
+
+    expect(r.statusCode).toBe(403);
+    expect(r.body.message).toMatch(/belongs to you/);
+    expect(written).toBeNull();
+  });
+
+  test('a registration reference already used at another address cannot publish', async () => {
+    // The duplicate check that does not depend on the file's bytes: re-download
+    // a PDF and doc_sha256 changes, but the registrar's reference does not.
+    prisma.spot_verifications.findMany.mockResolvedValue([
+      {
+        spot_id: 42,
+        claimed_address: '9 Somewhere Else Lane, Koramangala, Bengaluru 560034',
+        status: 'approved',
+        parking_spots: { title: 'A different driveway' },
+      },
+    ]);
+    const r = res();
+
+    await C.adminFieldDecision(
+      req({ office: 'Sub-Registrar Office, Indiranagar', record_found: true, reference: 'SRO/IND/2019/4471' }),
+      r
+    );
+
+    expect(r.statusCode).toBe(409);
+    expect(r.body.code).toBe('FIELD_REFERENCE_ALREADY_USED');
+    expect(r.body.also_used_for[0].spot_id).toBe(42);
+    expect(written).toBeNull();
+  });
+
+  test('the same reference at the same address still publishes', async () => {
+    // One plot, several bays, all verified against the one property record.
+    prisma.spot_verifications.findMany.mockResolvedValue([
+      {
+        spot_id: 42,
+        claimed_address: '42 Verification Road, Indiranagar, Bengaluru 560038',
+        status: 'approved',
+        parking_spots: { title: 'The next bay along' },
+      },
+    ]);
+    const r = res();
+
+    await C.adminFieldDecision(
+      req({ office: 'Sub-Registrar Office, Indiranagar', record_found: true, reference: 'SRO/IND/2019/4471' }),
+      r
+    );
+
+    expect(r.statusCode).toBe(200);
+    expect(written.status).toBe('approved');
   });
 });

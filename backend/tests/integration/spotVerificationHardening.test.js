@@ -57,10 +57,15 @@ jest.mock('cloudinary', () => {
   return {
     v2: {
       config: jest.fn(),
-      url: (publicId) => `https://signed.test/${publicId}`,
+      // Reflects the delivery options, so a test can tell the PDF URL from the
+      // rasterised page-1 preview. The real cloudinary.url encodes them in the
+      // path the same way.
+      url: (publicId, opts = {}) =>
+        `https://signed.test/${opts.page ? `pg${opts.page}/` : ''}${publicId}`
+        + `${opts.format ? `.${opts.format}` : ''}`,
       uploader: {
         upload_stream: (opts, cb) => ({
-          end: () => cb(null, { public_id: `parkstop/spot-docs/hard-${++n}` }),
+          end: () => cb(null, { public_id: `parkstop/spot-docs/hard-${++n}`, format: 'jpg' }),
         }),
         destroy: jest.fn().mockResolvedValue({ result: 'ok' }),
       },
@@ -140,15 +145,22 @@ const ADDRESS_A = '42 Hardening Road, Indiranagar, Bengaluru 560038';
 const ADDRESS_B = '9 Elsewhere Lane, Koramangala, Bengaluru 560034';
 
 /** Upload a document. `file` is the bytes, so two calls can share one file. */
-function uploadDoc(who, spotId, { file, address = ADDRESS_A, docType = 'khata_certificate', relationship = 'owner' } = {}) {
+function uploadDoc(who, spotId, {
+  file, address = ADDRESS_A, docType = 'khata_certificate', relationship = 'owner',
+  name = 'doc.jpg', contentType = 'image/jpeg',
+} = {}) {
   return request(app)
     .post(`/api/v1/spot-verification/${spotId}/document`)
     .set(auth(who))
     .field('doc_type', docType)
     .field('address', address)
     .field('relationship', relationship)
-    .attach('document', Buffer.from(file), 'doc.jpg');
+    .attach('document', Buffer.from(file), { filename: name, contentType });
 }
+
+/** The same, as a PDF — how these documents really arrive from the portals. */
+const uploadPdf = (who, spotId, opts = {}) =>
+  uploadDoc(who, spotId, { ...opts, name: 'khata.pdf', contentType: 'application/pdf' });
 
 function uploadNoc(who, spotId, { file, landlordName = 'Ramesh Gupta' } = {}) {
   return request(app)
@@ -572,6 +584,214 @@ describe('a tenant\'s document is checked against the landlord, not the tenant',
     expect(res.status).toBe(200);
     expect(res.body.data.name.checked_against).toBe('aadhaar_name');
     expect((await recordFor(id)).noc_names_owner).toBeNull();
+  });
+});
+
+// ──────────────────────── PDFs are the normal case ────────────────────────
+
+/**
+ * A khata, EC or BBMP tax receipt comes off the Karnataka portals as a PDF.
+ *
+ * While only images were accepted, every honest owner had to screenshot one —
+ * and a screenshot is different bytes every time, so doc_sha256 matched
+ * nothing and the duplicate-document check was beaten by the ordinary path
+ * rather than by anyone attacking it.
+ */
+describe('a document may be a PDF', () => {
+  test('a PDF is accepted and its format recorded', async () => {
+    const id = await makeSpot(ids.owner, 'pdf-accepted');
+
+    const res = await uploadPdf(OWNER, id, { file: '%PDF-1.4 a khata certificate' });
+
+    expect(res.status).toBe(200);
+    const record = await recordFor(id);
+    expect(record.doc_public_id).toBeTruthy();
+    expect(record.doc_sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  test('the same PDF for another address is still refused', async () => {
+    // The point of accepting PDFs: a re-downloaded PDF is the same bytes, so
+    // the duplicate check finally sees what a screenshot hid.
+    const a = await makeSpot(ids.owner, 'pdf-reuse-a');
+    const b = await makeSpot(ids.owner, 'pdf-reuse-b');
+    const theKhata = '%PDF-1.4 one genuine khata';
+
+    expect((await uploadPdf(OWNER, a, { file: theKhata, address: ADDRESS_A })).status).toBe(200);
+    const res = await uploadPdf(OWNER, b, { file: theKhata, address: ADDRESS_B });
+
+    expect(res.status).toBe(409);
+    expect(res.body.message).toMatch(/already being used for a different address/);
+  });
+
+  test('a PDF gets two signed URLs: the file, and a page-1 preview', async () => {
+    // A React Native <Image> cannot render a PDF, so the admin screen needs a
+    // rasterised page to show inline and the PDF itself to open.
+    const id = await makeSpot(ids.owner, 'pdf-two-urls');
+    await uploadPdf(OWNER, id, { file: '%PDF-1.4 preview me' });
+    await prisma.spot_verifications.update({ where: { spot_id: id }, data: { doc_format: 'pdf' } });
+
+    const res = await detail(ADMIN, id);
+    const s = res.body.data.submission;
+
+    expect(s.doc_is_pdf).toBe(true);
+    expect(s.doc_format).toBe('pdf');
+    expect(s.doc_url).toMatch(/\.pdf$/);
+    expect(s.doc_preview_url).toMatch(/^https:\/\/signed\.test\/pg1\//);
+    expect(s.doc_preview_url).toMatch(/\.jpg$/);
+    expect(s.doc_url).not.toBe(s.doc_preview_url);
+  });
+
+  test('a photo gets the same URL for both, so a screen need not care', async () => {
+    const id = await makeSpot(ids.owner, 'photo-one-url');
+    await uploadDoc(OWNER, id, { file: 'a photo of a khata' });
+
+    const res = await detail(ADMIN, id);
+    const s = res.body.data.submission;
+
+    expect(s.doc_is_pdf).toBe(false);
+    expect(s.doc_preview_url).toBe(s.doc_url);
+  });
+
+  test('anything that is not a PDF or an image is refused', async () => {
+    const id = await makeSpot(ids.owner, 'bad-mime');
+
+    const res = await request(app)
+      .post(`/api/v1/spot-verification/${id}/document`)
+      .set(auth(OWNER))
+      .field('doc_type', 'khata_certificate')
+      .field('address', ADDRESS_A)
+      .attach('document', Buffer.from('MZ not a document'), {
+        filename: 'thing.exe', contentType: 'application/x-msdownload',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/PDF, or a JPG, PNG or WebP/);
+    expect((await recordFor(id)).doc_public_id).toBeNull();
+  });
+});
+
+// ───────── the registrar reference, which bytes cannot fake away ─────────
+
+/**
+ * The duplicate check that does not depend on the file at all.
+ *
+ * doc_sha256 catches the same FILE. Re-download the PDF (portals stamp a
+ * timestamp into it) or rescan the paper and the hash changes. The
+ * registration reference identifies the property RECORD, so it does not.
+ */
+describe('one property record cannot verify two addresses', () => {
+  async function deskApproved(title, address) {
+    const id = await makeSpot(ids.owner, title);
+    await uploadDoc(OWNER, id, { file: `doc-${title}`, address });
+    await submit(OWNER, id);
+    await desk(ADMIN, id, { decision: 'pass', name_on_document: 'Rajesh Kumar' });
+    return id;
+  }
+
+  test('the same reference at a DIFFERENT address is refused', async () => {
+    const a = await deskApproved('ref-a', ADDRESS_A);
+    const b = await deskApproved('ref-b', ADDRESS_B);
+    const REF = 'SRO/BLR/1234/2026';
+
+    expect((await field(ADMIN, a, { office: 'SRO Indiranagar', record_found: true, reference: REF })).status).toBe(200);
+
+    const res = await field(ADMIN, b, { office: 'SRO Koramangala', record_found: true, reference: REF });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('FIELD_REFERENCE_ALREADY_USED');
+    expect(res.body.also_used_for).toEqual([
+      expect.objectContaining({ spot_id: a, claimed_address: ADDRESS_A }),
+    ]);
+    // And crucially it is not live.
+    expect((await recordFor(b)).status).toBe('desk_approved');
+    expect((await spotRow(b)).spot_verification_status).not.toBe('approved');
+  });
+
+  test('the same reference at the SAME address is fine — one plot, several bays', async () => {
+    const a = await deskApproved('ref-same-a', ADDRESS_A);
+    const b = await deskApproved('ref-same-b', ADDRESS_A);
+    const REF = 'SRO/BLR/5678/2026';
+
+    expect((await field(ADMIN, a, { office: 'SRO Indiranagar', record_found: true, reference: REF })).status).toBe(200);
+    const res = await field(ADMIN, b, { office: 'SRO Indiranagar', record_found: true, reference: REF });
+
+    expect(res.status).toBe(200);
+    expect((await recordFor(b)).status).toBe('approved');
+  });
+
+  test('a reference recorded on a FAILED visit does not block a later spot', async () => {
+    // "We went and found nothing" records the reference we searched for. That
+    // is not a record anyone verified against, so it must not lock the string.
+    const a = await deskApproved('ref-notfound', ADDRESS_A);
+    const b = await deskApproved('ref-after-notfound', ADDRESS_B);
+    const REF = 'SRO/BLR/9999/2026';
+
+    await field(ADMIN, a, {
+      office: 'SRO Indiranagar', record_found: false, reference: REF,
+      reason: 'No record under this reference at the office.',
+    });
+
+    const res = await field(ADMIN, b, { office: 'SRO Koramangala', record_found: true, reference: REF });
+
+    expect(res.status).toBe(200);
+  });
+});
+
+// ──────────────────────────── the 48-hour clock ────────────────────────────
+
+/**
+ * It starts at COMPLETE SUBMISSION. Not at spot creation, not at upload.
+ *
+ * There is exactly one write of submitted_at in the backend, in submit(), and
+ * submit() refuses an incomplete submission before reaching it. This is here
+ * so that stays true rather than being true today.
+ */
+describe('the 48-hour clock starts at complete submission', () => {
+  test('creating a spot starts nothing', async () => {
+    const id = await makeSpot(ids.owner, 'clock-created');
+
+    expect((await recordFor(id)).submitted_at).toBeNull();
+    expect((await mine(OWNER, id)).body.data.waiting_hours).toBeNull();
+  });
+
+  test('uploading a document starts nothing', async () => {
+    const id = await makeSpot(ids.owner, 'clock-uploaded');
+    await uploadDoc(OWNER, id, { file: 'clock-doc' });
+
+    expect((await recordFor(id)).status).toBe('in_progress');
+    expect((await recordFor(id)).submitted_at).toBeNull();
+    expect((await mine(OWNER, id)).body.data.waiting_hours).toBeNull();
+  });
+
+  test('a REFUSED submission starts nothing', async () => {
+    // A tenant with no landlord letter. The refusal must not start a clock we
+    // then appear to be late on.
+    const id = await makeSpot(ids.owner, 'clock-refused');
+    await uploadDoc(OWNER, id, {
+      file: 'clock-tenant-doc', docType: 'rent_agreement', relationship: 'tenant',
+    });
+
+    expect((await submit(OWNER, id)).status).toBe(400);
+    expect((await recordFor(id)).submitted_at).toBeNull();
+  });
+
+  test('a complete submission starts it, and only then', async () => {
+    const id = await makeSpot(ids.owner, 'clock-submitted');
+    await uploadDoc(OWNER, id, { file: 'clock-complete-doc' });
+
+    const before = new Date();
+    expect((await submit(OWNER, id)).status).toBe(200);
+    const after = new Date();
+
+    const at = (await recordFor(id)).submitted_at;
+    expect(at).not.toBeNull();
+    expect(at.getTime()).toBeGreaterThanOrEqual(before.getTime() - 1000);
+    expect(at.getTime()).toBeLessThanOrEqual(after.getTime() + 1000);
+
+    const owner = (await mine(OWNER, id)).body.data;
+    expect(owner.waiting_hours).toBe(0);
+    expect(owner.promised_hours).toBe(48);
+    expect(owner.hours_left).toBe(48);
   });
 });
 

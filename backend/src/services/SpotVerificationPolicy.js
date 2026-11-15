@@ -278,8 +278,33 @@ function deskPassBlockers({
   checkedAgainst = NAME_CHECKED_AGAINST.AADHAAR,
   isTenant = false,
   nocNamesOwner = null,
+  deceasedOnDocument = false,
 }) {
   const blockers = [];
+
+  /**
+   * The document names a holder who is dead.
+   *
+   * Its own blocker rather than a name verdict, because the name is not the
+   * problem — it often matches perfectly, and that is exactly the trap. An
+   * inherited khata still in a dead parent's name is ordinary in Bengaluru,
+   * and a son frequently carries his father's name, so the case where the
+   * document LEAST establishes current ownership is the case most likely to
+   * score DIRECT_MATCH. It used to score precisely that, because LATE was
+   * thrown away with the honorifics.
+   *
+   * It is overridable, and deliberately so: inheritance is legitimate and
+   * common, and refusing it outright would leave honest heirs with no route at
+   * all. What the override buys is a WRITTEN record of which inheritance or
+   * khata-transfer document the admin actually saw, kept in review_log.
+   */
+  if (deceasedOnDocument) {
+    blockers.push({
+      code: 'DOCUMENT_HOLDER_DECEASED',
+      message: 'The document names a LATE holder, so it does not show that the applicant owns the '
+        + 'property now. Ask for the inheritance or khata-transfer papers, and record what you saw.',
+    });
+  }
 
   if (!GOOD_NAME_MATCH.includes(nameVerdict) && !REVIEW_NAME_MATCH.includes(nameVerdict)) {
     blockers.push(checkedAgainst === NAME_CHECKED_AGAINST.LANDLORD

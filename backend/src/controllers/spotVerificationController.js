@@ -89,6 +89,48 @@ async function saveAndSync(record, data, logEntry = null) {
 }
 
 /**
+ * Everything about delivering a private document, in one place.
+ *
+ * Both documents are uploaded with `resource_type: 'image'` and
+ * `type: 'authenticated'`, PDFs included. Cloudinary treats a PDF as an image
+ * resource, which is what makes the admin preview below possible — stored as
+ * `raw` it would come back as bytes with no way to render a page.
+ *
+ * A PDF therefore has TWO signed URLs and they are not interchangeable:
+ *
+ *   - `url`     the PDF itself, signed. Opens in a browser or a PDF viewer.
+ *               React Native's <Image> cannot render it.
+ *   - `preview` page 1 rasterised to a JPEG, signed. This is what the admin
+ *               screen shows inline, and the only one an <Image> can take.
+ *
+ * For a photo the two are the same URL, so a screen can always use `preview`
+ * to display and `url` to open full size without caring which it has.
+ *
+ * ⚠️ OPERATIONAL: Cloudinary blocks PDF delivery by default on newer accounts
+ * — Settings > Security > "Allow delivery of PDF and ZIP files". Until that is
+ * ticked, uploads succeed and both PDF URLs 403. There is no way to detect it
+ * from here, so it has to be ticked by hand once.
+ */
+const PDF_FORMAT = 'pdf';
+
+function signedDocUrls(publicId, format) {
+  if (!publicId) return { url: null, preview_url: null, format: null, is_pdf: false };
+
+  const base = { type: 'authenticated', resource_type: 'image', sign_url: true, secure: true };
+  const isPdf = String(format || '').toLowerCase() === PDF_FORMAT;
+
+  return {
+    url: cloudinary.url(publicId, isPdf ? { ...base, format: PDF_FORMAT } : base),
+    // Page 1 as a JPEG. For an image this is just the image.
+    preview_url: isPdf
+      ? cloudinary.url(publicId, { ...base, format: 'jpg', page: 1 })
+      : cloudinary.url(publicId, base),
+    format: format || null,
+    is_pdf: isPdf,
+  };
+}
+
+/**
  * Has this exact file already been submitted for a DIFFERENT address?
  *
  * Cloudinary mints a new public_id on every upload, so two uploads of one file
@@ -174,7 +216,7 @@ async function uploadDocument(req, res) {
     const spot = await spotFor(req, res);
     if (!spot) return undefined;
 
-    if (!req.file?.buffer) return fail(res, 400, 'Please add a photo of your document.');
+    if (!req.file?.buffer) return fail(res, 400, 'Please attach your document — a PDF, or a photo of it.');
 
     const docType = String(req.body?.doc_type || '');
     const address = String(req.body?.address || '').trim();
@@ -229,6 +271,7 @@ async function uploadDocument(req, res) {
         doc_type: docType,
         doc_public_id: uploaded.public_id,
         doc_sha256: sha256,
+        doc_format: uploaded.format || null,
         claimed_address: address.slice(0, 300),
         relationship,
         // A new document invalidates the old verdict, so the desk fields go
@@ -274,7 +317,7 @@ async function uploadLandlordNoc(req, res) {
     const spot = await spotFor(req, res);
     if (!spot) return undefined;
 
-    if (!req.file?.buffer) return fail(res, 400, 'Please add a photo of the letter from your landlord.');
+    if (!req.file?.buffer) return fail(res, 400, 'Please attach the letter from your landlord — a PDF, or a photo of it.');
 
     const landlordName = String(req.body?.landlord_name || '').trim();
     if (landlordName.length < 2) return fail(res, 400, 'Enter the name of the landlord who signed the letter.');
@@ -317,6 +360,7 @@ async function uploadLandlordNoc(req, res) {
         status: record.status === S.NOT_STARTED ? S.IN_PROGRESS : record.status,
         landlord_noc_public_id: uploaded.public_id,
         landlord_noc_sha256: sha256,
+        landlord_noc_format: uploaded.format || null,
         landlord_name: landlordName.slice(0, 150),
         // A new letter, or a new landlord name, invalidates the admin's
         // confirmation that the letter named this owner.
@@ -634,6 +678,10 @@ async function runDeskChecks({ record, spot, aadhaarName, nameOnDocument, nocNam
         matched: result.matched,
         of: result.total,
         conflicting: result.conflicting,
+        via_variant: result.via_variant,
+        exact_full_matches: result.exact_full_matches,
+        /** The document names a holder recorded as deceased. */
+        deceased_holder: result.deceased_holder,
         explanation: explainNameMatch(result),
         note: isTenant
           ? 'This spot is rented, so the ownership document should name the LANDLORD. '
@@ -649,6 +697,7 @@ async function runDeskChecks({ record, spot, aadhaarName, nameOnDocument, nocNam
     checkedAgainst,
     isTenant,
     nocNamesOwner,
+    deceasedOnDocument: !!name?.deceased_holder,
   });
 
   return { address, name, blockers, geocode, isTenant, checkedAgainst };
@@ -1025,6 +1074,61 @@ async function adminFieldDecision(req, res) {
       return fail(res, 400, 'Record the registration reference for the record you found.');
     }
 
+    /**
+     * The same property record, already used to verify somewhere else.
+     *
+     * This is the duplicate check that does not depend on bytes, and it is the
+     * one that actually holds. doc_sha256 catches the same FILE; a determined
+     * owner re-downloads the PDF (portals embed a timestamp) or rescans the
+     * paper and the hash changes. The registration reference does not change,
+     * because it identifies the property record itself.
+     *
+     * It is also checked at the right moment: this is the only route that can
+     * make a spot live, and the reference is not known until someone has stood
+     * at the registrar's counter.
+     *
+     * Same reference at the same address is fine — one property, several bays,
+     * each verified against the same record. A different address means one
+     * property record is being used to vouch for two places, and only one of
+     * them can be the place that record describes.
+     */
+    const sameRecordElsewhere = await prisma.spot_verifications.findMany({
+      where: {
+        field_reference: reference.slice(0, 100),
+        field_record_found: true,
+        spot_id: { not: spotId },
+      },
+      select: {
+        spot_id: true,
+        claimed_address: true,
+        status: true,
+        parking_spots: { select: { title: true } },
+      },
+      take: 20,
+    });
+    const atAnotherAddress = sameRecordElsewhere.filter(
+      (r) => !Policy.sameClaimedAddress(r.claimed_address, ctx.record.claimed_address)
+    );
+    if (atAnotherAddress.length) {
+      logger.warn(
+        `Spot ${spotId} field reference ${reference.slice(0, 60)} is already recorded for `
+        + `spot(s) ${atAnotherAddress.map((r) => r.spot_id).join(', ')} at another address`
+      );
+      return fail(res, 409,
+        'This registration reference is already recorded for a spot at a different address. '
+        + 'One property record cannot describe two places — check which address it really covers.', {
+          code: 'FIELD_REFERENCE_ALREADY_USED',
+          also_used_for: atAnotherAddress.map((r) => ({
+            spot_id: r.spot_id,
+            title: r.parking_spots?.title || null,
+            claimed_address: r.claimed_address,
+            status: r.status,
+          })),
+          how_to_proceed: 'If both spots really are at that one property, their addresses should '
+            + 'match. If they are different places, this reference belongs to only one of them.',
+        });
+    }
+
     const pending = {
       ...ctx.record,
       field_record_found: true,
@@ -1097,9 +1201,8 @@ async function adminDetail(req, res) {
     });
     if (!record) return fail(res, 404, 'No verification record for this spot.');
 
-    const signed = (publicId) => (publicId
-      ? cloudinary.url(publicId, { type: 'authenticated', sign_url: true, secure: true })
-      : null);
+    const doc = signedDocUrls(record.doc_public_id, record.doc_format);
+    const noc = signedDocUrls(record.landlord_noc_public_id, record.landlord_noc_format);
 
     const wait = Policy.waitFor({ status: record.status, submittedAt: record.submitted_at });
     const owner = record.parking_spots?.users;
@@ -1154,8 +1257,20 @@ async function adminDetail(req, res) {
         claimed_address: record.claimed_address,
         relationship: record.relationship,
         landlord_name: record.landlord_name,
-        doc_url: signed(record.doc_public_id),
-        landlord_noc_url: signed(record.landlord_noc_public_id),
+        /**
+         * The document itself, signed. For a PDF this is the PDF — a React
+         * Native <Image> cannot render it, so a screen opens it rather than
+         * embedding it.
+         */
+        doc_url: doc.url,
+        /** Page 1 as a JPEG for a PDF; the same image for a photo. Always renderable. */
+        doc_preview_url: doc.preview_url,
+        doc_format: doc.format,
+        doc_is_pdf: doc.is_pdf,
+        landlord_noc_url: noc.url,
+        landlord_noc_preview_url: noc.preview_url,
+        landlord_noc_format: noc.format,
+        landlord_noc_is_pdf: noc.is_pdf,
         submitted_at: record.submitted_at,
         grandfathered_at: record.grandfathered_at,
         /**

@@ -33,8 +33,10 @@ jest.mock('cloudinary', () => {
       config: jest.fn(),
       url: (publicId) => `https://signed.test/${publicId}`,
       uploader: {
+        // `format` is what Cloudinary really returns, and what tells the admin
+        // screen whether it is holding a PDF or a photo.
         upload_stream: (opts, cb) => ({
-          end: () => cb(null, { public_id: `parkstop/spot-docs/mock-${++n}` }),
+          end: () => cb(null, { public_id: `parkstop/spot-docs/mock-${++n}`, format: 'jpg' }),
         }),
         destroy: jest.fn().mockResolvedValue({ result: 'ok' }),
       },
@@ -1405,7 +1407,11 @@ describe('the field check', () => {
       },
     });
 
-    await field(id, FOUND);
+    // Its OWN registration reference, because this spot is the only one in
+    // this file at a different address — and one property record may not
+    // verify two addresses. The shared FOUND reference belongs to the spots at
+    // 42 Verification Road.
+    await field(id, { ...FOUND, office: 'Sub-Registrar Office, Jayanagar', reference: 'SRO/JAY/2019/8812' });
 
     // It was visible all along; now it is visible for a reason.
     expect((await spotRow(id)).spot_verification_status).toBe('approved');
@@ -1534,7 +1540,9 @@ describe('a tenant needs the landlord\'s consent', () => {
     const res = await uploadNoc(id, { noFile: true });
 
     expect(res.status).toBe(400);
-    expect(res.body.message).toMatch(/photo of the letter/);
+    // A PDF is as good as a photo — these documents come off the Karnataka
+    // portals as PDFs — but something has to be attached.
+    expect(res.body.message).toMatch(/attach the letter from your landlord/);
   });
 
   test('an owner-occupied spot needs no letter', async () => {

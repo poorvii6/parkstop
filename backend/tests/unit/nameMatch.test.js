@@ -16,6 +16,9 @@ const {
   GOOD_NAME_MATCH,
   REVIEW_NAME_MATCH,
   normalizeName,
+  namesDeceasedHolder,
+  transliterationSkeleton,
+  sameNameDifferentSpelling,
   compareNames,
   explainNameMatch,
 } = require('../../src/services/nameMatch');
@@ -174,6 +177,176 @@ describe('the policy lists the verdicts are in', () => {
     expect(NAME_MATCH.GOOD_PARTIAL).toBe('GOOD_PARTIAL_MATCH');
     expect(NAME_MATCH.MODERATE_PARTIAL).toBe('MODERATE_PARTIAL_MATCH');
     expect(NAME_MATCH.NONE).toBe('NO_MATCH');
+  });
+});
+
+/**
+ * One name, two spellings.
+ *
+ * In Bengaluru this is the normal case, not the edge case. When a conflicting
+ * surname was first made to block, these all came out NO_MATCH, which would
+ * have meant an admin overriding NO_MATCH on most honest submissions — the
+ * keystroke-not-a-signal problem, recreated in the person check by the fix for
+ * the tenant check.
+ *
+ * They land in MODERATE_PARTIAL_MATCH: flagged for the human reading the
+ * document, never blocked, and never a clean pass either.
+ */
+describe('a name spelled two ways is the same name', () => {
+  const variants = [
+    ['RAMESHA', 'RAMESH', 'trailing vowel'],
+    ['SURESHA', 'SURESH', 'trailing vowel'],
+    ['VENKATESHA', 'VENKATESH', 'trailing vowel'],
+    ['KRISHNAPPA', 'KRISHNA', '-appa suffix'],
+    ['LAKSHMANA', 'LAXMAN', 'ksh/x and a trailing vowel'],
+    ['MOHAMMAD', 'MOHAMMED', 'doubled consonant and a vowel swap'],
+  ];
+
+  test.each(variants)('%s and %s are one name (%s)', (a, b) => {
+    expect(sameNameDifferentSpelling(a, b)).toBe(true);
+  });
+
+  test.each(variants)('%s / %s is flagged, not blocked (%s)', (a, b) => {
+    const r = compareNames(`${a} Kumar`, `${b} Kumar`);
+
+    expect(r.verdict).toBe(NAME_MATCH.MODERATE_PARTIAL);
+    expect(r.via_variant).toBe(true);
+    expect(REVIEW_NAME_MATCH).toContain(r.verdict);
+    // Flagged, but never mistaken for confirmation.
+    expect(GOOD_NAME_MATCH).not.toContain(r.verdict);
+  });
+
+  test('ANITA SHARMA and SUNITA SHARMA stay NO_MATCH', () => {
+    // The test that kills a lazy fix. ANITA/SUNITA is TWO edits apart and must
+    // fail, while LAKSHMANA/LAXMAN is FOUR edits apart and must pass — so the
+    // ordering by distance runs backwards and no distance threshold can
+    // separate them. The rules are patterns, not a budget.
+    const r = compareNames('ANITA SHARMA', 'SUNITA SHARMA');
+
+    expect(r.verdict).toBe(NAME_MATCH.NONE);
+    expect(sameNameDifferentSpelling('ANITA', 'SUNITA')).toBe(false);
+  });
+
+  test('a leading letter is never optional, which is what ANITA/SUNITA turns on', () => {
+    // Nothing in the rules drops or inserts a LEADING character. Every rule
+    // works on the tail or on a known consonant cluster.
+    expect(sameNameDifferentSpelling('ANITA', 'SUNITA')).toBe(false);
+    expect(sameNameDifferentSpelling('ESH', 'RESH')).toBe(false);
+    expect(sameNameDifferentSpelling('RAM', 'SRAM')).toBe(false);
+  });
+
+  test('a consonant that disagrees is a different name, however close', () => {
+    expect(sameNameDifferentSpelling('RAJESH', 'RAMESH')).toBe(false);
+    expect(sameNameDifferentSpelling('RAJESHA', 'RAMESH')).toBe(false);
+    expect(sameNameDifferentSpelling('BABU', 'NAIR')).toBe(false);
+    expect(sameNameDifferentSpelling('SHARMA', 'VERMA')).toBe(false);
+  });
+
+  test('only ONE vowel may be swapped, and only for another vowel', () => {
+    // The Mohammad/Mohammed allowance, bounded so it cannot grow into a
+    // general edit-distance match.
+    expect(sameNameDifferentSpelling('MOHAMMAD', 'MOHAMMED')).toBe(true);
+    // Two vowels apart is not one spelling difference.
+    expect(sameNameDifferentSpelling('MOHAMMAD', 'MUHAMMED')).toBe(false);
+    // A vowel for a consonant is a different name.
+    expect(sameNameDifferentSpelling('RAMAN', 'RAMEN')).toBe(true);
+    expect(sameNameDifferentSpelling('RAMAN', 'RAMDN')).toBe(false);
+  });
+
+  test('an initial is never a spelling variant', () => {
+    expect(sameNameDifferentSpelling('R', 'RAMESH')).toBe(false);
+    expect(sameNameDifferentSpelling('RAMESH', 'R')).toBe(false);
+  });
+
+  test('the skeleton is shown so a reviewer can see why', () => {
+    expect(transliterationSkeleton('LAXMAN')).toBe(transliterationSkeleton('LAKSHMANA'));
+    expect(transliterationSkeleton('KRISHNAPPA')).toBe(transliterationSkeleton('KRISHNA'));
+    // A short token is never reduced to nothing.
+    expect(transliterationSkeleton('A')).toBe('A');
+    expect(transliterationSkeleton('RA')).toBe('RA');
+  });
+});
+
+/**
+ * "LATE RAMESH KUMAR" — an inherited khata in a dead parent's name.
+ *
+ * LATE used to sit in HONORIFICS and be discarded with the Shris, so this came
+ * back DIRECT_MATCH, explained as "The names are the same". It is the single
+ * most misleading result the comparator could produce: an inherited khata is
+ * ordinary here and sons often carry the father's name, so the document that
+ * LEAST establishes current ownership scored the perfect match.
+ */
+describe('a document naming a deceased holder', () => {
+  test('is never a DIRECT match, however well the name agrees', () => {
+    const r = compareNames('LATE RAMESH KUMAR', 'RAMESH KUMAR');
+
+    expect(r.deceased_holder).toBe(true);
+    expect(r.verdict).not.toBe(NAME_MATCH.DIRECT);
+  });
+
+  test('never says "the names are the same"', () => {
+    const text = explainNameMatch(compareNames('LATE RAMESH KUMAR', 'RAMESH KUMAR'));
+
+    expect(text).not.toMatch(/the names are the same/i);
+    expect(text).toMatch(/deceased/i);
+    expect(text).toMatch(/inheritance|khata-transfer/i);
+  });
+
+  test('is detected through honorifics and punctuation', () => {
+    expect(namesDeceasedHolder('Late Shri Ramesh Kumar')).toBe(true);
+    expect(namesDeceasedHolder('LATE. RAMESH KUMAR')).toBe(true);
+    expect(namesDeceasedHolder('lt ramesh kumar')).toBe(true);
+    expect(namesDeceasedHolder('Ramesh Kumar')).toBe(false);
+  });
+
+  test('a name merely containing those letters is not a deceased marker', () => {
+    // LATA is a name. LATEEF is a name. Only a whole token counts.
+    expect(namesDeceasedHolder('Lata Mangeshkar')).toBe(false);
+    expect(namesDeceasedHolder('Abdul Lateef')).toBe(false);
+    expect(namesDeceasedHolder('Latesh Kumar')).toBe(false);
+  });
+
+  test('the name itself is still compared, so a wrong name is still wrong', () => {
+    const r = compareNames('LATE MOHAN LAL', 'RAMESH KUMAR');
+
+    expect(r.deceased_holder).toBe(true);
+    expect(r.verdict).toBe(NAME_MATCH.NONE);
+  });
+});
+
+/**
+ * Initials are not names.
+ *
+ * "R K" against "RAJESH KRISHNA" matched everything it was given and came out
+ * GOOD_PARTIAL_MATCH — which is in GOOD_NAME_MATCH, so: proceed, no flag. Two
+ * single letters, and not one whole name agreed.
+ */
+describe('a match made entirely of initials', () => {
+  test('R K against RAJESH KRISHNA is MODERATE at best', () => {
+    const r = compareNames('R K', 'RAJESH KRISHNA');
+
+    expect(r.exact_full_matches).toBe(0);
+    expect(r.verdict).toBe(NAME_MATCH.MODERATE_PARTIAL);
+    expect(GOOD_NAME_MATCH).not.toContain(r.verdict);
+  });
+
+  test('one whole name agreeing is enough for GOOD_PARTIAL', () => {
+    const r = compareNames('RAMESH K', 'RAMESH KRISHNAPPA');
+
+    expect(r.exact_full_matches).toBe(1);
+    expect(r.verdict).toBe(NAME_MATCH.GOOD_PARTIAL);
+  });
+
+  test('R.K. Sharma keeps GOOD_PARTIAL, because SHARMA matched in full', () => {
+    const r = compareNames('R.K. Sharma', 'Rajesh Kumar Sharma');
+
+    expect(r.exact_full_matches).toBe(1);
+    expect(r.verdict).toBe(NAME_MATCH.GOOD_PARTIAL);
+  });
+
+  test('the explanation says it was only initials', () => {
+    expect(explainNameMatch(compareNames('R K', 'RAJESH KRISHNA')))
+      .toMatch(/only through initials/i);
   });
 });
 

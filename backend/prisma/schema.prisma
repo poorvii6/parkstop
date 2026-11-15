@@ -165,6 +165,13 @@ model spot_verifications {
   /// Reuse at the SAME claimed address is ordinary and allowed — four bays on
   /// one property is one property. Reuse at a DIFFERENT address is refused.
   doc_sha256             String?   @db.VarChar(64)
+  /// 'pdf', 'jpg', 'png', 'webp' — Cloudinary's own `format`.
+  ///
+  /// Stored because a PDF and a photo are delivered differently: a PDF needs
+  /// `format: 'pdf'` for the file and `format: 'jpg', page: 1` for something a
+  /// screen can render inline. Without this the admin screen cannot tell which
+  /// it is holding. See signedDocUrls in spotVerificationController.
+  doc_format             String?   @db.VarChar(10)
   /// The address printed on the document, typed by the owner. The spot's own
   /// `address` column is not a substitute: every active spot in production has
   /// one shorter than ten characters.
@@ -176,6 +183,8 @@ model spot_verifications {
   /// SHA-256 of the consent letter, for the same reason as doc_sha256: one
   /// letter must not quietly authorise spots at several addresses.
   landlord_noc_sha256    String?   @db.VarChar(64)
+  /// As doc_format, for the letter.
+  landlord_noc_format    String?   @db.VarChar(10)
   /// When the owner submitted. The 48-hour clock runs from here.
   submitted_at           DateTime? @db.Timestamp(6)
 
