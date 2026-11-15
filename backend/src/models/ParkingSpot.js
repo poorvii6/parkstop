@@ -869,11 +869,24 @@ class ParkingSpot {
         // owner's list shows a spot that looks live and is not, with nothing
         // on screen to say why.
         spot_verification_status: true,
+        /**
+         * EVERY field Policy.ownerSummary reads, and that is the rule for this
+         * select: it computes what is still MISSING before a spot can be
+         * submitted, so a column left out here reads as absent and the
+         * dashboard tells the owner to supply something they already have.
+         *
+         * The landlord fields matter most. Without them a tenant who has
+         * uploaded their consent letter is told on this list that we still
+         * need it, while the spot's own screen — which selects everything —
+         * says they are ready. Two screens, two answers, which is precisely
+         * the confusion per-spot verification exists to remove.
+         */
         spot_verification: {
           select: {
             status: true, submitted_at: true, rejection_reason: true,
             grandfathered_at: true, doc_type: true, doc_public_id: true,
-            claimed_address: true, relationship: true,
+            claimed_address: true, relationship: true, doc_format: true,
+            landlord_noc_public_id: true, landlord_name: true,
           },
         },
       }

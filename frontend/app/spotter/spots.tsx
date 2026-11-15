@@ -352,8 +352,15 @@ export default function SpotsScreen() {
                       </TouchableOpacity>
                     </View>
                   </View>
-                  {/* Whether a driver can actually see this spot, and why not. */}
-                  <SpotVerificationBadge v={spot.verification} />
+                  {/*
+                    Whether a driver can actually see this spot, and why not —
+                    and now a way in. Each spot is verified on its own, so this
+                    opens THIS spot's document, not an account-wide one.
+                  */}
+                  <SpotVerificationBadge
+                    v={spot.verification}
+                    onPress={() => router.push(`/spotter/spot-verification/${spot.id}` as any)}
+                  />
                   <View style={s.spotStatsRow}>
                     <View style={s.spotStat}>
                       <Text style={s.spotStatValue}>{spot.total_slots}</Text>
@@ -388,9 +395,11 @@ export default function SpotsScreen() {
                 <Ionicons name="information-circle" size={18} color={SC.info} />
                 <Text style={s.verifyNoticeText}>
                   New spots are not visible to drivers straight away. After you create this
-                  one, send us a document for its address — an electricity bill, property tax
-                  receipt or rent agreement in your name. We check it and the spot goes live,
-                  usually within 48 hours.
+                  one, send us a document proving who owns its address — a khata certificate,
+                  sale deed, property tax receipt or encumbrance certificate{' '}
+                  <Text style={{ fontWeight: '800' }}>in your own name</Text>. A utility bill is
+                  not enough. If you rent, you will also need your landlord&apos;s signed consent.
+                  We verify it and list the spot within 48 hours of a complete submission.
                 </Text>
               </View>
             )}

@@ -378,26 +378,15 @@ async function uploadLandlordNoc(req, res) {
 }
 
 /**
- * Whether this submission needs the landlord's consent, and what is missing.
+ * `missingTenantConsent` lived here and has moved to
+ * Policy.submissionGaps / Policy.isTenantSubmission.
  *
- * The union of two conditions, on purpose. A stated tenant needs it for the
- * obvious reason. A rent agreement needs it whatever the owner ticked, because
- * a rent agreement IS a tenant's document — somebody describing themselves as
- * the owner while submitting one has either mis-tapped or is hoping nobody
- * reads it, and both are handled by asking for the letter.
+ * Not for tidiness: the owner's screen has to warn a tenant that the
+ * landlord's letter is required BEFORE they upload anything, and a rule that
+ * only exists inside this controller cannot be read by a screen. Two copies of
+ * "what is missing" would eventually disagree, and the way they would disagree
+ * is a screen saying "ready to submit" over a button that returns 400.
  */
-function missingTenantConsent(record) {
-  const isTenant = record.relationship === RELATIONSHIPS.TENANT
-    || TENANT_DOC_TYPES.includes(record.doc_type);
-  if (!isTenant) return null;
-
-  const missing = [];
-  if (!record.landlord_noc_public_id) missing.push('the letter from your landlord');
-  if (!record.landlord_name) missing.push("the landlord's name");
-  if (!missing.length) return null;
-
-  return `This spot is rented, so we need ${missing.join(' and ')} before we can check it.`;
-}
 
 /** Submit the spot for review. This is when the 48-hour clock starts. */
 async function submit(req, res) {
@@ -409,20 +398,17 @@ async function submit(req, res) {
     const blocked = editBlocked(record);
     if (blocked) return fail(res, 409, blocked);
 
-    if (!record.doc_public_id || !record.claimed_address) {
-      return fail(res, 400, 'Add a document for this address before submitting.');
-    }
-
-    // A rented spot without the landlord's consent is not a submission we can
-    // act on, so it is refused here rather than wasting the owner's 48 hours
-    // and an admin's review before telling them.
-    const needsConsent = missingTenantConsent(record);
-    if (needsConsent) return fail(res, 400, needsConsent);
-    if (spot.latitude === null || spot.longitude === null) {
-      // The desk check measures the document's address against the pin. With
-      // no pin there is nothing to measure, and the spot could never be found
-      // in any case.
-      return fail(res, 400, 'Set this spot\'s location on the map before submitting it.');
+    /**
+     * What is missing, from the one function the owner's screen also reads.
+     *
+     * A rented spot without the landlord's consent is not a submission we can
+     * act on, so it is refused here rather than wasting the owner's 48 hours
+     * and an admin's review before telling them — but the screen has already
+     * said so, because it asked Policy.submissionGaps the same question.
+     */
+    const gaps = Policy.submissionGaps(record, spot);
+    if (gaps.length) {
+      return fail(res, 400, gaps[0].message, { missing: gaps.map((g) => g.code) });
     }
 
     const updated = await saveAndSync(
@@ -653,11 +639,11 @@ async function runDeskChecks({ record, spot, aadhaarName, nameOnDocument, nocNam
    * Aadhaar name, which it was never going to match. See
    * Policy.NAME_CHECKED_AGAINST for the full reasoning.
    *
-   * `missingTenantConsent` is the same union used at submit: a stated tenant,
-   * or a tenancy document whatever they ticked.
+   * `Policy.isTenantSubmission` is the same union used at submit and on the
+   * owner's screen: a stated tenant, or a tenancy document whatever they
+   * ticked.
    */
-  const isTenant = record.relationship === RELATIONSHIPS.TENANT
-    || TENANT_DOC_TYPES.includes(record.doc_type);
+  const isTenant = Policy.isTenantSubmission(record);
   const checkedAgainst = isTenant
     ? Policy.NAME_CHECKED_AGAINST.LANDLORD
     : Policy.NAME_CHECKED_AGAINST.AADHAAR;

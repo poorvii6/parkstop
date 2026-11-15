@@ -239,7 +239,10 @@ describe('ownerSummary is the one shape both owner screens read', () => {
       promised_hours: 48,
       pin_locked: true,
     });
-    expect(out.document).toEqual({ doc_type: 'khata_certificate', address: '1 Test St', relationship: 'owner' });
+    // `is_pdf` so the screen knows what it is holding; never the id or a URL.
+    expect(out.document).toEqual({
+      doc_type: 'khata_certificate', address: '1 Test St', relationship: 'owner', is_pdf: false,
+    });
   });
 
   test('a grandfathered spot reads as live while its review is in flight', () => {
@@ -503,5 +506,181 @@ describe('deskAndFieldPassed', () => {
   test('an empty record is not a pass', () => {
     expect(Policy.deskAndFieldPassed({})).toBe(false);
     expect(Policy.deskAndFieldPassed(null)).toBe(false);
+  });
+});
+
+/**
+ * What is still missing before a spot can be submitted.
+ *
+ * ONE definition, read by `submit()` AND by the owner's own screen. That is
+ * the whole reason it is a pure function here rather than a check inside the
+ * controller: the screen has to warn a tenant that the landlord's letter is
+ * required BEFORE they upload anything, and a rule that lives only in the
+ * controller cannot be read by a screen. Two copies would eventually disagree,
+ * and the way they would disagree is a screen saying "ready to submit" over a
+ * button that returns 400.
+ */
+describe('what is still missing before a spot can be submitted', () => {
+  const PIN = { latitude: 12.95, longitude: 77.55 };
+  const complete = {
+    doc_public_id: 'parkstop/spot-docs/x',
+    claimed_address: '42 Verification Road, Indiranagar, Bengaluru 560038',
+    doc_type: 'khata_certificate',
+    relationship: 'owner',
+  };
+  const codes = (record, spot = PIN) => Policy.submissionGaps(record, spot).map((g) => g.code);
+
+  test('a complete owner-occupied submission has no gaps', () => {
+    expect(Policy.submissionGaps(complete, PIN)).toEqual([]);
+  });
+
+  test('no document, or no address, is a gap', () => {
+    expect(codes({})).toEqual(['NO_DOCUMENT']);
+    expect(codes({ ...complete, doc_public_id: null })).toEqual(['NO_DOCUMENT']);
+    expect(codes({ ...complete, claimed_address: null })).toEqual(['NO_DOCUMENT']);
+  });
+
+  test('a stated tenant needs the letter AND the name', () => {
+    const tenant = { ...complete, relationship: 'tenant' };
+
+    expect(codes(tenant)).toEqual(['NO_LANDLORD_CONSENT']);
+    expect(Policy.submissionGaps(tenant, PIN)[0].message)
+      .toMatch(/rented, so we need the letter from your landlord and the landlord's name/);
+
+    expect(codes({ ...tenant, landlord_noc_public_id: 'x' })).toEqual(['NO_LANDLORD_CONSENT']);
+    expect(Policy.submissionGaps({ ...tenant, landlord_noc_public_id: 'x' }, PIN)[0].message)
+      .toMatch(/the landlord's name/);
+
+    expect(codes({ ...tenant, landlord_noc_public_id: 'x', landlord_name: 'Ramesh Gupta' })).toEqual([]);
+  });
+
+  test('a rent agreement is tenanted whatever the owner ticked', () => {
+    // Somebody calling themselves the owner while submitting a rent agreement
+    // has either mis-tapped or is hoping nobody reads it. Both are answered by
+    // asking for the letter.
+    expect(codes({ ...complete, doc_type: 'rent_agreement', relationship: 'owner' }))
+      .toEqual(['NO_LANDLORD_CONSENT']);
+    expect(Policy.isTenantSubmission({ doc_type: 'rent_agreement', relationship: 'owner' })).toBe(true);
+    expect(Policy.isTenantSubmission({ doc_type: 'khata_certificate', relationship: 'tenant' })).toBe(true);
+    expect(Policy.isTenantSubmission({ doc_type: 'khata_certificate', relationship: 'owner' })).toBe(false);
+    expect(Policy.isTenantSubmission(null)).toBe(false);
+  });
+
+  test('no pin is a gap, because there is nothing to measure the address against', () => {
+    expect(codes(complete, { latitude: null, longitude: null })).toEqual(['NO_PIN']);
+    expect(codes(complete, { latitude: 12.95, longitude: null })).toEqual(['NO_PIN']);
+    expect(codes(complete, {})).toEqual(['NO_PIN']);
+  });
+
+  test('gaps come back in the order an owner would fix them', () => {
+    // submit() returns the FIRST message, so the order decides which single
+    // sentence an owner is shown.
+    expect(codes({ relationship: 'tenant' }, {}))
+      .toEqual(['NO_DOCUMENT', 'NO_LANDLORD_CONSENT', 'NO_PIN']);
+  });
+
+  test('every gap carries a sentence an owner can act on', () => {
+    for (const gap of Policy.submissionGaps({ relationship: 'tenant' }, {})) {
+      expect(typeof gap.message).toBe('string');
+      expect(gap.message.length).toBeGreaterThan(20);
+      // No codes, no column names, no jargon leaking into the owner's screen.
+      expect(gap.message).not.toMatch(/_|null|undefined/);
+    }
+  });
+});
+
+describe('ownerSummary tells the screen what it needs and nothing more', () => {
+  /**
+   * latitude and longitude are part of the contract.
+   *
+   * ownerSummary asks submissionGaps what is missing, and that includes the
+   * pin — so a caller selecting the spot without its coordinates gets a
+   * spurious "set this spot's location" gap. Both real callers select them
+   * (spotFor in the controller, and the dashboard select in ParkingSpot.js),
+   * and the failure direction is the safe one: a false "set your pin" is
+   * annoying, whereas skipping the check would let a pinless spot submit and
+   * be measured against nothing.
+   */
+  const spot = {
+    id: 5, title: 'Front driveway', spot_verification_status: S.NOT_STARTED,
+    latitude: 12.95, longitude: 77.55,
+  };
+
+  test('a spot passed without its coordinates reports the pin as missing', () => {
+    const out = Policy.ownerSummary(
+      { id: 5, title: 'Front driveway', spot_verification_status: S.NOT_STARTED },
+      { status: S.IN_PROGRESS, doc_public_id: 'x', claimed_address: '1 Test St' },
+      NOW
+    );
+    expect(out.missing.map((g) => g.code)).toContain('NO_PIN');
+  });
+
+  test('a tenant with the letter in is ready, and says who signed', () => {
+    const out = Policy.ownerSummary(spot, {
+      status: S.IN_PROGRESS,
+      doc_public_id: 'parkstop/spot-docs/x',
+      doc_type: 'khata_certificate',
+      claimed_address: '42 Verification Road, Indiranagar, Bengaluru 560038',
+      relationship: 'tenant',
+      landlord_noc_public_id: 'parkstop/spot-docs/noc',
+      landlord_name: 'Ramesh Gupta',
+    }, NOW);
+
+    expect(out.is_tenant).toBe(true);
+    expect(out.landlord).toEqual({ noc_uploaded: true, name: 'Ramesh Gupta' });
+    expect(out.missing).toEqual([]);
+    expect(out.can_submit).toBe(true);
+    expect(out.editable).toBe(true);
+  });
+
+  test('it never carries a document id, a URL or a hash', () => {
+    const out = Policy.ownerSummary(spot, {
+      status: S.IN_PROGRESS,
+      doc_public_id: 'parkstop/spot-docs/secret123',
+      doc_sha256: 'a'.repeat(64),
+      doc_format: 'pdf',
+      claimed_address: '1 Test St',
+      landlord_noc_public_id: 'parkstop/spot-docs/noc-secret',
+      field_notes: 'Clerk suspects the document is fabricated.',
+      field_office: 'SRO Indiranagar',
+      desk_reviewed_by: 9,
+    }, NOW);
+
+    const json = JSON.stringify(out);
+    expect(json).not.toMatch(/secret123|noc-secret|spot-docs/);
+    expect(json).not.toMatch(/a{64}/);
+    expect(json).not.toMatch(/fabricated|SRO Indiranagar/);
+    expect(json).not.toMatch(/desk_reviewed_by|field_notes|field_office/);
+    // What it DOES say about the file: only whether it is a PDF.
+    expect(out.document.is_pdf).toBe(true);
+  });
+
+  test('a spot under review offers nothing to change', () => {
+    for (const status of [S.DESK_PENDING, S.DESK_APPROVED]) {
+      const out = Policy.ownerSummary(spot, { status, submitted_at: hoursAgo(2) }, NOW);
+      expect(out.editable).toBe(false);
+      expect(out.can_submit).toBe(false);
+      // No point listing gaps the owner cannot act on right now.
+      expect(out.missing).toEqual([]);
+    }
+  });
+
+  test('an approved spot offers nothing to change either', () => {
+    const out = Policy.ownerSummary(spot, { status: S.APPROVED }, NOW);
+    expect(out.editable).toBe(false);
+    expect(out.can_submit).toBe(false);
+  });
+
+  test('a rejected spot is editable, so the owner can fix and resubmit', () => {
+    const out = Policy.ownerSummary(spot, {
+      status: S.REJECTED,
+      rejection_reason: 'The address does not match this spot.',
+      doc_public_id: 'parkstop/spot-docs/x',
+      claimed_address: '1 Test St',
+    }, NOW);
+
+    expect(out.editable).toBe(true);
+    expect(out.can_submit).toBe(true);
+    expect(out.rejection_reason).toMatch(/does not match/);
   });
 });

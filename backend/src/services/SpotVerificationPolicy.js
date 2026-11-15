@@ -13,6 +13,8 @@
 const {
   SPOT_VERIFICATION_STATUS,
   AWAITING_REVIEW_STATUSES,
+  RELATIONSHIPS,
+  TENANT_DOC_TYPES,
   isVisibleToDrivers,
   isPinFrozen,
 } = require('../constants/spotVerification');
@@ -431,6 +433,71 @@ function ownerMessageFor({ status, submittedAt, now = new Date() }) {
 }
 
 /**
+ * Is this submission tenanted, by either definition?
+ *
+ * The union of two conditions. A stated tenant needs the landlord's consent
+ * for the obvious reason. A tenancy DOCUMENT needs it whatever the owner
+ * ticked, because a rent agreement IS a tenant's document — somebody calling
+ * themselves the owner while submitting one has either mis-tapped or is hoping
+ * nobody reads it, and both are answered by asking for the letter.
+ */
+function isTenantSubmission(record) {
+  return record?.relationship === RELATIONSHIPS.TENANT
+    || TENANT_DOC_TYPES.includes(record?.doc_type);
+}
+
+/**
+ * What is still missing before this spot can be submitted.
+ *
+ * ONE definition, read by `submit()` and by the owner's own screen. The screen
+ * has to tell an owner what a rented spot needs BEFORE they upload anything —
+ * finding out at the submit button that the whole thing is refused is the
+ * experience this exists to prevent — and the only way the warning and the
+ * refusal cannot drift apart is for both to come from here.
+ *
+ * Order is the order an owner would fix them in, and the first message is the
+ * one `submit()` returns.
+ *
+ * @param {object} record  the spot_verifications row
+ * @param {object} spot    needs latitude and longitude
+ * @returns {{code: string, message: string}[]}
+ */
+function submissionGaps(record, spot) {
+  const gaps = [];
+
+  if (!record?.doc_public_id || !record?.claimed_address) {
+    gaps.push({
+      code: 'NO_DOCUMENT',
+      message: 'Add a document for this address before submitting.',
+    });
+  }
+
+  if (isTenantSubmission(record)) {
+    const wanted = [];
+    if (!record?.landlord_noc_public_id) wanted.push('the letter from your landlord');
+    if (!record?.landlord_name) wanted.push("the landlord's name");
+    if (wanted.length) {
+      gaps.push({
+        code: 'NO_LANDLORD_CONSENT',
+        message: `This spot is rented, so we need ${wanted.join(' and ')} before we can check it.`,
+      });
+    }
+  }
+
+  if (spot && (spot.latitude === null || spot.longitude === null
+    || spot.latitude === undefined || spot.longitude === undefined)) {
+    // The desk check measures the document's address against the pin. With no
+    // pin there is nothing to measure, and the spot could never be found.
+    gaps.push({
+      code: 'NO_PIN',
+      message: "Set this spot's location on the map before submitting it.",
+    });
+  }
+
+  return gaps;
+}
+
+/**
  * One spot's verification state as its OWNER sees it.
  *
  * Here rather than in the controller because two screens read it — the
@@ -448,6 +515,17 @@ function ownerSummary(spot, record, now = new Date()) {
   const visible = spot?.spot_verification_status ?? driverVisibleStatusFor({ status, grandfathered_at: record?.grandfathered_at });
   const wait = waitFor({ status, submittedAt, now });
 
+  /**
+   * May the owner change anything right now?
+   *
+   * Mirrors `editBlocked` in the controller: not while someone is reviewing
+   * it, and not once it is approved. A screen that offered an upload button in
+   * those states would be offering an action the server refuses with a 409.
+   */
+  const editable = !AWAITING_REVIEW_STATUSES.includes(status)
+    && status !== SPOT_VERIFICATION_STATUS.APPROVED;
+  const gaps = submissionGaps(record, spot);
+
   return {
     spot_id: spot?.id,
     title: spot?.title,
@@ -457,8 +535,40 @@ function ownerSummary(spot, record, now = new Date()) {
     is_live: isVisibleToDrivers(visible),
     message: ownerMessageFor({ status, submittedAt, now }),
     document: record?.doc_public_id
-      ? { doc_type: record.doc_type, address: record.claimed_address, relationship: record.relationship }
+      ? {
+        doc_type: record.doc_type,
+        address: record.claimed_address,
+        relationship: record.relationship,
+        /**
+         * Whether it is a PDF, so the screen knows what it is holding.
+         * The id and the URL are NOT here — an owner's own document is not
+         * served back to them, because nothing on their screen needs it and
+         * every extra copy of a signed URL is another way one leaks.
+         */
+        is_pdf: String(record.doc_format || '').toLowerCase() === 'pdf',
+      }
       : null,
+    /**
+     * The landlord's letter, as a yes or no. A tenant's screen has to show
+     * what is still outstanding, and this is the only part of the NOC an
+     * owner's screen ever needs — never the id, never the URL.
+     */
+    is_tenant: isTenantSubmission(record),
+    landlord: {
+      noc_uploaded: !!record?.landlord_noc_public_id,
+      name: record?.landlord_name || null,
+    },
+    /**
+     * What is still missing, from the same function `submit()` refuses with.
+     *
+     * This is what lets the screen say "a rented spot also needs your
+     * landlord's letter" BEFORE the owner uploads anything, instead of letting
+     * them find out at the submit button.
+     */
+    missing: editable ? gaps.map((g) => ({ code: g.code, message: g.message })) : [],
+    can_submit: editable && gaps.length === 0,
+    /** Whether the owner may change anything at all right now. */
+    editable,
     submitted_at: submittedAt,
     waiting_hours: wait.waiting_hours,
     hours_left: wait.hours_left,
@@ -483,6 +593,8 @@ module.exports = {
   waitFor,
   addressVerdictFor,
   sameClaimedAddress,
+  isTenantSubmission,
+  submissionGaps,
   deskPassBlockers,
   unoverridableBlockers,
   deskAndFieldPassed,

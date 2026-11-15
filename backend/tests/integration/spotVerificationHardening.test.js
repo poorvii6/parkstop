@@ -795,6 +795,145 @@ describe('the 48-hour clock starts at complete submission', () => {
   });
 });
 
+// ───────── what the owner's screen is told, before they do the work ─────────
+
+/**
+ * The owner's screen has to warn a tenant that the landlord's letter is
+ * required BEFORE they upload anything, and the warning has to be the rule
+ * that will actually be applied to them.
+ *
+ * Both come from Policy.submissionGaps. These tests hold the two together:
+ * whatever `missing` says, submit() refuses with the same thing, and when
+ * `can_submit` is true submit() succeeds.
+ */
+describe('the screen and the submit button cannot disagree', () => {
+  test('an empty spot says a document is missing, and submit says the same', async () => {
+    const id = await makeSpot(ids.owner, 'agree-empty');
+
+    const seen = (await mine(OWNER, id)).body.data;
+    expect(seen.can_submit).toBe(false);
+    expect(seen.missing.map((m) => m.code)).toEqual(['NO_DOCUMENT']);
+
+    const refused = await submit(OWNER, id);
+    expect(refused.status).toBe(400);
+    expect(refused.body.missing).toEqual(['NO_DOCUMENT']);
+    expect(refused.body.message).toBe(seen.missing[0].message);
+  });
+
+  test('a tenant is told about the letter the moment the document says tenant', async () => {
+    const id = await makeSpot(ids.owner, 'agree-tenant');
+    await uploadDoc(OWNER, id, {
+      file: 'agree-tenant-doc', docType: 'khata_certificate', relationship: 'tenant',
+    });
+
+    const seen = (await mine(OWNER, id)).body.data;
+
+    expect(seen.is_tenant).toBe(true);
+    expect(seen.landlord.noc_uploaded).toBe(false);
+    expect(seen.can_submit).toBe(false);
+    expect(seen.missing.map((m) => m.code)).toEqual(['NO_LANDLORD_CONSENT']);
+    expect(seen.missing[0].message).toMatch(/rented, so we need the letter from your landlord/);
+
+    const refused = await submit(OWNER, id);
+    expect(refused.status).toBe(400);
+    expect(refused.body.message).toBe(seen.missing[0].message);
+  });
+
+  test('a rent agreement is tenanted even when the owner ticked "owner"', async () => {
+    // The union, as the screen sees it: the warning appears on the strength of
+    // the document type, which is the same rule submit() applies.
+    const id = await makeSpot(ids.owner, 'agree-mislabelled');
+    await uploadDoc(OWNER, id, {
+      file: 'agree-mislabelled-doc', docType: 'rent_agreement', relationship: 'owner',
+    });
+
+    const seen = (await mine(OWNER, id)).body.data;
+
+    expect(seen.is_tenant).toBe(true);
+    expect(seen.missing.map((m) => m.code)).toEqual(['NO_LANDLORD_CONSENT']);
+    expect((await submit(OWNER, id)).status).toBe(400);
+  });
+
+  test('once the letter is in, the screen says ready and submit works', async () => {
+    const id = await makeSpot(ids.owner, 'agree-complete');
+    await uploadDoc(OWNER, id, {
+      file: 'agree-complete-doc', docType: 'khata_certificate', relationship: 'tenant',
+    });
+    await uploadNoc(OWNER, id, { file: 'agree-complete-noc' });
+
+    const seen = (await mine(OWNER, id)).body.data;
+    expect(seen.missing).toEqual([]);
+    expect(seen.can_submit).toBe(true);
+    expect(seen.landlord).toEqual({ noc_uploaded: true, name: 'Ramesh Gupta' });
+
+    expect((await submit(OWNER, id)).status).toBe(200);
+  });
+
+  test('the dashboard list and the spot screen say the SAME thing', async () => {
+    // The regression this is here for: the dashboard selects a subset of
+    // spot_verifications, and a column left out of that select reads as absent
+    // — so a tenant who HAD uploaded their letter was told on the list that we
+    // still needed it, while the spot's own screen said they were ready.
+    const id = await makeSpot(ids.owner, 'agree-two-screens');
+    await uploadDoc(OWNER, id, {
+      file: 'two-screens-doc', docType: 'khata_certificate', relationship: 'tenant',
+    });
+    await uploadNoc(OWNER, id, { file: 'two-screens-noc' });
+
+    const screen = (await mine(OWNER, id)).body.data;
+    const dash = await request(app).get('/api/v1/spots/dashboard').set(auth(OWNER));
+    const row = dash.body.data.inventory.find((sp) => sp.id === id);
+
+    expect(row).toBeTruthy();
+    expect(row.verification.missing).toEqual(screen.missing);
+    expect(row.verification.can_submit).toBe(screen.can_submit);
+    expect(row.verification.is_tenant).toBe(screen.is_tenant);
+    expect(row.verification.landlord).toEqual(screen.landlord);
+    expect(row.verification.message).toBe(screen.message);
+  });
+
+  test('a spot under review offers the owner nothing to change', async () => {
+    const id = await makeSpot(ids.owner, 'agree-locked');
+    await uploadDoc(OWNER, id, { file: 'locked-doc' });
+    await submit(OWNER, id);
+
+    const seen = (await mine(OWNER, id)).body.data;
+
+    // The screen hides its upload buttons on this, and it must, because every
+    // write path returns 409 here.
+    expect(seen.editable).toBe(false);
+    expect(seen.can_submit).toBe(false);
+    expect(seen.missing).toEqual([]);
+    expect((await uploadDoc(OWNER, id, { file: 'locked-doc-2' })).status).toBe(409);
+    expect((await submit(OWNER, id)).status).toBe(409);
+  });
+
+  test('a rejected spot is editable again, and resubmitting returns it to the queue', async () => {
+    const id = await makeSpot(ids.owner, 'agree-rejected');
+    await uploadDoc(OWNER, id, { file: 'rejected-doc' });
+    await submit(OWNER, id);
+    await desk(ADMIN, id, {
+      decision: 'reject',
+      reason: 'The address on the document does not match this spot.',
+    });
+
+    const seen = (await mine(OWNER, id)).body.data;
+    expect(seen.status).toBe('rejected');
+    expect(seen.editable).toBe(true);
+    expect(seen.rejection_reason).toMatch(/does not match this spot/);
+
+    // Replace the document and send it again.
+    expect((await uploadDoc(OWNER, id, { file: 'rejected-doc-replacement' })).status).toBe(200);
+    expect((await submit(OWNER, id)).status).toBe(200);
+
+    // Back in the queue — NOT live. Fixing a rejection does not publish.
+    const after = await recordFor(id);
+    expect(after.status).toBe('desk_pending');
+    expect((await spotRow(id)).spot_verification_status).toBe('desk_pending');
+    expect((await mine(OWNER, id)).body.data.is_live).toBe(false);
+  });
+});
+
 // ───────────── what the owner is allowed to see about all this ─────────────
 
 describe('none of the internal detail reaches the owner', () => {

@@ -11,7 +11,7 @@
  * This component chooses the short label and the colour.
  */
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { SC } from '../../constants/SpotterTheme';
 
@@ -36,21 +36,45 @@ const LABELS: Record<string, { label: string; color: string; bg: string; icon: s
   rejected: { label: 'Not visible · needs changes', color: SC.error, bg: SC.errorSoft, icon: 'alert-circle' },
 };
 
-export default function SpotVerificationBadge({ v }: { v?: SpotVerification | null }) {
+/**
+ * `onPress` is what turns this from a label into a door.
+ *
+ * Until stage 4a there was nothing to tap: an owner read "Not visible · add a
+ * document" and had no way to add one, because nine working endpoints had no
+ * screen in front of them.
+ */
+export default function SpotVerificationBadge({
+  v,
+  onPress,
+}: {
+  v?: SpotVerification | null;
+  onPress?: () => void;
+}) {
   if (!v) return null;
 
   const key = String(v.status || v.visible_to_drivers || 'not_started');
   const cfg = LABELS[key];
   if (!cfg) return null;
 
-  return (
-    <View style={[s.wrap, { backgroundColor: cfg.bg, borderColor: cfg.color + '55' }]}>
+  const body = (
+    <>
       <Ionicons name={cfg.icon as any} size={14} color={cfg.color} />
       <View style={{ flex: 1 }}>
         <Text style={[s.label, { color: cfg.color }]}>{cfg.label}</Text>
         {!!v.message && <Text style={s.detail} numberOfLines={2}>{v.message}</Text>}
       </View>
-    </View>
+      {onPress ? <Ionicons name="chevron-forward" size={15} color={cfg.color} style={{ marginTop: 1 }} /> : null}
+    </>
+  );
+
+  const style = [s.wrap, { backgroundColor: cfg.bg, borderColor: `${cfg.color}55` }];
+
+  if (!onPress) return <View style={style}>{body}</View>;
+
+  return (
+    <TouchableOpacity style={style} onPress={onPress} activeOpacity={0.8}>
+      {body}
+    </TouchableOpacity>
   );
 }
 

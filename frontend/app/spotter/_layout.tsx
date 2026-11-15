@@ -226,6 +226,20 @@ export default function SpotterTabsLayout() {
             tabBarStyle: { display: 'none' },
           }}
         />
+        {/*
+          Per-SPOT verification. href: null because it is reached from the
+          badge on a spot in the Spots tab, not from the tab bar — an owner
+          with four driveways opens it once per driveway, so it is never a
+          single destination.
+        */}
+        <Tabs.Screen
+          name="spot-verification"
+          options={{
+            title: 'Verify spot',
+            href: null,
+            tabBarStyle: { display: 'none' },
+          }}
+        />
       </Tabs>
 
       {/* #2 Loud new-booking banner overlay */}
