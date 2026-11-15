@@ -611,7 +611,10 @@ async function adminBacklog(req, res) {
  *
  * @returns {Promise<{address: object, name: object|null, blockers: object[], geocode: object|null}>}
  */
-async function runDeskChecks({ record, spot, aadhaarName, nameOnDocument, nocNamesOwner = null }) {
+async function runDeskChecks({
+  record, spot, aadhaarName, nameOnDocument,
+  nocNamesOwner = null, inheritanceDocument = null,
+}) {
   const geocode = await geocodeAddress(record.claimed_address);
 
   const metres = geocode && spot.latitude !== null && spot.longitude !== null
@@ -684,9 +687,10 @@ async function runDeskChecks({ record, spot, aadhaarName, nameOnDocument, nocNam
     isTenant,
     nocNamesOwner,
     deceasedOnDocument: !!name?.deceased_holder,
+    inheritanceDocument,
   });
 
-  return { address, name, blockers, geocode, isTenant, checkedAgainst };
+  return { address, name, blockers, geocode, isTenant, checkedAgainst, inheritanceDocument };
 }
 
 /**
@@ -760,6 +764,7 @@ async function adminCheck(req, res) {
       aadhaarName: ctx.aadhaarName,
       nameOnDocument: req.body?.name_on_document,
       nocNamesOwner: typeof req.body?.noc_names_owner === 'boolean' ? req.body.noc_names_owner : null,
+      inheritanceDocument: req.body?.inheritance_document || null,
     });
 
     const updated = await saveAndSync(
@@ -885,6 +890,7 @@ async function adminDeskDecision(req, res) {
       aadhaarName: ctx.aadhaarName,
       nameOnDocument,
       nocNamesOwner: typeof req.body?.noc_names_owner === 'boolean' ? req.body.noc_names_owner : null,
+      inheritanceDocument: req.body?.inheritance_document || null,
     });
 
     // Some blockers are missing facts rather than judgment calls, and no
@@ -897,10 +903,14 @@ async function adminDeskDecision(req, res) {
         address: checks.address,
         name: checks.name,
         cannot_be_overridden: final.map((b) => b.code),
-        how_to_proceed: checks.isTenant && final.some((b) => b.code === 'NOC_DOES_NOT_NAME_OWNER')
-          ? 'Read the consent letter. If it names this owner and this address, send noc_names_owner: true. '
-            + 'If it does not, reject the submission with a reason.'
-          : 'Reject the submission with a reason the owner can act on.',
+        how_to_proceed: final.some((b) => b.code === 'DOCUMENT_HOLDER_DECEASED')
+          ? 'The ownership document names a dead holder. If you are holding a transfer document, '
+            + 'send inheritance_document as one of: khata_transfer, succession_certificate, '
+            + 'partition_deed, probated_will. If you are not, reject it and ask for one.'
+          : final.some((b) => b.code === 'NOC_DOES_NOT_NAME_OWNER')
+            ? 'Read the consent letter. If it names this owner and this address, send '
+              + 'noc_names_owner: true. If it does not, reject the submission with a reason.'
+            : 'Reject the submission with a reason the owner can act on.',
       });
     }
 
@@ -929,6 +939,12 @@ async function adminDeskDecision(req, res) {
         name_checked_against: checks.checkedAgainst,
         /** The admin read the consent letter and confirmed it names this owner. */
         noc_names_owner: checks.isTenant ? true : null,
+        /**
+         * WHICH transfer document the admin was holding, when the ownership
+         * document named a dead holder. A named document rather than a note,
+         * so it can be checked again later.
+         */
+        inheritance_doc_type: checks.name?.deceased_holder ? checks.inheritanceDocument : null,
         geocoded_lat: checks.geocode ? Number(checks.geocode.lat) : null,
         geocoded_lng: checks.geocode ? Number(checks.geocode.lon) : null,
         geocode_source: checks.geocode?.source || null,
@@ -1284,6 +1300,8 @@ async function adminDetail(req, res) {
          */
         name_checked_against: record.name_checked_against,
         noc_names_owner: record.noc_names_owner,
+        /** Set only when the ownership document named a deceased holder. */
+        inheritance_doc_type: record.inheritance_doc_type,
         address_match_metres: record.address_match_metres,
         address_match_verdict: record.address_match_verdict,
         geocoded_lat: record.geocoded_lat,

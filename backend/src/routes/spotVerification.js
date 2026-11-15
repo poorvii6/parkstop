@@ -6,6 +6,7 @@ const { authenticate, authorize } = require('../middleware/auth');
 const validate = require('../middleware/validator');
 const C = require('../controllers/spotVerificationController');
 const { SPOT_DOC_TYPES, RELATIONSHIPS } = require('../constants/spotVerification');
+const { INHERITANCE_DOC_TYPE_KEYS } = require('../constants/propertyDocTypes');
 
 const router = express.Router();
 
@@ -82,6 +83,10 @@ router.post(
     body('noc_names_owner')
       .optional()
       .isBoolean({ strict: true }).withMessage('noc_names_owner must be true or false'),
+    body('inheritance_document')
+      .optional()
+      .isIn(INHERITANCE_DOC_TYPE_KEYS)
+      .withMessage(`The transfer document must be one of: ${INHERITANCE_DOC_TYPE_KEYS.join(', ')}`),
     validate,
   ],
   C.adminCheck
@@ -110,6 +115,16 @@ router.post(
     body('noc_names_owner')
       .optional()
       .isBoolean({ strict: true }).withMessage('noc_names_owner must be true or false'),
+    /**
+     * When the ownership document names a dead holder: WHICH transfer document
+     * the admin is holding. A choice from a list rather than a note, for the
+     * same reason noc_names_owner is a boolean — naming the document is a
+     * statement of fact, a note is a keystroke.
+     */
+    body('inheritance_document')
+      .optional()
+      .isIn(INHERITANCE_DOC_TYPE_KEYS)
+      .withMessage(`The transfer document must be one of: ${INHERITANCE_DOC_TYPE_KEYS.join(', ')}`),
     // Both are free text an owner or an auditor will read, so they are bounded
     // but not otherwise shaped.
     body('reason')

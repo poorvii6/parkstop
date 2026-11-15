@@ -130,94 +130,112 @@ const isInitial = (token) => token.length === 1;
 const VOWELS = new Set(['A', 'E', 'I', 'O', 'U']);
 
 /**
- * One name, reduced to a shape that survives being spelled a different way.
+ * A TRANSLITERATION KEY: one name reduced to the sounds it is made of, so that
+ * two English spellings of the same Indian name produce the same string.
  *
- * WHY THIS IS NOT EDIT DISTANCE. The pairs that must be treated as the same
- * name and the pair that must not are not separable by how many characters
- * differ — the ordering actively runs the wrong way:
+ * WHY A KEY AND NOT A LIST OF PATTERNS. The first version of this matched
+ * patterns case by case and was tuned to six examples. Ten common Karnataka
+ * surnames that were not among those six then failed — Gowda/Gouda,
+ * Reddy/Reddi, Shetty/Shetti, Naik/Nayak, Syed/Sayed,
+ * Chandrashekar/Chandrashekhar, Siddarth/Siddharth — and Gowda, Reddy and
+ * Shetty are three of the commonest surnames in the state. Normalising both
+ * sides to a key and comparing keys handles the whole class instead of the
+ * examples somebody happened to write down.
+ *
+ * WHY NOT EDIT DISTANCE. The ordering runs the wrong way, so no threshold can
+ * separate the two sets:
  *
  *   LAKSHMANA / LAXMAN     4 edits apart, and the SAME name
  *   ANITA     / SUNITA     2 edits apart, and DIFFERENT people
  *
- * So a distance threshold that accepts Lakshmana would accept Anita/Sunita
- * several times over. The variation in Kannada, Tamil and Urdu names rendered
- * in English is not random noise; it is a small set of known substitutions.
- * Those are what this encodes, and nothing else.
+ * THE COLLAPSES, applied in this order to both sides. Order matters where
+ * noted, because an earlier step can hide what a later one looks for.
  *
- * The rules, applied in this order to both sides:
+ *   1. W, V -> U        Gowda/Gouda, and v/w are one sound here
+ *   2. Y -> I           Reddy/Reddi, Shetty/Shetti, Nayak/Naik
+ *   3. KSH -> X         Lakshmana/Laxman. BEFORE step 4, which would eat the H
+ *   4. consonant+H -> consonant   Chandrashekar/Chandrashekhar,
+ *                       Siddarth/Siddharth, Ramesh/Rames, Krishna/Krisna
+ *   5. strip -APPA/-ANNA   Krishnappa/Krishna. BEFORE step 6, which would turn
+ *                       APPA into APA and leave nothing to find
+ *   6. doubled consonant -> single   Reddy/Redy, Mohammad/Mohamad
+ *   7. TERMINAL A deleted
+ *   8. interior vowels deleted   Syed/Sayed, Naik/Nayak, Mohammad/Mohammed
  *
- *   1. X -> KSH        LAXMAN -> LAKSHMAN
- *   2. drop a trailing -APPA   KRISHNAPPA -> KRISHN   (Kannada suffix)
- *   3. SH -> S         RAMESH -> RAMES, KRISHNA -> KRISNA
- *   4. collapse doubled consonants   MOHAMMAD -> MOHAMAD
- *   5. drop a trailing vowel   RAMESHA -> RAMESH
+ * STEP 7 IS ONLY EVER AN 'A', AND THAT BOUNDARY IS THE WHOLE POINT. A terminal
+ * -a is a real Kannada ending: Ramesha, Manjunatha, Lakshmana, Venkatesha are
+ * the same names as Ramesh, Manjunath, Laxman, Venkatesh. A terminal -i, -u or
+ * -e is NOT decoration, it is usually the FEMININE form or a different name
+ * outright. Deleting those made Kumar/Kumari, Dev/Devi and Babu/Baba read as
+ * spelling variants of each other, which is two different people being told
+ * they are one.
  *
- * Order matters: -APPA is stripped before doubled consonants, or KRISHNAPPA
- * becomes KRISHNAPA and the suffix is no longer there to find.
- *
- * Step 5 is why RAMESHA/RAMESH and VENKATESHA/VENKATESH collapse together, and
- * it is safe because a trailing vowel is the single commonest optional
- * character in these transliterations. It is NOT safe in the other direction:
- * nothing here drops a LEADING character, which is exactly what would be
- * needed to make ANITA and SUNITA agree.
+ * STEP 8 KEEPS THE FIRST AND LAST CHARACTERS. Nothing here may drop or insert
+ * a LEADING character, which is exactly what Anita/Sunita would need, and
+ * keeping the last character is what preserves the step-7 distinction.
  */
-function transliterationSkeleton(token) {
-  let s = String(token || '').toUpperCase();
+function transliterationKey(token) {
+  let s = String(token || '').toUpperCase().replace(/[^A-Z]/g, '');
+  if (!s) return '';
 
-  // 1. Laxman and Lakshman are the same man.
-  s = s.replace(/X/g, 'KSH');
+  // 1. Gowda / Gouda. V and W are the same sound as U in these spellings.
+  s = s.replace(/[WV]/g, 'U');
 
-  // 2. -appa / -anna are affectionate Kannada suffixes on a given name:
-  //    Krishna becomes Krishnappa, Siddha becomes Siddappa. Only stripped
-  //    when enough of a name is left to still be a name.
+  // 2. Y is a glide, written I as often as not: Reddy/Reddi, Nayak/Naik.
+  //    Doing it here also means step 8 treats it as the vowel it is.
+  s = s.replace(/Y/g, 'I');
+
+  // 3. Laxman and Lakshman are the same man. Before the H rule, which would
+  //    turn KSH into KS and leave no cluster to recognise.
+  s = s.replace(/KSH/g, 'X');
+
+  // 4. An H after a consonant is decoration, and inconsistently written:
+  //    Chandrashekar/Chandrashekhar, Siddarth/Siddharth, Bharat/Barat.
+  s = s.replace(/([^AEIOU])H/g, '$1');
+
+  // 5. -appa / -anna are Kannada suffixes on a given name: Krishna becomes
+  //    Krishnappa. Before step 6, which would make APPA into APA.
   const suffix = s.match(/^(.{3,})(APPA|ANNA)$/);
   if (suffix) [, s] = suffix;
 
-  // 3. Krishna / Krisna, Shiva / Siva, Ramesh / Rames.
-  s = s.replace(/SH/g, 'S');
+  // 6. Reddy / Redy, Mohammad / Mohamad, Siddique / Sidique.
+  s = s.replace(/([^AEIOU])\1+/g, '$1');
 
-  // 4. Mohammad / Mohamad, Siddique / Sidique.
-  s = s.replace(/([BCDFGJKLMNPQRSTVWXZ])\1+/g, '$1');
+  // 7. A terminal A, and ONLY an A. See the note above: -i, -u and -e are
+  //    load-bearing (Kumar/Kumari, Dev/Devi, Babu/Baba).
+  if (s.length > 2 && s.endsWith('A')) s = s.slice(0, -1);
 
-  // 5. Ramesha / Ramesh, Venkatesha / Venkatesh, Lakshmana / Lakshman.
-  //    Only a trailing vowel, and never the whole token.
-  if (s.length > 2 && VOWELS.has(s[s.length - 1])) s = s.slice(0, -1);
-
-  return s;
+  // 8. Interior vowels are optional in these spellings: Syed/Sayed,
+  //    Naik/Nayak, Mohammad/Mohammed. First and last are kept — the first
+  //    because a leading letter is never optional, the last because that is
+  //    what keeps step 7's distinction alive.
+  if (s.length <= 2) return s;
+  const middle = [...s.slice(1, -1)].filter((c) => !VOWELS.has(c)).join('');
+  return s[0] + middle + s[s.length - 1];
 }
+
+/** The shortest token this will treat as a spelling variant of another. */
+const MIN_VARIANT_LENGTH = 3;
 
 /**
  * Are these two tokens one name spelled two ways?
  *
- * The skeletons agreeing is the main test. The one extra allowance is a single
- * vowel swapped for another vowel at the same position — MOHAMMAD against
- * MOHAMMED, which is the commonest Urdu/Arabic rendering difference there is
- * and which no consonant rule can reach.
- *
- * That allowance is tightly bounded on purpose: same length, exactly one
- * differing position, and both characters must be vowels. It cannot insert,
- * delete or change a consonant, so it can never turn ANITA into SUNITA (a
- * leading insertion) or RAJESH into RAMESH (a consonant swap).
+ * Keys agreeing, and nothing else — no distance, no partial credit. Short
+ * tokens are excluded because a two-letter key carries too little to be
+ * evidence of anything, and so are initials.
  */
 function sameNameDifferentSpelling(a, b) {
-  if (isInitial(a) || isInitial(b)) return false;
+  const left = String(a || '').toUpperCase().replace(/[^A-Z]/g, '');
+  const right = String(b || '').toUpperCase().replace(/[^A-Z]/g, '');
 
-  const left = transliterationSkeleton(a);
-  const right = transliterationSkeleton(b);
-  if (!left || !right) return false;
-  if (left === right) return true;
+  if (left.length < MIN_VARIANT_LENGTH || right.length < MIN_VARIANT_LENGTH) return false;
+  if (isInitial(left) || isInitial(right)) return false;
 
-  if (left.length !== right.length) return false;
+  const keyA = transliterationKey(left);
+  const keyB = transliterationKey(right);
+  if (!keyA || !keyB || keyA.length < 2) return false;
 
-  let differing = 0;
-  for (let i = 0; i < left.length; i += 1) {
-    if (left[i] === right[i]) continue;
-    // A consonant that disagrees is a different name, however close.
-    if (!VOWELS.has(left[i]) || !VOWELS.has(right[i])) return false;
-    differing += 1;
-    if (differing > 1) return false;
-  }
-  return differing === 1;
+  return keyA === keyB;
 }
 
 /**
@@ -411,7 +429,7 @@ module.exports = {
   DECEASED_MARKERS,
   normalizeName,
   namesDeceasedHolder,
-  transliterationSkeleton,
+  transliterationKey,
   sameNameDifferentSpelling,
   compareNames,
   explainNameMatch,

@@ -20,6 +20,7 @@ const {
 } = require('../constants/spotVerification');
 const { FINE_PRECISIONS } = require('./geocoding');
 const { GOOD_NAME_MATCH, REVIEW_NAME_MATCH } = require('./nameMatch');
+const { INHERITANCE_DOC_TYPE_KEYS } = require('../constants/propertyDocTypes');
 
 /** What we promise the owner. */
 const SLA_HOURS = 48;
@@ -273,6 +274,8 @@ const NAME_CHECKED_AGAINST = {
  * @param {string}      [args.checkedAgainst]  see NAME_CHECKED_AGAINST
  * @param {boolean}     [args.isTenant]
  * @param {boolean|null}[args.nocNamesOwner]   admin's answer; tenants only
+ * @param {boolean}     [args.deceasedOnDocument]
+ * @param {string|null} [args.inheritanceDocument]  see INHERITANCE_DOC_TYPES
  */
 function deskPassBlockers({
   nameVerdict,
@@ -281,6 +284,7 @@ function deskPassBlockers({
   isTenant = false,
   nocNamesOwner = null,
   deceasedOnDocument = false,
+  inheritanceDocument = null,
 }) {
   const blockers = [];
 
@@ -300,11 +304,23 @@ function deskPassBlockers({
    * all. What the override buys is a WRITTEN record of which inheritance or
    * khata-transfer document the admin actually saw, kept in review_log.
    */
-  if (deceasedOnDocument) {
+  if (deceasedOnDocument && !INHERITANCE_DOC_TYPE_KEYS.includes(inheritanceDocument)) {
     blockers.push({
       code: 'DOCUMENT_HOLDER_DECEASED',
       message: 'The document names a LATE holder, so it does not show that the applicant owns the '
-        + 'property now. Ask for the inheritance or khata-transfer papers, and record what you saw.',
+        + 'property now. Name the transfer document you are holding — a khata transfer, succession '
+        + 'certificate, partition deed or probated will.',
+      /**
+       * Not clearable by a written reason, only by naming the document.
+       *
+       * It stays overridable in substance — an heir with the right paperwork
+       * gets through — but the override is a CHOICE from a list rather than a
+       * note, for the same reason the NOC confirmation is. A note is a
+       * keystroke; "I am holding a succession certificate" is a statement of
+       * fact, recorded against the spot, that can be checked later and that
+       * somebody has put their name to.
+       */
+      final: true,
     });
   }
 

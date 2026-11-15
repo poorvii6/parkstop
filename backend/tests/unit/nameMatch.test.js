@@ -17,7 +17,7 @@ const {
   REVIEW_NAME_MATCH,
   normalizeName,
   namesDeceasedHolder,
-  transliterationSkeleton,
+  transliterationKey,
   sameNameDifferentSpelling,
   compareNames,
   explainNameMatch,
@@ -181,89 +181,132 @@ describe('the policy lists the verdicts are in', () => {
 });
 
 /**
- * One name, two spellings.
+ * ONE NAME, TWO SPELLINGS — and the specification for the rule, both ways.
  *
- * In Bengaluru this is the normal case, not the edge case. When a conflicting
- * surname was first made to block, these all came out NO_MATCH, which would
- * have meant an admin overriding NO_MATCH on most honest submissions — the
- * keystroke-not-a-signal problem, recreated in the person check by the fix for
- * the tenant check.
+ * In Bengaluru a name written two ways is the NORMAL case, not the edge case.
+ * When a conflicting surname was first made to block, every pair in the first
+ * list below came out NO_MATCH, which would have meant an admin overriding
+ * NO_MATCH on most honest submissions — the keystroke-not-a-signal problem,
+ * recreated in the person check by the fix for the tenant check.
  *
- * They land in MODERATE_PARTIAL_MATCH: flagged for the human reading the
- * document, never blocked, and never a clean pass either.
+ * BOTH LISTS ARE HERE ON PURPOSE. A rule like this is only meaningful as a
+ * pair of boundaries, and the first version of it was tuned to six examples
+ * and then failed on seven common Karnataka surnames that were not among them.
+ * Whoever changes `transliterationKey` next needs to see what it is for in
+ * both directions, in one place, without having to guess which cases mattered.
  */
+const SAME_NAME = [
+  // The seven that a pattern-by-pattern rule missed. Gowda, Reddy and Shetty
+  // are three of the commonest surnames in Karnataka.
+  ['PAVAN GOWDA', 'PAVAN GOUDA', 'w/u'],
+  ['SRINIVAS REDDY', 'SRINIVAS REDDI', 'terminal y/i'],
+  ['RAVI SHETTY', 'RAVI SHETTI', 'terminal y/i'],
+  ['GANESH NAIK', 'GANESH NAYAK', 'i/ay'],
+  ['ASIF SYED', 'ASIF SAYED', 'inserted interior vowel'],
+  ['CHANDRASHEKAR N', 'CHANDRASHEKHAR N', 'dropped h'],
+  ['SIDDARTH RAO', 'SIDDHARTH RAO', 'dropped h'],
+  // Terminal -a is a real Kannada ending.
+  ['RAMESHA KUMAR', 'RAMESH KUMAR', 'terminal a'],
+  ['SURESHA KUMAR', 'SURESH KUMAR', 'terminal a'],
+  ['VENKATESHA RAO', 'VENKATESH RAO', 'terminal a'],
+  ['MANJUNATHA SHETTY', 'MANJUNATH SHETTY', 'terminal a'],
+  ['LAKSHMANA RAO', 'LAXMAN RAO', 'ksh/x and terminal a'],
+  ['KRISHNAPPA GOWDA', 'KRISHNA GOWDA', '-appa suffix'],
+  ['MOHAMMAD ALI', 'MOHAMMED ALI', 'doubled consonant, interior vowel'],
+];
+
+const DIFFERENT_PEOPLE = [
+  // A LEADING letter is never optional. This is the pair that kills a lazy
+  // fix: two edits apart and different people, while LAKSHMANA/LAXMAN is four
+  // edits apart and the same name — so no distance threshold can separate the
+  // two lists.
+  ['ANITA SHARMA', 'SUNITA SHARMA', 'leading letter'],
+  ['RAMESH KUMAR', 'RAMESH GUPTA', 'different surname'],
+  ['SURESH BABU', 'SURESH NAIR', 'different surname'],
+  ['ANITA SHARMA', 'ANITA VERMA', 'different surname'],
+  ['RAJESH KUMAR', 'RAMESH KUMAR', 'a consonant that disagrees'],
+  ['RAM', 'RAJ', 'too short to be evidence'],
+  // THE FEMININE FORMS. Deleting a terminal -i, -u or -e made these read as
+  // spelling variants, which is two different people being told they are one.
+  // Only a terminal -A is deleted.
+  ['RAMESH KUMAR', 'RAMESH KUMARI', 'feminine form'],
+  ['SUNIL KUMAR', 'SUNIL KUMARI', 'feminine form'],
+  ['ARUN DEV', 'ARUN DEVI', 'feminine form'],
+  ['SURESH BABU', 'SURESH BABA', 'terminal u is not terminal a'],
+];
+
 describe('a name spelled two ways is the same name', () => {
-  const variants = [
-    ['RAMESHA', 'RAMESH', 'trailing vowel'],
-    ['SURESHA', 'SURESH', 'trailing vowel'],
-    ['VENKATESHA', 'VENKATESH', 'trailing vowel'],
-    ['KRISHNAPPA', 'KRISHNA', '-appa suffix'],
-    ['LAKSHMANA', 'LAXMAN', 'ksh/x and a trailing vowel'],
-    ['MOHAMMAD', 'MOHAMMED', 'doubled consonant and a vowel swap'],
-  ];
+  test.each(SAME_NAME)('%s and %s are one name (%s)', (a, b) => {
+    const r = compareNames(a, b);
 
-  test.each(variants)('%s and %s are one name (%s)', (a, b) => {
-    expect(sameNameDifferentSpelling(a, b)).toBe(true);
-  });
-
-  test.each(variants)('%s / %s is flagged, not blocked (%s)', (a, b) => {
-    const r = compareNames(`${a} Kumar`, `${b} Kumar`);
-
+    // Flagged for the human reading the document...
     expect(r.verdict).toBe(NAME_MATCH.MODERATE_PARTIAL);
     expect(r.via_variant).toBe(true);
     expect(REVIEW_NAME_MATCH).toContain(r.verdict);
-    // Flagged, but never mistaken for confirmation.
+    // ...never blocked, and never a clean pass either.
     expect(GOOD_NAME_MATCH).not.toContain(r.verdict);
   });
 
-  test('ANITA SHARMA and SUNITA SHARMA stay NO_MATCH', () => {
-    // The test that kills a lazy fix. ANITA/SUNITA is TWO edits apart and must
-    // fail, while LAKSHMANA/LAXMAN is FOUR edits apart and must pass — so the
-    // ordering by distance runs backwards and no distance threshold can
-    // separate them. The rules are patterns, not a budget.
-    const r = compareNames('ANITA SHARMA', 'SUNITA SHARMA');
+  test.each(DIFFERENT_PEOPLE)('%s and %s are different people (%s)', (a, b) => {
+    const r = compareNames(a, b);
 
     expect(r.verdict).toBe(NAME_MATCH.NONE);
-    expect(sameNameDifferentSpelling('ANITA', 'SUNITA')).toBe(false);
+    expect(GOOD_NAME_MATCH).not.toContain(r.verdict);
+    expect(REVIEW_NAME_MATCH).not.toContain(r.verdict);
   });
 
-  test('a leading letter is never optional, which is what ANITA/SUNITA turns on', () => {
-    // Nothing in the rules drops or inserts a LEADING character. Every rule
-    // works on the tail or on a known consonant cluster.
+  test('a terminal A is deleted, and i/u/e are not', () => {
+    // The one rule that needed care, stated on its own because it is the
+    // boundary between the two lists above.
+    expect(sameNameDifferentSpelling('RAMESHA', 'RAMESH')).toBe(true);
+    expect(sameNameDifferentSpelling('MANJUNATHA', 'MANJUNATH')).toBe(true);
+    expect(sameNameDifferentSpelling('LAKSHMANA', 'LAKSHMAN')).toBe(true);
+
+    expect(sameNameDifferentSpelling('KUMARI', 'KUMAR')).toBe(false);
+    expect(sameNameDifferentSpelling('DEVI', 'DEV')).toBe(false);
+    expect(sameNameDifferentSpelling('BABU', 'BABA')).toBe(false);
+    expect(sameNameDifferentSpelling('LATHE', 'LATH')).toBe(false);
+  });
+
+  test('a leading character is never optional', () => {
     expect(sameNameDifferentSpelling('ANITA', 'SUNITA')).toBe(false);
     expect(sameNameDifferentSpelling('ESH', 'RESH')).toBe(false);
     expect(sameNameDifferentSpelling('RAM', 'SRAM')).toBe(false);
+    expect(sameNameDifferentSpelling('OMANA', 'KOMANA')).toBe(false);
   });
 
-  test('a consonant that disagrees is a different name, however close', () => {
+  test('a consonant that disagrees is a different name', () => {
     expect(sameNameDifferentSpelling('RAJESH', 'RAMESH')).toBe(false);
     expect(sameNameDifferentSpelling('RAJESHA', 'RAMESH')).toBe(false);
-    expect(sameNameDifferentSpelling('BABU', 'NAIR')).toBe(false);
     expect(sameNameDifferentSpelling('SHARMA', 'VERMA')).toBe(false);
+    expect(sameNameDifferentSpelling('GUPTA', 'GUPTE')).toBe(false);
   });
 
-  test('only ONE vowel may be swapped, and only for another vowel', () => {
-    // The Mohammad/Mohammed allowance, bounded so it cannot grow into a
-    // general edit-distance match.
-    expect(sameNameDifferentSpelling('MOHAMMAD', 'MOHAMMED')).toBe(true);
-    // Two vowels apart is not one spelling difference.
-    expect(sameNameDifferentSpelling('MOHAMMAD', 'MUHAMMED')).toBe(false);
-    // A vowel for a consonant is a different name.
-    expect(sameNameDifferentSpelling('RAMAN', 'RAMEN')).toBe(true);
-    expect(sameNameDifferentSpelling('RAMAN', 'RAMDN')).toBe(false);
-  });
-
-  test('an initial is never a spelling variant', () => {
+  test('a token too short to carry evidence is never a variant', () => {
+    // A two-character key says almost nothing, so it is not allowed to say it.
+    expect(sameNameDifferentSpelling('RA', 'RE')).toBe(false);
+    expect(sameNameDifferentSpelling('AB', 'AB')).toBe(false);
     expect(sameNameDifferentSpelling('R', 'RAMESH')).toBe(false);
     expect(sameNameDifferentSpelling('RAMESH', 'R')).toBe(false);
   });
 
-  test('the skeleton is shown so a reviewer can see why', () => {
-    expect(transliterationSkeleton('LAXMAN')).toBe(transliterationSkeleton('LAKSHMANA'));
-    expect(transliterationSkeleton('KRISHNAPPA')).toBe(transliterationSkeleton('KRISHNA'));
+  test('the key is what two spellings agree on, and it is inspectable', () => {
+    // Shown because a reviewer looking at a flagged name should be able to see
+    // WHY the two were considered the same.
+    expect(transliterationKey('GOWDA')).toBe(transliterationKey('GOUDA'));
+    expect(transliterationKey('REDDY')).toBe(transliterationKey('REDDI'));
+    expect(transliterationKey('NAYAK')).toBe(transliterationKey('NAIK'));
+    expect(transliterationKey('CHANDRASHEKHAR')).toBe(transliterationKey('CHANDRASHEKAR'));
+    expect(transliterationKey('LAXMAN')).toBe(transliterationKey('LAKSHMANA'));
+    expect(transliterationKey('KRISHNAPPA')).toBe(transliterationKey('KRISHNA'));
+
+    expect(transliterationKey('KUMAR')).not.toBe(transliterationKey('KUMARI'));
+    expect(transliterationKey('ANITA')).not.toBe(transliterationKey('SUNITA'));
+
     // A short token is never reduced to nothing.
-    expect(transliterationSkeleton('A')).toBe('A');
-    expect(transliterationSkeleton('RA')).toBe('RA');
+    expect(transliterationKey('A')).toBe('A');
+    expect(transliterationKey('RA')).toBe('RA');
+    expect(transliterationKey('')).toBe('');
   });
 });
 

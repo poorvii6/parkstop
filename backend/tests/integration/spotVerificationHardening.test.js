@@ -587,6 +587,110 @@ describe('a tenant\'s document is checked against the landlord, not the tenant',
   });
 });
 
+// ───────────── an inherited khata in a dead parent's name ─────────────
+
+/**
+ * Ordinary in Bengaluru, and the hardest case in the whole flow.
+ *
+ * LATE used to be discarded with the honorifics, so "LATE RAJESH KUMAR"
+ * against a verified "RAJESH KUMAR" came back DIRECT_MATCH — and sons often
+ * carry the father's name, so the document that LEAST establishes current
+ * ownership scored the perfect match.
+ *
+ * It cannot simply be refused: that leaves honest heirs no route. It is
+ * cleared by NAMING the transfer document, not by writing a note — the same
+ * distinction the NOC confirmation draws. A note is a keystroke; "I am holding
+ * a succession certificate" is a statement of fact.
+ */
+describe('a document naming a deceased holder', () => {
+  async function inheritedSpot(title) {
+    const id = await makeSpot(ids.owner, title);
+    await uploadDoc(OWNER, id, { file: `inherited-${title}`, address: ADDRESS_A });
+    await submit(OWNER, id);
+    return id;
+  }
+
+  test('a free-text override does NOT clear it', async () => {
+    const id = await inheritedSpot('late-note-not-enough');
+
+    const res = await desk(ADMIN, id, {
+      decision: 'pass',
+      name_on_document: 'LATE Rajesh Kumar',
+      override_reason: 'Son of the deceased, known to us, waving this through.',
+    });
+
+    expect(res.status).toBe(409);
+    expect(res.body.blockers.map((b) => b.code)).toContain('DOCUMENT_HOLDER_DECEASED');
+    expect(res.body.cannot_be_overridden).toContain('DOCUMENT_HOLDER_DECEASED');
+    expect(res.body.how_to_proceed).toMatch(/succession_certificate/);
+    expect((await recordFor(id)).status).toBe('desk_pending');
+  });
+
+  test('naming the transfer document clears it, and the choice is recorded', async () => {
+    const id = await inheritedSpot('late-named-document');
+
+    const res = await desk(ADMIN, id, {
+      decision: 'pass',
+      name_on_document: 'LATE Rajesh Kumar',
+      inheritance_document: 'succession_certificate',
+    });
+
+    expect(res.status).toBe(200);
+    const record = await recordFor(id);
+    expect(record.status).toBe('desk_approved');
+    expect(record.inheritance_doc_type).toBe('succession_certificate');
+    // It was not an override — nothing was waved through.
+    expect(record.desk_override_reason).toBeNull();
+  });
+
+  test('every transfer document on the list is accepted', async () => {
+    for (const doc of ['khata_transfer', 'succession_certificate', 'partition_deed', 'probated_will']) {
+      const id = await inheritedSpot(`late-${doc}`);
+      const res = await desk(ADMIN, id, {
+        decision: 'pass', name_on_document: 'LATE Rajesh Kumar', inheritance_document: doc,
+      });
+      expect(res.status).toBe(200);
+      expect((await recordFor(id)).inheritance_doc_type).toBe(doc);
+    }
+  });
+
+  test('an invented transfer document is refused by the validator', async () => {
+    const id = await inheritedSpot('late-invented-document');
+
+    const res = await desk(ADMIN, id, {
+      decision: 'pass',
+      name_on_document: 'LATE Rajesh Kumar',
+      inheritance_document: 'a letter from the family',
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.errors.map((e) => e.field)).toContain('inheritance_document');
+    expect((await recordFor(id)).status).toBe('desk_pending');
+  });
+
+  test('a living holder is unaffected and stores no transfer document', async () => {
+    const id = await inheritedSpot('late-living-holder');
+
+    const res = await desk(ADMIN, id, { decision: 'pass', name_on_document: 'Rajesh Kumar' });
+
+    expect(res.status).toBe(200);
+    expect((await recordFor(id)).inheritance_doc_type).toBeNull();
+  });
+
+  test('a deceased holder whose name is also WRONG is still blocked on the name', async () => {
+    const id = await inheritedSpot('late-and-wrong-name');
+
+    const res = await desk(ADMIN, id, {
+      decision: 'pass',
+      name_on_document: 'LATE Mohan Lal',
+      inheritance_document: 'succession_certificate',
+    });
+
+    expect(res.status).toBe(409);
+    expect(res.body.blockers.map((b) => b.code)).toContain('NAME_NO_MATCH');
+  });
+});
+
 // ──────────────────────── PDFs are the normal case ────────────────────────
 
 /**

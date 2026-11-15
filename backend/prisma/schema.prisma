@@ -227,6 +227,17 @@ model spot_verifications {
   /// the person claiming it — a genuine khata plus a letter written for a
   /// previous tenant would have passed, both documents real.
   noc_names_owner       Boolean?
+  /// When the ownership document named a LATE (deceased) holder: WHICH
+  /// transfer document the admin was holding.
+  ///
+  /// khata_transfer | succession_certificate | partition_deed | probated_will.
+  /// An inherited khata still in a dead parent's name is ordinary in
+  /// Bengaluru, so such a document cannot simply be refused — that would
+  /// leave honest heirs no route. But it is cleared by NAMING the transfer
+  /// document, not by a free-text note: a note is a keystroke, whereas "I am
+  /// holding a succession certificate" is a statement of fact that can be
+  /// checked again later and that somebody has put their name to.
+  inheritance_doc_type  String?   @db.VarChar(40)
   /// Where claimed_address geocoded to, kept so address_match_metres can be
   /// explained months later instead of being an unaccountable number.
   geocoded_lat          Decimal?  @db.Decimal(10, 8)

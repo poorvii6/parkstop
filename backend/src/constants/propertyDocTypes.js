@@ -72,6 +72,28 @@ const PROPERTY_DOC_TYPES = [
 const PROPERTY_DOC_TYPE_KEYS = PROPERTY_DOC_TYPES.map((d) => d.key);
 
 /**
+ * What can carry ownership from a dead holder to the person in front of us.
+ *
+ * An inherited khata still in a dead parent's name is ordinary in Bengaluru,
+ * so a document naming a LATE holder cannot simply be refused — that would
+ * leave honest heirs with no route at all. But it cannot be waved through on a
+ * free-text note either.
+ *
+ * So the admin NAMES THE DOCUMENT THEY ARE HOLDING, from this list. That is
+ * the same distinction the NOC confirmation draws: a note is a keystroke,
+ * whereas "I am looking at a succession certificate" is a statement of fact
+ * that can be wrong, can be checked later, and someone has put their name to.
+ */
+const INHERITANCE_DOC_TYPES = [
+  { key: 'khata_transfer', label: 'Khata transfer / mutation in the heir\'s name' },
+  { key: 'succession_certificate', label: 'Succession certificate' },
+  { key: 'partition_deed', label: 'Partition deed between the heirs' },
+  { key: 'probated_will', label: 'Probated will' },
+];
+
+const INHERITANCE_DOC_TYPE_KEYS = INHERITANCE_DOC_TYPES.map((d) => d.key);
+
+/**
  * The types that mean the submitter is a tenant.
  *
  * Derived, not written out again. Stage 3 refuses a submission with one of
@@ -93,7 +115,9 @@ const TENANCY_DOC_TYPE_KEYS = PROPERTY_DOC_TYPES
  */
 function labelForDocType(key) {
   if (!key) return null;
-  return PROPERTY_DOC_TYPES.find((d) => d.key === key)?.label || String(key);
+  return PROPERTY_DOC_TYPES.find((d) => d.key === key)?.label
+    || INHERITANCE_DOC_TYPES.find((d) => d.key === key)?.label
+    || String(key);
 }
 
 module.exports = {
@@ -102,5 +126,7 @@ module.exports = {
   PROPERTY_DOC_TYPES,
   PROPERTY_DOC_TYPE_KEYS,
   TENANCY_DOC_TYPE_KEYS,
+  INHERITANCE_DOC_TYPES,
+  INHERITANCE_DOC_TYPE_KEYS,
   labelForDocType,
 };
