@@ -130,6 +130,14 @@ const isInitial = (token) => token.length === 1;
 const VOWELS = new Set(['A', 'E', 'I', 'O', 'U']);
 
 /**
+ * The shortest stem that may lose a terminal -u.
+ *
+ * BASAVARAJU -> BASAVARAJ (9) qualifies; BABU -> BAB (3) does not, which is
+ * what keeps BABU and BABA apart. See step 7 of transliterationKey.
+ */
+const MIN_STEM_FOR_TERMINAL_U = 5;
+
+/**
  * A TRANSLITERATION KEY: one name reduced to the sounds it is made of, so that
  * two English spellings of the same Indian name produce the same string.
  *
@@ -201,7 +209,13 @@ function transliterationKey(token) {
   //    Doing it here also means step 8 treats it as the vowel it is.
   s = s.replace(/Y/g, 'I');
 
-  // 3. Laxman and Lakshman are the same man. Before the H rule, which would
+  // 3. Farooq / Farukh / Faruk, Tariq / Tarik, Qadir / Kadir. Q spells the
+  //    same sound as K in every Indian name rendered in English, and the
+  //    consonant+H rule already reduces KH to K — so without this, FARUKH
+  //    became FARUK while FAROOQ stayed FAROOQ.
+  s = s.replace(/Q/g, 'K');
+
+  // 4. Laxman and Lakshman are the same man. Before the H rule, which would
   //    turn KSH into KS and leave no cluster to recognise.
   s = s.replace(/KSH/g, 'X');
 
@@ -217,9 +231,34 @@ function transliterationKey(token) {
   // 6. Reddy / Redy, Mohammad / Mohamad, Siddique / Sidique.
   s = s.replace(/([^AEIOU])\1+/g, '$1');
 
-  // 7. A terminal A, and ONLY an A. See the note above: -i, -u and -e are
-  //    load-bearing (Kumar/Kumari, Dev/Devi, Babu/Baba).
+  /**
+   * 7. A terminal A always; a terminal U only off a LONG stem.
+   *
+   * -a is a real Kannada ending and is always dropped: Ramesha/Ramesh,
+   * Manjunatha/Manjunath, Venkatesha/Venkatesh.
+   *
+   * -u is the awkward one, and the first version of this just left it out
+   * without saying so. It IS a real ending — Basavaraju/Basavaraj,
+   * Muniraju/Muniraj, Nagaraju/Nagaraj are everywhere in Karnataka — but
+   * dropping it unconditionally merges BABU with BABA, and Babu and Baba are
+   * different people.
+   *
+   * The stem length separates them. Strip -u only when at least five
+   * characters remain, so BASAVARAJU (stem BASAVARAJ, nine) qualifies and
+   * BABU (stem BAB, three) does not. Short stems are where the feminine and
+   * diminutive forms live — Babu, Guru, Ramu, Manju — and a five-character
+   * stem is long enough that an -u on the end is an ending rather than the
+   * name itself.
+   *
+   * The cost, stated rather than hidden: RAMU/RAMA and MANJU/MANJA stay
+   * separate, which is an override each. That is the feminine-forms side of
+   * the trade, chosen deliberately — telling two people they are one is worse
+   * than asking a human about two spellings.
+   *
+   * -i and -e are never dropped: Kumar/Kumari, Dev/Devi, Lath/Lathe.
+   */
   if (s.length > 2 && s.endsWith('A')) s = s.slice(0, -1);
+  else if (s.endsWith('U') && s.length - 1 >= MIN_STEM_FOR_TERMINAL_U) s = s.slice(0, -1);
 
   // 8. Interior vowels are optional in these spellings: Syed/Sayed,
   //    Naik/Nayak, Mohammad/Mohammed. First and last are kept — the first
@@ -234,26 +273,82 @@ function transliterationKey(token) {
 const MIN_VARIANT_LENGTH = 3;
 
 /**
- * THE CONFIDENCE FLOOR: how much a key of this length is worth.
+ * THE CONFIDENCE FLOOR: how much is this agreement actually worth?
  *
- * A key is a lossy reduction, and a SHORT key has thrown away most of the
- * name. Measured against a corpus of 182 common Indian names (the collision
- * table in tests/unit/nameMatch.test.js), every wrong merge sits at a key of
- * two characters — KHAN/KHANNA, SYED/SUDHA, JAYA/JAI — while at three
- * characters and above essentially every collision is a genuine spelling
- * variant.
+ * A key is a lossy reduction, so two different names can reach the same one.
+ * The first version of this floor measured only the key's LENGTH, on the
+ * claim that "every wrong merge sits at a two-character key" — and that claim
+ * was false, with the counterexample sitting in this repo's own test corpus:
  *
- * Two characters CANNOT simply be rejected: Gowda/Gouda, Naik/Nayak and
- * Syed/Sayed all reduce to two, and they are three of the pairs this exists
- * to catch. So the floor does not block — it LABELS. A variant match on a
- * two-character key is reported as weak, the explanation says so, and the
- * verdict stays MODERATE_PARTIAL_MATCH, which already means "a human reads
- * the document and decides".
+ *   SINGH / SANGHA   key SNG, three characters, and two different surnames
  *
- * That is the safe direction, and it is why this is a tightening rather than
- * a fix: an over-merge lands on a flagged verdict, never on a clean pass.
+ * Three characters made it read to a reviewer as an ordinary spelling match
+ * with no caveat. Lowering the threshold to three is not the fix either: that
+ * would label REDDY/REDDI and SIDDARTH/SIDDHARTH weak, and those are
+ * genuinely one name.
+ *
+ * So the floor measures BOTH, and the second measure is the one that
+ * separates them — HOW FAR APART THE ORIGINALS ARE:
+ *
+ *   GOWDA / GOUDA    1 edit   one character differs. A spelling.
+ *   GOWDA / GUDDA    2 edits  two differ. A leap.
+ *   SINGH / SANGHA   2 edits  a leap.
+ *   REDDY / REDDI    1 edit   a spelling.
+ *
+ * An agreement is STRONG when either the originals are within one edit — a
+ * single character, which is what a spelling difference looks like — or the
+ * key is long enough that a lot of the name survived to agree. Otherwise it
+ * is weak: the match required several assumptions AND discarded most of the
+ * name to get there.
+ *
+ * Weak does not block. Gowda/Gouda, Naik/Nayak and Syed/Sayed must still
+ * merge, so the floor LABELS: the explanation says the two agree only on a
+ * short skeleton after several substitutions, and the verdict stays
+ * MODERATE_PARTIAL_MATCH, which already means a human reads the document.
+ * An over-merge lands on a flagged verdict, never on a clean pass — which is
+ * why this is a tightening and not a blocker.
+ *
+ * WHAT IT STILL CANNOT SEE, and this is the honest limit: two different names
+ * one character apart are indistinguishable from one name spelled two ways.
+ * KARAN/KIRAN and ANIL/ANILA differ by a single character exactly as
+ * GOWDA/GOUDA does, so they merge and they read as strong. No measure
+ * available here separates them, and they are recorded in the collision table
+ * rather than papered over.
  */
-const STRONG_KEY_LENGTH = 3;
+const STRONG_KEY_LENGTH = 4;
+
+/**
+ * Within this many edits, two spellings are close enough that the agreement
+ * stands on its own however short the key is.
+ */
+const CLOSE_EDIT_DISTANCE = 1;
+
+/**
+ * Levenshtein distance, capped — we only ever ask "is this within one or two?"
+ *
+ * Deliberately NOT used to decide whether two names match: the ordering runs
+ * the wrong way for that (LAKSHMANA/LAXMAN is four edits apart and the same
+ * name, ANITA/SUNITA is two apart and different people). It is used only to
+ * weigh an agreement the KEY has already made, which is a different question.
+ */
+function editDistance(a, b) {
+  if (a === b) return 0;
+  if (!a.length || !b.length) return Math.max(a.length, b.length);
+
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i += 1) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j += 1) {
+      row[j] = Math.min(
+        prev[j] + 1,
+        row[j - 1] + 1,
+        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+    prev = row;
+  }
+  return prev[b.length];
+}
 
 /**
  * Are these two tokens one name spelled two ways, and how much is that worth?
@@ -261,12 +356,12 @@ const STRONG_KEY_LENGTH = 3;
  * Keys agreeing, and nothing else — no distance, no partial credit. Initials
  * and tokens under three characters are excluded outright.
  *
- * @returns {{same: boolean, key: string|null, strong: boolean}}
+ * @returns {{same: boolean, key: string|null, strong: boolean, distance: number|null}}
  */
 function nameSpellingMatch(a, b) {
   const left = String(a || '').toUpperCase().replace(/[^A-Z]/g, '');
   const right = String(b || '').toUpperCase().replace(/[^A-Z]/g, '');
-  const none = { same: false, key: null, strong: false };
+  const none = { same: false, key: null, strong: false, distance: null };
 
   if (left.length < MIN_VARIANT_LENGTH || right.length < MIN_VARIANT_LENGTH) return none;
   if (isInitial(left) || isInitial(right)) return none;
@@ -276,7 +371,11 @@ function nameSpellingMatch(a, b) {
   if (!keyA || !keyB || keyA.length < 2) return none;
   if (keyA !== keyB) return none;
 
-  return { same: true, key: keyA, strong: keyA.length >= STRONG_KEY_LENGTH };
+  // How much had to be assumed to get here, and how much survived to agree.
+  const distance = editDistance(left, right);
+  const strong = distance <= CLOSE_EDIT_DISTANCE || keyA.length >= STRONG_KEY_LENGTH;
+
+  return { same: true, key: keyA, strong, distance };
 }
 
 /** Are these two tokens one name spelled two ways? */
@@ -461,11 +560,12 @@ function explainNameMatch(result) {
     case NAME_MATCH.MODERATE_PARTIAL:
       if (result.via_variant) {
         const base = 'These look like the same name spelled two ways (a trailing vowel, w/v, '
-          + 'y/i, an h after a consonant, ksh/x, a doubled consonant or an -appa ending). '
-          + 'Ordinary on Indian documents — read the document and decide.';
+          + 'y/i, q/k, an h after a consonant, ksh/x, a doubled consonant or an -appa '
+          + 'ending). Ordinary on Indian documents — read the document and decide.';
         return result.weak_variant
-          ? `${base} WEAK: they agree only on a two-letter skeleton, which many `
-            + 'different names share. Treat this as little more than a coincidence.'
+          ? `${base} WEAK: more than one character differs AND they agree only on a short `
+            + 'skeleton, which many different names share. Treat this as little more than a '
+            + 'coincidence and read the names themselves.'
           : base;
       }
       if (result.via_initial && result.exact_full_matches === 0) {
@@ -491,6 +591,9 @@ module.exports = {
   namesDeceasedHolder,
   transliterationKey,
   STRONG_KEY_LENGTH,
+  CLOSE_EDIT_DISTANCE,
+  MIN_STEM_FOR_TERMINAL_U,
+  editDistance,
   nameSpellingMatch,
   sameNameDifferentSpelling,
   compareNames,

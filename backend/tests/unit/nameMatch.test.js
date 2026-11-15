@@ -19,6 +19,8 @@ const {
   namesDeceasedHolder,
   transliterationKey,
   STRONG_KEY_LENGTH,
+  CLOSE_EDIT_DISTANCE,
+  editDistance,
   nameSpellingMatch,
   sameNameDifferentSpelling,
   compareNames,
@@ -295,26 +297,33 @@ describe('a name spelled two ways is the same name', () => {
   /**
    * THE COLLISION TABLE — where the key over-merges, written down.
    *
-   * A key is a lossy reduction, so distinct names WILL share one. The
-   * question is not whether that happens but whether it happens anywhere
-   * dangerous, and the only way to answer it is to run a corpus through and
-   * look. Measured over 182 common Indian names, every wrong merge sits at a
-   * key of TWO characters; at three and above essentially every collision is
-   * a real spelling variant.
+   * A key is a lossy reduction, so distinct names WILL share one. The question
+   * is not whether that happens but whether it happens anywhere dangerous,
+   * and the only way to answer it is to run a corpus through and look.
    *
-   * Two characters cannot simply be rejected — Gowda/Gouda, Naik/Nayak and
-   * Syed/Sayed all reduce to two, and they are three of the pairs this exists
-   * to catch. So the floor LABELS instead of blocking: `weak_variant` is set,
-   * the explanation says the agreement is little more than a coincidence, and
-   * the verdict stays MODERATE_PARTIAL_MATCH, which already means a human
-   * reads the document.
+   * A PREVIOUS VERSION OF THIS COMMENT CLAIMED "every wrong merge sits at a
+   * two-character key". That was false, and the counterexample was already in
+   * this file's own corpus:
+   *
+   *   SINGH / SANGHA   key SNG, three characters, two different surnames
+   *
+   * So the floor measures two things now: how short the key is AND how far
+   * apart the original spellings are. One character differing is what a
+   * spelling difference looks like (Gowda/Gouda); two is a leap
+   * (Gowda/Gudda, Singh/Sangha). See the confidence floor in nameMatch.js.
+   *
+   * THE CLAIM THAT IS ACTUALLY TRUE, and the only one worth relying on: no
+   * over-merge is ever a CLEAN PASS. Every one lands on
+   * MODERATE_PARTIAL_MATCH, which is outside GOOD_NAME_MATCH, so a human is
+   * always reading the document with both names printed side by side. The
+   * strong/weak label is advice on top of that, not the safety property.
    *
    * These are kept as tests so the next person changing the rules sees the
    * cost as well as the benefit, and finds out immediately if a change makes
    * the over-merging worse.
    */
   describe('the collision table: where the key over-merges', () => {
-    /** Distinct names that share a key and SHOULD — real variants. */
+    /** Distinct spellings that share a key and SHOULD — real variants. */
     const RIGHTLY_MERGED = [
       ['BHAT', 'BHATT'], ['DEEPA', 'DIPA'], ['GEETHA', 'GITA'], ['POOJA', 'PUJA'],
       ['SEETHA', 'SITA'], ['SHIVA', 'SIVA'], ['GOWDA', 'GOUDA'], ['NAIK', 'NAYAK'],
@@ -323,22 +332,50 @@ describe('a name spelled two ways is the same name', () => {
       ['PARVATHI', 'PARVATI'], ['FATIMA', 'FATHIMA'], ['SHEKAR', 'SHEKHAR'],
       ['DSOUZA', 'DESOUZA'], ['SWAMY', 'SWAMI'], ['GOWRI', 'GAURI'],
       ['PRAVEEN', 'PRAVIN'], ['DEEPAK', 'DIPAK'], ['SATISH', 'SATHISH'],
+      // Terminal -u off a long stem, and q/k.
+      ['BASAVARAJ', 'BASAVARAJU'], ['MUNIRAJ', 'MUNIRAJU'], ['NAGARAJ', 'NAGARAJU'],
+      ['FAROOQ', 'FARUKH'], ['FAROOQ', 'FARUK'], ['TARIQ', 'TARIK'],
+      ['RAFIQ', 'RAFIK'], ['QADIR', 'KADIR'],
     ];
 
     /**
-     * Distinct names that share a key and SHOULD NOT. Every one is a
-     * two-character key, which is exactly why the floor is set there.
+     * Distinct names that share a key and SHOULD NOT, where the floor at
+     * least LABELS the agreement as weak — a short key reached after more
+     * than one substitution.
      *
-     * Not failures of the suite — failures of the rule, recorded. Each lands
-     * on MODERATE_PARTIAL_MATCH with weak_variant set, so a reviewer is
-     * looking at the document and is told the machine's agreement is thin.
+     * Recorded, not accepted. If a rule change separates one of these, move
+     * it out: that is an improvement.
      */
-    const WRONGLY_MERGED = [
+    const WRONGLY_MERGED_BUT_FLAGGED_WEAK = [
       ['KHAN', 'KHANNA', 'different surnames entirely'],
       ['SYED', 'SUDHA', 'a surname and a given name'],
       ['JAYA', 'JAI', 'related but not the same name'],
       ['RAI', 'ROY', 'arguably one surname, arguably two'],
       ['DEV', 'DEVAPPA', 'the -appa form of a different root'],
+      ['SINGH', 'SANGHA', 'two Punjabi surnames — the counterexample that broke the old floor'],
+      ['GOWDA', 'GUDDA', 'two characters apart, not one'],
+      ['KARAN', 'KARUNA', 'masculine given name against a feminine one'],
+    ];
+
+    /**
+     * THE HONEST LIMIT. Distinct names that share a key AND read as strong,
+     * because they differ by a single character exactly as Gowda/Gouda does.
+     *
+     * No measure available here separates them: the interior-vowel rule is
+     * what makes Syed/Sayed and Naik/Nayak work, and it is the same rule that
+     * flattens Karan/Kiran and Patil/Patel. Choosing to keep interior vowels
+     * would lose more than it saved.
+     *
+     * They are not dangerous and they are not hidden — the verdict is still
+     * MODERATE_PARTIAL_MATCH, outside GOOD_NAME_MATCH, so an admin reads the
+     * document with both names in front of them. They are written down here
+     * so nobody later believes the floor catches everything.
+     */
+    const WRONGLY_MERGED_AND_READS_STRONG = [
+      ['KARAN', 'KIRAN', 'two given names, one interior vowel apart'],
+      ['ANIL', 'ANILA', 'masculine and feminine, one terminal -a apart'],
+      ['PATIL', 'PATEL', 'Karnataka and Gujarat surnames, one interior vowel apart'],
+      ['ABDUL', 'ABDULLA', 'rescued by a four-character key; arguably two names'],
     ];
 
     test.each(RIGHTLY_MERGED)('%s and %s share a key, correctly', (a, b) => {
@@ -346,27 +383,42 @@ describe('a name spelled two ways is the same name', () => {
       expect(sameNameDifferentSpelling(a, b)).toBe(true);
     });
 
-    test.each(WRONGLY_MERGED)('%s and %s share a key WRONGLY (%s)', (a, b) => {
-      // Recorded, not accepted. If a rule change separates one of these,
-      // move it out of this list — that is an improvement.
-      expect(transliterationKey(a)).toBe(transliterationKey(b));
-      expect(sameNameDifferentSpelling(a, b)).toBe(true);
+    test.each(WRONGLY_MERGED_BUT_FLAGGED_WEAK)('%s and %s merge wrongly but weakly (%s)', (a, b) => {
+      const m = nameSpellingMatch(a, b);
+      expect(m.same).toBe(true);
+      expect(m.strong).toBe(false);
     });
 
-    test('every wrong merge is flagged as weak, and none is a clean pass', () => {
-      for (const [a, b] of WRONGLY_MERGED) {
+    test.each(WRONGLY_MERGED_AND_READS_STRONG)('%s and %s merge wrongly and read strong (%s)', (a, b) => {
+      const m = nameSpellingMatch(a, b);
+      expect(m.same).toBe(true);
+      // Recorded as the limit. If a change makes one of these weak or
+      // separate, that is an improvement — move it.
+      expect(m.strong).toBe(true);
+      expect(m.distance).toBeLessThanOrEqual(2);
+    });
+
+    test('NO over-merge is ever a clean pass — the claim that actually holds', () => {
+      // The safety property. Weak labelling is advice on top of this.
+      for (const [a, b] of [...WRONGLY_MERGED_BUT_FLAGGED_WEAK, ...WRONGLY_MERGED_AND_READS_STRONG]) {
         const r = compareNames(`${a} Kumar`, `${b} Kumar`);
 
         expect(r.verdict).toBe(NAME_MATCH.MODERATE_PARTIAL);
-        expect(r.weak_variant).toBe(true);
         expect(GOOD_NAME_MATCH).not.toContain(r.verdict);
-        expect(explainNameMatch(r)).toMatch(/WEAK/);
-        expect(explainNameMatch(r)).toMatch(/coincidence/i);
+        expect(REVIEW_NAME_MATCH).toContain(r.verdict);
+        // And the admin is always shown both names, whatever the label says.
+        expect(r.tokens_a).toContain(a);
+        expect(r.tokens_b).toContain(b);
       }
     });
 
-    test('a strong key is not labelled weak', () => {
-      for (const [a, b] of [['RAMESHA', 'RAMESH'], ['REDDY', 'REDDI'], ['LAKSHMANA', 'LAXMAN']]) {
+    test('a weak label says why, and a strong one does not cry wolf', () => {
+      const weak = compareNames('SINGH Kumar', 'SANGHA Kumar');
+      expect(weak.weak_variant).toBe(true);
+      expect(explainNameMatch(weak)).toMatch(/WEAK/);
+      expect(explainNameMatch(weak)).toMatch(/more than one character differs/i);
+
+      for (const [a, b] of [['RAMESHA', 'RAMESH'], ['REDDY', 'REDDI'], ['SIDDARTH', 'SIDDHARTH']]) {
         const r = compareNames(`${a} Kumar`, `${b} Kumar`);
         expect(r.via_variant).toBe(true);
         expect(r.weak_variant).toBe(false);
@@ -374,22 +426,40 @@ describe('a name spelled two ways is the same name', () => {
       }
     });
 
-    test('the floor is at three characters, and the short ones still match', () => {
-      expect(STRONG_KEY_LENGTH).toBe(3);
-      // Blocking two-character keys would lose these three, which is why the
-      // floor labels rather than rejects.
-      for (const [a, b] of [['GOWDA', 'GOUDA'], ['NAIK', 'NAYAK'], ['SYED', 'SAYED']]) {
+    test('the floor is both measures, and neither alone', () => {
+      expect(STRONG_KEY_LENGTH).toBe(4);
+      expect(CLOSE_EDIT_DISTANCE).toBe(1);
+
+      // One character apart is strong however short the key — this is what
+      // keeps Gowda/Gouda, Syed/Sayed and Reddy/Reddi uncaveated.
+      for (const [a, b] of [['GOWDA', 'GOUDA'], ['SYED', 'SAYED'], ['REDDY', 'REDDI']]) {
         const m = nameSpellingMatch(a, b);
-        expect(m.same).toBe(true);
-        expect(m.key.length).toBe(2);
+        expect(m.distance).toBe(1);
+        expect(m.strong).toBe(true);
+      }
+
+      // A long key is strong however far apart — this is what keeps
+      // Lakshmana/Laxman and Krishna/Krishnappa uncaveated.
+      for (const [a, b] of [['LAKSHMANA', 'LAXMAN'], ['KRISHNA', 'KRISHNAPPA']]) {
+        const m = nameSpellingMatch(a, b);
+        expect(m.distance).toBeGreaterThan(CLOSE_EDIT_DISTANCE);
+        expect(m.key.length).toBeGreaterThanOrEqual(STRONG_KEY_LENGTH);
+        expect(m.strong).toBe(true);
+      }
+
+      // Neither — short key AND several substitutions — is weak.
+      for (const [a, b] of [['SINGH', 'SANGHA'], ['GOWDA', 'GUDDA'], ['KHAN', 'KHANNA']]) {
+        const m = nameSpellingMatch(a, b);
+        expect(m.distance).toBeGreaterThan(CLOSE_EDIT_DISTANCE);
+        expect(m.key.length).toBeLessThan(STRONG_KEY_LENGTH);
         expect(m.strong).toBe(false);
       }
     });
 
     test('w is a glide only when it closes a syllable', () => {
-      // The collision table caught this: collapsing every W and V to U turned
-      // RAVI into R-A-U-I, whose interior is all vowels, so RAVI, RAI and ROY
-      // all reduced to one key. Ravi is a given name; Rai and Roy are
+      // An earlier collision table caught this: collapsing every W and V to U
+      // turned RAVI into R-A-U-I, whose interior is all vowels, so RAVI, RAI
+      // and ROY all reduced to one key. Ravi is a given name; Rai and Roy are
       // surnames.
       expect(sameNameDifferentSpelling('RAVI', 'RAI')).toBe(false);
       expect(sameNameDifferentSpelling('RAVI', 'ROY')).toBe(false);
@@ -398,6 +468,20 @@ describe('a name spelled two ways is the same name', () => {
       // Pawan keeps its consonant: a-w-a, w between two vowels.
       expect(sameNameDifferentSpelling('PAVAN', 'PAWAN')).toBe(true);
       expect(sameNameDifferentSpelling('VISHWA', 'VISHVA')).toBe(true);
+    });
+
+    test('edit distance weighs an agreement, it never makes one', () => {
+      // Stated because using it to MATCH would be the mistake the whole key
+      // exists to avoid: Lakshmana/Laxman is four edits apart and the same
+      // name, Anita/Sunita is two apart and different people.
+      expect(editDistance('LAKSHMANA', 'LAXMAN')).toBeGreaterThan(editDistance('ANITA', 'SUNITA'));
+      expect(sameNameDifferentSpelling('LAKSHMANA', 'LAXMAN')).toBe(true);
+      expect(sameNameDifferentSpelling('ANITA', 'SUNITA')).toBe(false);
+
+      expect(editDistance('', '')).toBe(0);
+      expect(editDistance('ABC', 'ABC')).toBe(0);
+      expect(editDistance('ABC', '')).toBe(3);
+      expect(editDistance('KITTEN', 'SITTING')).toBe(3);
     });
   });
 
