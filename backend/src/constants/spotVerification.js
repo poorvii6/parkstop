@@ -18,6 +18,7 @@
  * it does not mean the owner is allowed to let the space (society rules,
  * municipal permission).
  */
+const { PROPERTY_DOC_TYPE_KEYS, TENANCY_DOC_TYPE_KEYS, labelForDocType } = require('./propertyDocTypes');
 
 const SPOT_VERIFICATION_STATUS = {
   /** A spot with no document uploaded yet. Where every new spot starts. */
@@ -68,21 +69,26 @@ const AWAITING_REVIEW_STATUSES = [
   SPOT_VERIFICATION_STATUS.DESK_APPROVED,
 ];
 
-/** Documents an owner may submit for a spot. Mirrors the per-person list. */
-const SPOT_DOC_TYPES = [
-  'electricity_bill',
-  'property_tax',
-  'rent_agreement',
-  'sale_deed',
-  'water_bill',
-  'other',
-];
+/**
+ * Documents an owner may submit for a spot.
+ *
+ * No longer a mirror of the per-person list — it IS the per-person list, read
+ * from constants/propertyDocTypes.js, which both flows and both apps share.
+ * It used to be a copy, and the copy is how a utility bill came to be
+ * acceptable proof of ownership here. See that file for what was removed.
+ */
+const SPOT_DOC_TYPES = PROPERTY_DOC_TYPE_KEYS;
 
 /** How the submitter holds the place. A tenant needs the landlord's consent. */
 const RELATIONSHIPS = { OWNER: 'owner', TENANT: 'tenant' };
 
-/** A rent agreement is a tenant's document, and needs an NOC (stage 3). */
-const TENANT_DOC_TYPES = ['rent_agreement'];
+/**
+ * A tenancy document needs an NOC (stage 3).
+ *
+ * Derived from the shared list rather than written out, so adding a tenancy
+ * document type cannot leave the consent rule behind.
+ */
+const TENANT_DOC_TYPES = TENANCY_DOC_TYPE_KEYS;
 
 const isVisibleToDrivers = (status) => VISIBLE_SPOT_STATUSES.includes(status);
 
@@ -114,4 +120,7 @@ module.exports = {
   TENANT_DOC_TYPES,
   isVisibleToDrivers,
   isPinFrozen,
+  // Re-exported so a screen or controller that already imports the spot
+  // constants does not need a second require to turn a type into words.
+  labelForDocType,
 };

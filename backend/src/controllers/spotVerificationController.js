@@ -19,6 +19,7 @@
  * office. A desk review cannot prove a document is genuine — a good forgery
  * passes it, which is exactly why the field check exists.
  */
+const crypto = require('crypto');
 const cloudinary = require('cloudinary').v2;
 
 const prisma = require('../config/prisma');
@@ -85,6 +86,39 @@ async function saveAndSync(record, data, logEntry = null) {
   });
 
   return updated;
+}
+
+/**
+ * Has this exact file already been submitted for a DIFFERENT address?
+ *
+ * Cloudinary mints a new public_id on every upload, so two uploads of one file
+ * look unrelated. Hashing the bytes is what makes reuse visible at all.
+ *
+ * Why it matters: one genuine khata could verify four unrelated driveways.
+ * The name check passes — it really is the same person. The address check
+ * cannot help, because a Bengaluru address usually geocodes to a locality and
+ * a locality hit is UNVERIFIABLE, which deliberately does not block. The field
+ * check cannot help either: the record exists, because the document is real.
+ * Nothing in the flow was looking at whether the SAME piece of paper had
+ * already been spent.
+ *
+ * Reuse at the SAME address is ordinary and allowed. Four bays on one property
+ * is one property, one khata, four spots, and refusing that would make honest
+ * owners list their bays as one spot — the opposite of what we want.
+ *
+ * @returns {Promise<{spot_id: number, claimed_address: string|null}[]>} the
+ *   spots holding this file under a different address
+ */
+async function sameFileElsewhere({ sha256, column, spotId, address }) {
+  if (!sha256) return [];
+
+  const rows = await prisma.spot_verifications.findMany({
+    where: { [column]: sha256, spot_id: { not: spotId } },
+    select: { spot_id: true, claimed_address: true, status: true },
+    take: 20,
+  });
+
+  return rows.filter((r) => !Policy.sameClaimedAddress(r.claimed_address, address));
 }
 
 /** The spot, if this caller is allowed to see its verification. */
@@ -158,6 +192,20 @@ async function uploadDocument(req, res) {
     const blocked = editBlocked(record);
     if (blocked) return fail(res, 409, blocked);
 
+    // Before anything is uploaded: is this the same piece of paper somebody
+    // already used for another address?
+    const sha256 = crypto.createHash('sha256').update(req.file.buffer).digest('hex');
+    const reused = await sameFileElsewhere({
+      sha256, column: 'doc_sha256', spotId: spot.id, address,
+    });
+    if (reused.length) {
+      return fail(res, 409,
+        'This document is already being used for a different address, so it cannot prove this one too. '
+        + 'Upload the document for THIS address. If both spots really are at the same place, '
+        + 'enter the same address for both.',
+        { also_used_for: reused.map((r) => ({ spot_id: r.spot_id, address: r.claimed_address })) });
+    }
+
     if (!process.env.CLOUDINARY_CLOUD_NAME) return fail(res, 503, 'File uploads are not configured on the server.');
 
     const uploaded = await new Promise((resolve, reject) => {
@@ -180,12 +228,15 @@ async function uploadDocument(req, res) {
         status: S.IN_PROGRESS,
         doc_type: docType,
         doc_public_id: uploaded.public_id,
+        doc_sha256: sha256,
         claimed_address: address.slice(0, 300),
         relationship,
         // A new document invalidates the old verdict, so the desk fields go
         // back to empty rather than describing a document nobody has read.
         name_on_document: null,
         name_match: null,
+        name_checked_against: null,
+        noc_names_owner: null,
         address_match_metres: null,
         geocoded_lat: null,
         geocoded_lng: null,
@@ -232,6 +283,20 @@ async function uploadLandlordNoc(req, res) {
     const blocked = editBlocked(record);
     if (blocked) return fail(res, 409, blocked);
 
+    // One letter must not quietly authorise spots at several addresses. The
+    // address compared against is the one on THIS spot's submission, because
+    // the letter is supposed to name this spot.
+    const sha256 = crypto.createHash('sha256').update(req.file.buffer).digest('hex');
+    const reused = await sameFileElsewhere({
+      sha256, column: 'landlord_noc_sha256', spotId: spot.id, address: record.claimed_address,
+    });
+    if (reused.length) {
+      return fail(res, 409,
+        'This letter is already being used for a different address. '
+        + 'A landlord\'s consent has to name the place it is about, so please upload the letter for this spot.',
+        { also_used_for: reused.map((r) => ({ spot_id: r.spot_id, address: r.claimed_address })) });
+    }
+
     if (!process.env.CLOUDINARY_CLOUD_NAME) return fail(res, 503, 'File uploads are not configured on the server.');
 
     const uploaded = await new Promise((resolve, reject) => {
@@ -251,7 +316,11 @@ async function uploadLandlordNoc(req, res) {
       {
         status: record.status === S.NOT_STARTED ? S.IN_PROGRESS : record.status,
         landlord_noc_public_id: uploaded.public_id,
+        landlord_noc_sha256: sha256,
         landlord_name: landlordName.slice(0, 150),
+        // A new letter, or a new landlord name, invalidates the admin's
+        // confirmation that the letter named this owner.
+        noc_names_owner: null,
         rejection_reason: null,
       },
       { stage: 'owner', action: 'landlord_noc_uploaded', by: req.user.id, note: landlordName.slice(0, 100) }
@@ -512,7 +581,7 @@ async function adminBacklog(req, res) {
  *
  * @returns {Promise<{address: object, name: object|null, blockers: object[], geocode: object|null}>}
  */
-async function runDeskChecks({ record, spot, aadhaarName, nameOnDocument }) {
+async function runDeskChecks({ record, spot, aadhaarName, nameOnDocument, nocNamesOwner = null }) {
   const geocode = await geocodeAddress(record.claimed_address);
 
   const metres = geocode && spot.latitude !== null && spot.longitude !== null
@@ -534,17 +603,42 @@ async function runDeskChecks({ record, spot, aadhaarName, nameOnDocument }) {
     geocoded_lng: geocode?.lon || null,
   };
 
+  /**
+   * A tenant's ownership document names their LANDLORD, which is what we asked
+   * them for. So that is who it is compared against — not the tenant's own
+   * Aadhaar name, which it was never going to match. See
+   * Policy.NAME_CHECKED_AGAINST for the full reasoning.
+   *
+   * `missingTenantConsent` is the same union used at submit: a stated tenant,
+   * or a tenancy document whatever they ticked.
+   */
+  const isTenant = record.relationship === RELATIONSHIPS.TENANT
+    || TENANT_DOC_TYPES.includes(record.doc_type);
+  const checkedAgainst = isTenant
+    ? Policy.NAME_CHECKED_AGAINST.LANDLORD
+    : Policy.NAME_CHECKED_AGAINST.AADHAAR;
+  const expectedName = isTenant ? record.landlord_name : aadhaarName;
+
   const typed = String(nameOnDocument || '').trim();
   const name = typed
     ? (() => {
-      const result = compareNames(typed, aadhaarName);
+      const result = compareNames(typed, expectedName);
       return {
         name_on_document: typed,
+        /** Who the document was compared against, and why. */
+        checked_against: checkedAgainst,
+        expected_name: expectedName || null,
         aadhaar_name: aadhaarName || null,
+        landlord_name: record.landlord_name || null,
         verdict: result.verdict,
         matched: result.matched,
         of: result.total,
+        conflicting: result.conflicting,
         explanation: explainNameMatch(result),
+        note: isTenant
+          ? 'This spot is rented, so the ownership document should name the LANDLORD. '
+            + 'It is compared to the name on the consent letter, not to the owner\'s Aadhaar.'
+          : null,
       };
     })()
     : null;
@@ -552,9 +646,32 @@ async function runDeskChecks({ record, spot, aadhaarName, nameOnDocument }) {
   const blockers = Policy.deskPassBlockers({
     nameVerdict: name?.verdict || null,
     addressVerdict: address.verdict,
+    checkedAgainst,
+    isTenant,
+    nocNamesOwner,
   });
 
-  return { address, name, blockers, geocode };
+  return { address, name, blockers, geocode, isTenant, checkedAgainst };
+}
+
+/**
+ * Nobody verifies their own spot.
+ *
+ * An ADMIN may also be a spotter, and the owner routes accept SPOTTER or
+ * ADMIN while `spotFor` lets an admin touch any spot. So without this an admin
+ * could upload a document to their own driveway, submit it, pass their own
+ * desk review and record their own field check — the entire flow, alone, with
+ * nothing in the log to show it. Both decision routes call this, and it does
+ * NOT yield to an override: there is no reason that makes checking your own
+ * paperwork a check.
+ *
+ * It compares the spot's owner, not the submitter, because the submitter is
+ * not recorded — and the owner is who the verification is about.
+ */
+function reviewingOwnSpot(ctx, reviewerId) {
+  if (!ctx?.owner?.id || !reviewerId) return null;
+  if (ctx.owner.id !== reviewerId) return null;
+  return 'This spot belongs to you. Another admin has to check it.';
 }
 
 /** The spot, its record and the owner's verified name, for a desk review. */
@@ -607,6 +724,7 @@ async function adminCheck(req, res) {
       spot: ctx.spot,
       aadhaarName: ctx.aadhaarName,
       nameOnDocument: req.body?.name_on_document,
+      nocNamesOwner: typeof req.body?.noc_names_owner === 'boolean' ? req.body.noc_names_owner : null,
     });
 
     const updated = await saveAndSync(
@@ -619,15 +737,24 @@ async function adminCheck(req, res) {
         geocode_uncertainty_m: checks.geocode?.uncertainty_m ?? null,
         address_match_metres: checks.address.metres,
         address_match_verdict: checks.address.verdict,
-        ...(checks.name ? { name_on_document: checks.name.name_on_document, name_match: checks.name.verdict } : {}),
+        ...(checks.name ? {
+          name_on_document: checks.name.name_on_document,
+          name_match: checks.name.verdict,
+          name_checked_against: checks.checkedAgainst,
+        } : {}),
       },
       {
         stage: 'desk',
         action: 'checked',
         by: req.user.id,
-        note: `address ${checks.address.verdict}${checks.name ? `, name ${checks.name.verdict}` : ''}`,
+        note: `address ${checks.address.verdict}`
+          + `${checks.name ? `, name ${checks.name.verdict} vs ${checks.checkedAgainst}` : ''}`,
       }
     );
+
+    // Not stored and not decided — just shown, so the reviewer knows this is
+    // their own spot before they read any further.
+    const selfReview = reviewingOwnSpot(ctx, req.user.id);
 
     return ok(res, {
       spot_id: spotId,
@@ -635,6 +762,9 @@ async function adminCheck(req, res) {
       address: checks.address,
       name: checks.name,
       blockers: checks.blockers,
+      is_tenant: checks.isTenant,
+      cannot_be_overridden: Policy.unoverridableBlockers(checks.blockers).map((b) => b.code),
+      your_own_spot: !!selfReview,
       // Said plainly, because it is the one thing a reviewer must not forget.
       reminder: 'These checks cannot tell you whether the document is genuine. Only the field check can test the record behind it.',
     });
@@ -664,6 +794,10 @@ async function adminDeskDecision(req, res) {
 
     const ctx = await deskContext(spotId);
     if (!ctx) return fail(res, 404, 'No verification record for this spot.');
+
+    const selfReview = reviewingOwnSpot(ctx, req.user.id);
+    if (selfReview) return fail(res, 403, selfReview);
+
     if (ctx.record.status !== S.DESK_PENDING) {
       return fail(res, 409, `Only a submission waiting for a desk review can be decided (this one is ${ctx.record.status}).`);
     }
@@ -715,7 +849,25 @@ async function adminDeskDecision(req, res) {
       spot: ctx.spot,
       aadhaarName: ctx.aadhaarName,
       nameOnDocument,
+      nocNamesOwner: typeof req.body?.noc_names_owner === 'boolean' ? req.body.noc_names_owner : null,
     });
+
+    // Some blockers are missing facts rather than judgment calls, and no
+    // amount of written reasoning supplies them. A consent letter that does
+    // not name this owner is one: the admin is looking at the letter.
+    const final = Policy.unoverridableBlockers(checks.blockers);
+    if (final.length) {
+      return fail(res, 409, 'This submission cannot pass.', {
+        blockers: checks.blockers,
+        address: checks.address,
+        name: checks.name,
+        cannot_be_overridden: final.map((b) => b.code),
+        how_to_proceed: checks.isTenant && final.some((b) => b.code === 'NOC_DOES_NOT_NAME_OWNER')
+          ? 'Read the consent letter. If it names this owner and this address, send noc_names_owner: true. '
+            + 'If it does not, reject the submission with a reason.'
+          : 'Reject the submission with a reason the owner can act on.',
+      });
+    }
 
     const override = String(req.body?.override_reason || '').trim();
     if (checks.blockers.length && override.length < 10) {
@@ -733,6 +885,15 @@ async function adminDeskDecision(req, res) {
         status: S.DESK_APPROVED,
         name_on_document: nameOnDocument,
         name_match: checks.name.verdict,
+        /**
+         * WHOSE name the document was compared against. Stored because
+         * `name_match` is unreadable without it months later: a DIRECT_MATCH
+         * means the owner for an owner-occupied spot and the LANDLORD for a
+         * rented one, and those are different claims.
+         */
+        name_checked_against: checks.checkedAgainst,
+        /** The admin read the consent letter and confirmed it names this owner. */
+        noc_names_owner: checks.isTenant ? true : null,
         geocoded_lat: checks.geocode ? Number(checks.geocode.lat) : null,
         geocoded_lng: checks.geocode ? Number(checks.geocode.lon) : null,
         geocode_source: checks.geocode?.source || null,
@@ -799,6 +960,11 @@ async function adminFieldDecision(req, res) {
 
     const ctx = await deskContext(spotId);
     if (!ctx) return fail(res, 404, 'No verification record for this spot.');
+
+    // This is the only route that can make a spot live, so it is the last
+    // place self-review could matter and the most important one to refuse.
+    const selfReview = reviewingOwnSpot(ctx, req.user.id);
+    if (selfReview) return fail(res, 403, selfReview);
 
     // Both stages, in order. A field check on a submission nobody has read is
     // a visit made on the strength of an unexamined document.
@@ -938,6 +1104,26 @@ async function adminDetail(req, res) {
     const wait = Policy.waitFor({ status: record.status, submittedAt: record.submitted_at });
     const owner = record.parking_spots?.users;
 
+    /**
+     * Every OTHER spot holding this same file, whatever its address.
+     *
+     * Wider than the upload check on purpose. The upload refuses reuse at a
+     * different address; this shows the admin the whole picture, including
+     * reuse at the SAME address, which is allowed and still worth seeing — one
+     * khata across four spots at one address should make a reviewer check that
+     * four bays really exist rather than one bay listed four times.
+     */
+    const sameDocument = record.doc_sha256
+      ? await prisma.spot_verifications.findMany({
+        where: { doc_sha256: record.doc_sha256, spot_id: { not: spotId } },
+        select: {
+          spot_id: true, claimed_address: true, status: true,
+          parking_spots: { select: { title: true, spotter_id: true } },
+        },
+        take: 20,
+      })
+      : [];
+
     return ok(res, {
       spot: {
         id: record.parking_spots?.id,
@@ -972,11 +1158,31 @@ async function adminDetail(req, res) {
         landlord_noc_url: signed(record.landlord_noc_public_id),
         submitted_at: record.submitted_at,
         grandfathered_at: record.grandfathered_at,
+        /**
+         * The same file on other spots. Reuse at a different address is
+         * refused at upload, so anything here is either same-address (fine,
+         * but check the bays exist) or predates the check.
+         */
+        same_document_on: sameDocument.map((r) => ({
+          spot_id: r.spot_id,
+          title: r.parking_spots?.title || null,
+          claimed_address: r.claimed_address,
+          status: r.status,
+          same_owner: r.parking_spots?.spotter_id === owner?.id,
+          same_address: Policy.sameClaimedAddress(r.claimed_address, record.claimed_address),
+        })),
         ...wait,
       },
       desk: {
         name_on_document: record.name_on_document,
         name_match: record.name_match,
+        /**
+         * WHOSE name that verdict is about. A rented spot's ownership document
+         * names the LANDLORD, so a DIRECT_MATCH there is a different claim
+         * from a DIRECT_MATCH on an owner-occupied spot.
+         */
+        name_checked_against: record.name_checked_against,
+        noc_names_owner: record.noc_names_owner,
         address_match_metres: record.address_match_metres,
         address_match_verdict: record.address_match_verdict,
         geocoded_lat: record.geocoded_lat,
@@ -1007,6 +1213,25 @@ async function adminDetail(req, res) {
         notes: record.field_notes,
         checked_by: record.field_checked_by,
         checked_at: record.field_checked_at,
+      },
+      /**
+       * Who looked, and whether that was more than one person.
+       *
+       * The field check is meant to be independent of the desk review. One
+       * admin may do both — refusing that would stop a one-admin team working
+       * — so it is recorded and shown rather than blocked. An auditor asking
+       * "did two people see this?" can answer it from here.
+       *
+       * Reviewing your OWN spot is a different matter and is refused outright,
+       * at both stages.
+       */
+      independence: {
+        desk_reviewed_by: record.desk_reviewed_by,
+        field_checked_by: record.field_checked_by,
+        both_stages_same_admin: !!record.desk_reviewed_by
+          && record.desk_reviewed_by === record.field_checked_by,
+        reviewer_is_the_owner: (!!record.desk_reviewed_by && record.desk_reviewed_by === owner?.id)
+          || (!!record.field_checked_by && record.field_checked_by === owner?.id),
       },
       rejection_reason: record.rejection_reason,
       review_log: Array.isArray(record.review_log) ? record.review_log : [],

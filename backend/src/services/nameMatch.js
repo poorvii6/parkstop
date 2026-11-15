@@ -139,6 +139,33 @@ function compareNames(a, b) {
   const total = longer.length;
   const sameSet = matched === total && shorter.length === longer.length;
 
+  /**
+   * A token on the SHORTER side that nothing on the longer side could match.
+   *
+   * This is the difference between two things the old `matched / total >= 0.5`
+   * test could not tell apart, and getting them confused was a way through the
+   * desk review:
+   *
+   *   "Ramesh"       vs "Ramesh Kumar"  — CONTAINMENT. Everything the document
+   *                                      gave us agrees; it just says less.
+   *   "Ramesh Kumar" vs "Ramesh Gupta"  — CONFLICT. Each name carries a part
+   *                                      the other contradicts. Different
+   *                                      surnames are different people.
+   *
+   * Both used to come out MODERATE_PARTIAL_MATCH, which is in REVIEW_NAME_MATCH
+   * and therefore does NOT block a desk pass. So a document in a different
+   * person's name that happened to share one given name — and given names in
+   * India are shared by millions — cleared the desk review with no override and
+   * no note on the record. Suresh Babu/Suresh Nair, Anita Sharma/Anita Verma,
+   * all of them straight through.
+   *
+   * A conflict is now NO_MATCH, which blocks. It still yields to an admin who
+   * writes down why, which is the right outcome for a transliteration variant
+   * (Ramesh/Ramesha, Laxman/Lakshmana): a human reading the document decides,
+   * and the override is recorded against the spot.
+   */
+  const conflicting = shorter.length - matched;
+
   let verdict;
   if (sameSet && !viaInitial) {
     verdict = NAME_MATCH.DIRECT;
@@ -146,13 +173,27 @@ function compareNames(a, b) {
     // Everything we were given matches; the other name just says more, or
     // spells out an initial.
     verdict = NAME_MATCH.GOOD_PARTIAL;
+  } else if (conflicting > 0) {
+    verdict = NAME_MATCH.NONE;
   } else if (matched / total >= 0.5) {
+    // Containment only: one name is a subset of the other. Weak — a lone
+    // "Ramesh" names a great many people — so it is flagged for the human who
+    // is already reading the document, and not blocked.
     verdict = NAME_MATCH.MODERATE_PARTIAL;
   } else {
     verdict = NAME_MATCH.NONE;
   }
 
-  return { verdict, matched, total, tokens_a: tokensA, tokens_b: tokensB, via_initial: viaInitial };
+  return {
+    verdict,
+    matched,
+    total,
+    tokens_a: tokensA,
+    tokens_b: tokensB,
+    via_initial: viaInitial,
+    /** Parts of the shorter name that the longer one contradicts. */
+    conflicting,
+  };
 }
 
 /** One line an admin can read next to the two names. */
@@ -165,9 +206,13 @@ function explainNameMatch(result) {
         ? 'Every part we were given matches, with an initial standing for a full name.'
         : 'Every part of the shorter name matches; the other name carries more parts.';
     case NAME_MATCH.MODERATE_PARTIAL:
-      return `Only ${result.matched} of ${result.total} parts match. Read the document and decide.`;
+      return `Only ${result.matched} of ${result.total} parts match, and nothing contradicts. `
+        + 'A short name like this fits many people — read the document and decide.';
     default:
-      return 'These do not look like the same name.';
+      return result.conflicting > 0
+        ? `${result.conflicting} part(s) of the name on the document contradict the Aadhaar name. `
+          + 'These look like different people.'
+        : 'These do not look like the same name.';
   }
 }
 

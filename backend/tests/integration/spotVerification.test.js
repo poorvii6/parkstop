@@ -282,10 +282,10 @@ describe('an owner submits a document for one spot', () => {
     const req = request(app)
       .post(`/api/v1/spot-verification/${spotId}/document`)
       .set(auth(who))
-      .field('doc_type', fields.doc_type ?? 'electricity_bill')
+      .field('doc_type', fields.doc_type ?? 'khata_certificate')
       .field('address', fields.address ?? '42 Verification Road, Indiranagar, Bengaluru 560038');
     if (fields.relationship) req.field('relationship', fields.relationship);
-    return req.attach('document', Buffer.from('not-really-a-jpeg'), 'bill.jpg');
+    return req.attach('document', Buffer.from('not-really-a-jpeg'), 'khata.jpg');
   };
 
   test('a document moves the spot to in_progress', async () => {
@@ -296,7 +296,7 @@ describe('an owner submits a document for one spot', () => {
     expect(res.body.data.is_live).toBe(false);
 
     const record = await recordFor(ids.spots.unverified);
-    expect(record.doc_type).toBe('electricity_bill');
+    expect(record.doc_type).toBe('khata_certificate');
     expect(record.claimed_address).toMatch(/Indiranagar/);
     expect(record.relationship).toBe('owner');
     expect(record.doc_public_id).toMatch(/^parkstop\/spot-docs\//);
@@ -722,7 +722,7 @@ describe('the desk review', () => {
       data: {
         status: 'desk_pending',
         submitted_at: new Date(),
-        doc_type: 'electricity_bill',
+        doc_type: 'khata_certificate',
         doc_public_id: 'parkstop/spot-docs/mock-desk',
         claimed_address: '42 Verification Road, Indiranagar, Bengaluru 560038',
         relationship: 'owner',
@@ -872,15 +872,48 @@ describe('the desk review', () => {
       expect((await recordFor(id)).status).toBe('desk_pending');
     });
 
-    test('a shared surname alone does not block — a human is reading it', async () => {
+    test('a shared surname with a different given name BLOCKS', async () => {
+      // "Suresh Kumar" against a verified "Rajesh Kumar". This used to pass
+      // outright: it came out MODERATE_PARTIAL_MATCH, which does not block, so
+      // a document in a different person's name verified the spot with no
+      // override and nothing in the log. Kumar is one of the commonest
+      // surnames in India, so the hole was wide open.
       const id = await submittedSpot('desk-moderate');
       resolvesTo({ metresNorth: 10 });
 
       const res = await decide(id, { decision: 'pass', name_on_document: 'Suresh Kumar' });
 
+      expect(res.status).toBe(409);
+      expect(res.body.blockers.map((b) => b.code)).toEqual(['NAME_NO_MATCH']);
+      expect(res.body.name.conflicting).toBe(1);
+      expect((await recordFor(id)).status).toBe('desk_pending');
+    });
+
+    test('a name that merely says less still passes, without an override', async () => {
+      // The case the old comparator could not tell apart from the one above,
+      // and the reason the fix is about CONTRADICTION rather than a percentage:
+      // "Rajesh" agrees with "Rajesh Kumar" as far as it goes. Short names are
+      // ordinary on Indian documents and must not need an override.
+      const id = await submittedSpot('desk-containment');
+      resolvesTo({ metresNorth: 10 });
+
+      const res = await decide(id, { decision: 'pass', name_on_document: 'Rajesh' });
+
       expect(res.status).toBe(200);
       expect(res.body.data.name.verdict).toBe('MODERATE_PARTIAL_MATCH');
+      expect(res.body.data.name.conflicting).toBe(0);
       expect((await recordFor(id)).name_match).toBe('MODERATE_PARTIAL_MATCH');
+    });
+
+    test('an owner-occupied spot is checked against the Aadhaar name, and says so', async () => {
+      const id = await submittedSpot('desk-checked-against');
+      resolvesTo({ metresNorth: 10 });
+
+      const res = await decide(id, { decision: 'pass', name_on_document: 'Rajesh Kumar' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.name.checked_against).toBe('aadhaar_name');
+      expect((await recordFor(id)).name_checked_against).toBe('aadhaar_name');
     });
 
     test('an override is allowed, and is recorded against the spot', async () => {
@@ -1094,7 +1127,7 @@ describe('the field check', () => {
       data: {
         status: 'desk_approved',
         submitted_at: new Date(),
-        doc_type: 'electricity_bill',
+        doc_type: 'khata_certificate',
         doc_public_id: 'parkstop/spot-docs/mock-field',
         claimed_address: '42 Verification Road, Indiranagar, Bengaluru 560038',
         relationship: 'owner',
@@ -1456,9 +1489,13 @@ describe('a tenant needs the landlord\'s consent', () => {
     expect(res.body.message).toMatch(/rented/);
   });
 
-  test('a stated tenant needs it even with an electricity bill in their name', async () => {
-    const id = await tenantSpot('tenant-with-bill');
-    expect((await uploadDoc(id, { doc_type: 'electricity_bill', relationship: 'tenant' })).status).toBe(200);
+  test('a stated tenant needs it even with an ownership document', async () => {
+    // The landlord's khata is exactly what a tenant is SUPPOSED to submit —
+    // it is the landlord's document, which is the point. It still proves
+    // nothing about whether the landlord agreed, so the letter is still
+    // required. The relationship decides this, not the document type.
+    const id = await tenantSpot('tenant-with-khata');
+    expect((await uploadDoc(id, { doc_type: 'khata_certificate', relationship: 'tenant' })).status).toBe(200);
 
     expect((await submit(id)).status).toBe(400);
   });
@@ -1502,7 +1539,7 @@ describe('a tenant needs the landlord\'s consent', () => {
 
   test('an owner-occupied spot needs no letter', async () => {
     const id = await tenantSpot('owner-no-noc-needed');
-    await uploadDoc(id, { doc_type: 'electricity_bill', relationship: 'owner' });
+    await uploadDoc(id, { doc_type: 'khata_certificate', relationship: 'owner' });
 
     expect((await submit(id)).status).toBe(200);
   });

@@ -16,7 +16,11 @@ const STEPS: { key: StepKey; title: string; desc: string; icon: any; route: stri
   { key: 'pan', title: 'PAN card', desc: 'Your personal PAN, in your name', icon: 'card', route: '/spotter/verification/pan' },
   { key: 'selfie', title: 'Live selfie', desc: 'A quick photo to match your Aadhaar', icon: 'happy', route: '/spotter/verification/selfie' },
   { key: 'bank', title: 'Bank account', desc: 'Where your earnings are paid', icon: 'business', route: '/spotter/verification/bank' },
-  { key: 'property', title: 'Property proof', desc: 'Bill, tax receipt or rent agreement', icon: 'home', route: '/spotter/verification/property' },
+  // 'Property proof' was a fifth step here. It asked for ONE document for the
+  // whole account and compared it to nothing — no pin, no name, no spot — so
+  // an owner with four driveways proved at most one of them, and it blocked
+  // approval (and therefore withdrawals) in the meantime. Each SPOT now asks
+  // for its own document, where it is measured against that spot's pin.
 ];
 
 export default function VerificationOverview() {
@@ -79,7 +83,8 @@ export default function VerificationOverview() {
 
           {STEPS.map((step, i) => {
             const done = !!data?.steps[step.key];
-            const needsAadhaar = step.key !== 'aadhaar' && step.key !== 'property' && !data?.steps.aadhaar;
+            // Every remaining step is checked against the Aadhaar name or photo.
+            const needsAadhaar = step.key !== 'aadhaar' && !data?.steps.aadhaar;
             return (
               <TouchableOpacity
                 key={step.key}
@@ -137,7 +142,6 @@ function doneText(key: StepKey, d: OwnerVerification | null) {
   if (key === 'aadhaar' && d.details.aadhaar) return `${d.details.aadhaar.name} · XXXX ${d.details.aadhaar.last4}`;
   if (key === 'pan' && d.details.pan) return d.details.pan.masked;
   if (key === 'bank' && d.details.bank) return `${d.details.bank.bank_name || 'Bank'} · XXXX ${d.details.bank.last4}`;
-  if (key === 'property' && d.details.property) return d.details.property.address;
   return 'Verified';
 }
 

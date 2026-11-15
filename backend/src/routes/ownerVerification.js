@@ -30,7 +30,16 @@ router.post('/aadhaar/complete', authenticate, authorize('SPOTTER'), C.completeA
 router.post('/pan', authenticate, authorize('SPOTTER'), C.verifyPan);
 router.post('/selfie', authenticate, authorize('SPOTTER'), single('image'), C.verifySelfie);
 router.post('/bank', authenticate, authorize('SPOTTER'), C.verifyBank);
-router.post('/property', authenticate, authorize('SPOTTER'), single('document'), C.uploadProperty);
+/**
+ * POST /property was removed on 15 Nov 2026 and must not come back.
+ *
+ * It wrote a property document onto the PERSON — one per account, compared to
+ * nothing, and mandatory, so it blocked owners from approval and from
+ * withdrawing money while establishing no fact. Property documents are
+ * collected per spot now, at /spot-verification/:spotId/document, where they
+ * are geocoded, measured against that spot's pin and name-matched. See
+ * ownerVerificationController for the long version.
+ */
 router.post('/submit', authenticate, authorize('SPOTTER'), C.submit);
 
 // Admin

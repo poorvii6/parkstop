@@ -60,6 +60,9 @@ router.post(
       .isString().withMessage('The name must be text')
       .trim()
       .isLength({ max: 150 }).withMessage('The name must be 150 characters or fewer'),
+    body('noc_names_owner')
+      .optional()
+      .isBoolean({ strict: true }).withMessage('noc_names_owner must be true or false'),
     validate,
   ],
   C.adminCheck
@@ -79,6 +82,15 @@ router.post(
       .isString().withMessage('The name must be text')
       .trim()
       .isLength({ min: 2, max: 150 }).withMessage('The name must be 2 to 150 characters'),
+    /**
+     * For a rented spot: the admin has read the consent letter and confirms it
+     * names this owner. Strict, like record_found on the field route — "does
+     * the letter name them?" has two answers and no default, and a missing
+     * field must not read as yes.
+     */
+    body('noc_names_owner')
+      .optional()
+      .isBoolean({ strict: true }).withMessage('noc_names_owner must be true or false'),
     // Both are free text an owner or an auditor will read, so they are bounded
     // but not otherwise shaped.
     body('reason')

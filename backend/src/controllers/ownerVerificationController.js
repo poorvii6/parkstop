@@ -27,7 +27,15 @@ const MAX_ATTEMPTS_PER_DAY = 5;           // per paid step, to cap cost and abus
 // both. GOOD_NAME_MATCH: good enough to proceed. REVIEW_NAME_MATCH: allowed,
 // flagged for an admin.
 const { GOOD_NAME_MATCH, REVIEW_NAME_MATCH } = require('../services/nameMatch');
-const DOC_TYPES = ['electricity_bill', 'property_tax', 'rent_agreement', 'sale_deed', 'water_bill', 'other'];
+/**
+ * One list, shared with the per-spot flow and with both apps' screens.
+ *
+ * This was its own array of six strings, and stage 1 copied it — which is how
+ * an electricity bill became acceptable proof that someone owns a driveway.
+ * Utility bills are gone; see constants/propertyDocTypes.js for why, and for
+ * what happens to a document already stored under a removed type.
+ */
+const { PROPERTY_DOC_TYPE_KEYS: DOC_TYPES } = require('../constants/propertyDocTypes');
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -102,14 +110,49 @@ function publicBase(req) {
   return `https://${req.get('host')}`;
 }
 
-/** What the app shows: each step done/not, plus overall status. No raw IDs. */
+/**
+ * What the app shows: each step done/not, plus overall status. No raw IDs.
+ *
+ * THE PROPERTY DOCUMENT IS NOT A STEP HERE ANY MORE, and it is worth saying
+ * why at length, because removing a verification step looks like weakening one.
+ *
+ * This flow verifies a PERSON: Aadhaar, PAN, a live selfie, a bank account.
+ * Every one of those is checked against a record by Cashfree. The property
+ * document was the exception — it was uploaded, stored, shown to an admin, and
+ * compared to NOTHING. Its `property_address` was never geocoded, never
+ * measured against a pin, never matched to the Aadhaar name. Five reads of that
+ * column exist and all five only display it.
+ *
+ * It was also mandatory, and it gated money: no `all_done` meant no submit,
+ * no approval, and `payoutRequestController` refuses a withdrawal to an owner
+ * who is not approved. So it blocked an owner's income while establishing
+ * nothing.
+ *
+ * Worse, it was one document for a whole account — `user_id` is unique — so an
+ * owner with four driveways in four localities satisfied it with one piece of
+ * paper that named at most one of them. An admin approving the person after
+ * reading it could reasonably believe they had approved a property. That
+ * belief is the exact hole per-spot verification exists to close.
+ *
+ * A property document is now collected and checked in ONE place: per spot, in
+ * spot_verifications, where it is geocoded, measured against that spot's pin,
+ * name-matched against the Aadhaar name, and confirmed at the registrar's
+ * office. Four driveways means four documents and four checks.
+ *
+ * Nothing is weakened by this. A spot needs its owner approved AND its own
+ * verification passed — see ParkingSpot.js and Booking.js — so the property
+ * gate has moved to where it is real, not disappeared.
+ *
+ * The columns and the admin's view of them stay, because rows written before
+ * today still hold documents an admin may need to see. There is simply no
+ * longer a way to write one.
+ */
 function summarize(rec) {
   const steps = {
     aadhaar: !!rec.aadhaar_verified_at,
     pan: !!rec.pan_verified_at,
     selfie: !!rec.selfie_verified_at,
     bank: !!rec.bank_verified_at,
-    property: !!rec.property_uploaded_at,
   };
   return {
     status: rec.status,
@@ -121,7 +164,14 @@ function summarize(rec) {
       aadhaar: steps.aadhaar ? { name: rec.aadhaar_name, last4: rec.aadhaar_last4 } : null,
       pan: steps.pan ? { masked: rec.pan_masked } : null,
       bank: steps.bank ? { last4: rec.bank_last4, ifsc: rec.bank_ifsc, bank_name: rec.bank_name } : null,
-      property: steps.property ? { doc_type: rec.property_doc_type, address: rec.property_address } : null,
+      /**
+       * Only ever present on a row written before the property step was
+       * removed, and labelled so the app cannot show it as a live step. The
+       * owner's property documents are per spot now.
+       */
+      legacy_property: rec.property_uploaded_at
+        ? { doc_type: rec.property_doc_type, address: rec.property_address, uploaded_at: rec.property_uploaded_at }
+        : null,
     },
   };
 }
@@ -388,48 +438,32 @@ async function verifyBank(req, res) {
   } catch (err) { return handleError(res, err, 'verifyBank'); }
 }
 
-/** 5. Property proof — private upload, an admin checks it. */
-async function uploadProperty(req, res) {
-  try {
-    if (!req.file?.buffer) return fail(res, 400, 'Please add a photo of your document.');
-    const docType = String(req.body?.doc_type || '');
-    const address = String(req.body?.address || '').trim();
-    if (!DOC_TYPES.includes(docType)) return fail(res, 400, 'Please choose the document type.');
-    if (address.length < 10) return fail(res, 400, 'Please enter the full address of the parking space.');
+/**
+ * 5. Property proof — REMOVED on 15 Nov 2026. Do not add it back here.
+ *
+ * There was an `uploadProperty` here that wrote
+ * owner_verifications.property_doc_public_id / property_address. It is gone,
+ * and the reason is the same reason payout bank accounts are set in exactly
+ * one place: a second write path for the same fact is a second thing to keep
+ * honest, and this one was never honest to begin with.
+ *
+ * It collected ONE document per ACCOUNT and compared it to nothing — not to a
+ * pin, not to the Aadhaar name, not to any spot. An owner with four driveways
+ * satisfied it with one piece of paper. Meanwhile it was mandatory, so it
+ * blocked owners from being approved and therefore from withdrawing money,
+ * while establishing no fact at all.
+ *
+ * Property documents are collected per SPOT, in spotVerificationController,
+ * where they are geocoded, measured against that spot's own pin, name-matched
+ * and confirmed at the registrar's office. Four driveways, four documents,
+ * four checks.
+ *
+ * If a property document is ever wanted on the person again, it needs a reason
+ * that says what would be CHECKED against it. "An admin looks at it" is what
+ * was here, and it is not one.
+ */
 
-    const rec = await getOrCreate(req.user.id);
-    const blocked = editBlocked(rec);
-    if (blocked) return fail(res, 409, blocked);
-    if (!process.env.CLOUDINARY_CLOUD_NAME) return fail(res, 503, 'File uploads are not configured on the server.');
-
-    const uploaded = await new Promise((resolve, reject) => {
-      const stream = cloudinary.uploader.upload_stream(
-        { folder: 'parkstop/owner-docs', type: 'authenticated', resource_type: 'image' },
-        (error, result) => (error ? reject(error) : resolve(result))
-      );
-      stream.end(req.file.buffer);
-    });
-
-    // Remove the previous document, if any.
-    if (rec.property_doc_public_id && rec.property_doc_public_id !== uploaded.public_id) {
-      cloudinary.uploader.destroy(rec.property_doc_public_id, { type: 'authenticated' }).catch(() => {});
-    }
-
-    await prisma.owner_verifications.update({
-      where: { id: rec.id },
-      data: {
-        property_doc_type: docType,
-        property_doc_public_id: uploaded.public_id,
-        property_address: address.slice(0, 300),
-        property_uploaded_at: new Date(),
-      },
-    });
-    await markInProgress(rec);
-    return ok(res, summarize(await getOrCreate(req.user.id)), 'Document uploaded');
-  } catch (err) { return handleError(res, err, 'uploadProperty'); }
-}
-
-/** 6. Submit for admin review. */
+/** 5. Submit for admin review. */
 async function submit(req, res) {
   try {
     const rec = await getOrCreate(req.user.id);
@@ -507,7 +541,23 @@ async function adminDetail(req, res) {
       pan: { masked: r.pan_masked, registered_name: r.pan_registered_name, name_match: r.pan_name_match, aadhaar_linked: r.pan_aadhaar_linked, verified_at: r.pan_verified_at },
       selfie: { liveness_score: r.liveness_score, face_match_score: r.face_match_score, verified_at: r.selfie_verified_at },
       bank: { last4: r.bank_last4, ifsc: r.bank_ifsc, bank_name: r.bank_name, name_at_bank: r.bank_name_at_bank, name_match: r.bank_name_match, verified_at: r.bank_verified_at },
-      property: { doc_type: r.property_doc_type, address: r.property_address, uploaded_at: r.property_uploaded_at, doc_url: docUrl },
+      /**
+       * Only ever set on a row written before the property step was removed.
+       * Kept so an admin can still see a document someone uploaded under the
+       * old flow, and named `legacy_property` so nobody reads it as a check
+       * that happened: nothing was ever compared to it. The real property
+       * check is per spot, in spotVerificationController.
+       */
+      legacy_property: r.property_uploaded_at
+        ? {
+          doc_type: r.property_doc_type,
+          address: r.property_address,
+          uploaded_at: r.property_uploaded_at,
+          doc_url: docUrl,
+          note: 'Uploaded under the old per-account property step. It was never '
+            + "compared to any spot, pin or name. This spot's own verification is what counts.",
+        }
+        : null,
     });
   } catch (err) { return handleError(res, err, 'adminDetail'); }
 }
@@ -553,7 +603,7 @@ async function adminReject(req, res) {
 
 module.exports = {
   getStatus, startAadhaar, aadhaarReturnPage, completeAadhaar,
-  verifyPan, verifySelfie, verifyBank, uploadProperty, submit,
+  verifyPan, verifySelfie, verifyBank, submit,
   adminList, adminDetail, adminApprove, adminReject,
   // exported for tests
   _summarize: summarize,

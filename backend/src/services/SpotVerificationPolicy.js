@@ -179,6 +179,35 @@ function addressVerdictFor({ metres, precision, uncertaintyM }) {
 }
 
 /**
+ * Are these two typed addresses the same place, for the purpose of deciding
+ * whether one document may cover both spots?
+ *
+ * Deliberately crude, and deliberately crude in the SAFE direction. It is only
+ * ever used to answer "has this exact file already been submitted somewhere
+ * else?", and the consequence of saying "not the same" is that an admin is
+ * asked to look. The consequence of a clever normaliser mistakenly saying
+ * "same" is a document silently covering a second address, so near-misses must
+ * fall on the side of asking.
+ *
+ * So: case, punctuation and runs of whitespace are ignored, and nothing else
+ * is. No abbreviation expansion, no "Rd" for "Road", no transliteration. Two
+ * spellings of one address read as two addresses here, which is the right
+ * failure.
+ */
+function sameClaimedAddress(a, b) {
+  const flatten = (v) => String(v || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .trim();
+
+  const left = flatten(a);
+  const right = flatten(b);
+  // Two blanks are not a match. Nothing is known about either.
+  if (!left || !right) return false;
+  return left === right;
+}
+
+/**
  * May this spot go live? Both stages, or neither.
  *
  * A pure function rather than an implicit consequence of the status machine,
@@ -198,9 +227,36 @@ function deskAndFieldPassed(record) {
 }
 
 /**
+ * WHOSE NAME the ownership document is supposed to carry.
+ *
+ * An owner's document names the owner, and is checked against their verified
+ * Aadhaar name. A TENANT's ownership document names their LANDLORD — that is
+ * what stage 3 asks a tenant to submit, and it is correct — so checking it
+ * against the tenant's Aadhaar name asks the wrong question and gets the wrong
+ * answer every single time.
+ *
+ * It was doing exactly that until 15 Nov 2026: a correct tenant submission
+ * (khata "Ramesh Gupta", owner "Priya Nair") came out NO_MATCH, raised
+ * NAME_NO_MATCH and demanded an override. Every tenant, every time. The note
+ * on deskPassBlockers below says why that is dangerous in its own words — an
+ * override that is always required is not a signal, it is a keystroke — and an
+ * admin trained to click through NAME_NO_MATCH is an admin who will click
+ * through it on a forged OWNER submission too.
+ *
+ * So for a tenant the document is compared to the landlord's name instead, and
+ * a second question is asked that nobody was asking at all: does the consent
+ * letter actually name this owner? We cannot read the letter, so an admin must
+ * say. For an owner, nothing changes.
+ */
+const NAME_CHECKED_AGAINST = {
+  AADHAAR: 'aadhaar_name',
+  LANDLORD: 'landlord_name',
+};
+
+/**
  * What stands in the way of passing a desk review.
  *
- * Only two things, and both yield to an admin who says why in writing: a name
+ * Both of the original two yield to an admin who says why in writing: a name
  * that does not look like the same person, and an address that is either
  * somewhere else or nowhere at all.
  *
@@ -208,16 +264,56 @@ function deskAndFieldPassed(record) {
  * addresses resolve only to a locality — it is what the geocoder does — so
  * blocking on that would mean an override on nearly every pass, and an
  * override that is always required is not a signal, it is a keystroke.
+ *
+ * @param {object} args
+ * @param {string|null} args.nameVerdict
+ * @param {string}      args.addressVerdict
+ * @param {string}      [args.checkedAgainst]  see NAME_CHECKED_AGAINST
+ * @param {boolean}     [args.isTenant]
+ * @param {boolean|null}[args.nocNamesOwner]   admin's answer; tenants only
  */
-function deskPassBlockers({ nameVerdict, addressVerdict }) {
+function deskPassBlockers({
+  nameVerdict,
+  addressVerdict,
+  checkedAgainst = NAME_CHECKED_AGAINST.AADHAAR,
+  isTenant = false,
+  nocNamesOwner = null,
+}) {
   const blockers = [];
 
   if (!GOOD_NAME_MATCH.includes(nameVerdict) && !REVIEW_NAME_MATCH.includes(nameVerdict)) {
+    blockers.push(checkedAgainst === NAME_CHECKED_AGAINST.LANDLORD
+      ? {
+        code: 'LANDLORD_NAME_NO_MATCH',
+        message: 'The name on the ownership document does not look like the landlord who signed the consent letter.',
+      }
+      : {
+        code: 'NAME_NO_MATCH',
+        message: 'The name on the document does not look like the same person as the verified Aadhaar name.',
+      });
+  }
+
+  /**
+   * The letter has to name the owner, and only a human can tell us.
+   *
+   * Without this the tenant path held a letter nobody had read against the
+   * person claiming it: an owner could submit their landlord's genuine khata
+   * plus a consent letter written for somebody else entirely — a previous
+   * tenant, say — and both documents would be real.
+   *
+   * It does not yield to an override, because there is nothing to weigh. The
+   * admin is looking at the letter. Either it names this owner or it does not.
+   */
+  if (isTenant && nocNamesOwner !== true) {
     blockers.push({
-      code: 'NAME_NO_MATCH',
-      message: 'The name on the document does not look like the same person as the verified Aadhaar name.',
+      code: 'NOC_DOES_NOT_NAME_OWNER',
+      message: nocNamesOwner === false
+        ? 'The consent letter does not name this owner, so it does not permit them to let this space.'
+        : 'Confirm that the consent letter names this owner and this address.',
+      final: true,
     });
   }
+
   if (addressVerdict === ADDRESS_VERDICT.MISMATCH) {
     blockers.push({
       code: 'ADDRESS_MISMATCH',
@@ -233,6 +329,15 @@ function deskPassBlockers({ nameVerdict, addressVerdict }) {
 
   return blockers;
 }
+
+/**
+ * The blockers an override cannot clear.
+ *
+ * Most blockers are judgment calls an admin may take responsibility for in
+ * writing. A few are not: they are missing facts, and no amount of reasoning
+ * supplies them.
+ */
+const unoverridableBlockers = (blockers) => blockers.filter((b) => b.final === true);
 
 /**
  * What a DRIVER may see, given the record — the value cached on
@@ -349,9 +454,12 @@ module.exports = {
   ADDRESS_VERDICT,
   ADDRESS_CONSISTENT_M,
   ADDRESS_REVIEW_M,
+  NAME_CHECKED_AGAINST,
   waitFor,
   addressVerdictFor,
+  sameClaimedAddress,
   deskPassBlockers,
+  unoverridableBlockers,
   deskAndFieldPassed,
   driverVisibleStatusFor,
   ownerMessageFor,

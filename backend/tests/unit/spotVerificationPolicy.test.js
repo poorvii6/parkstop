@@ -221,7 +221,7 @@ describe('ownerSummary is the one shape both owner screens read', () => {
         status: S.DESK_PENDING,
         submitted_at: hoursAgo(37),
         doc_public_id: 'parkstop/spot-docs/abc',
-        doc_type: 'electricity_bill',
+        doc_type: 'khata_certificate',
         claimed_address: '1 Test St',
         relationship: 'owner',
       },
@@ -239,7 +239,7 @@ describe('ownerSummary is the one shape both owner screens read', () => {
       promised_hours: 48,
       pin_locked: true,
     });
-    expect(out.document).toEqual({ doc_type: 'electricity_bill', address: '1 Test St', relationship: 'owner' });
+    expect(out.document).toEqual({ doc_type: 'khata_certificate', address: '1 Test St', relationship: 'owner' });
   });
 
   test('a grandfathered spot reads as live while its review is in flight', () => {
@@ -275,7 +275,7 @@ describe('ownerSummary is the one shape both owner screens read', () => {
   test('it never leaks the document id', () => {
     const out = Policy.ownerSummary(
       { id: 8, spot_verification_status: S.IN_PROGRESS },
-      { status: S.IN_PROGRESS, doc_public_id: 'parkstop/spot-docs/secret123', doc_type: 'water_bill' },
+      { status: S.IN_PROGRESS, doc_public_id: 'parkstop/spot-docs/secret123', doc_type: 'khata_certificate' },
       NOW
     );
 

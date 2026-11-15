@@ -152,6 +152,19 @@ model spot_verifications {
   /// Private Cloudinary id (type: authenticated). Admins get a signed URL;
   /// the document itself is never public.
   doc_public_id          String?   @db.VarChar(255)
+  /// SHA-256 of the uploaded file, so the SAME document submitted for two
+  /// spots can be recognised.
+  ///
+  /// Cloudinary mints a new public_id for every upload, so the ids never match
+  /// even when the file is byte-identical — without this there was nothing to
+  /// compare. One genuine khata could verify four unrelated driveways: the
+  /// name matched (same person), a locality geocode returns UNVERIFIABLE which
+  /// does not block, and the field check found the record because the record
+  /// is real.
+  ///
+  /// Reuse at the SAME claimed address is ordinary and allowed — four bays on
+  /// one property is one property. Reuse at a DIFFERENT address is refused.
+  doc_sha256             String?   @db.VarChar(64)
   /// The address printed on the document, typed by the owner. The spot's own
   /// `address` column is not a substitute: every active spot in production has
   /// one shorter than ten characters.
@@ -160,6 +173,9 @@ model spot_verifications {
   relationship           String?   @db.VarChar(10)
   landlord_name          String?   @db.VarChar(150)
   landlord_noc_public_id String?   @db.VarChar(255)
+  /// SHA-256 of the consent letter, for the same reason as doc_sha256: one
+  /// letter must not quietly authorise spots at several addresses.
+  landlord_noc_sha256    String?   @db.VarChar(64)
   /// When the owner submitted. The 48-hour clock runs from here.
   submitted_at           DateTime? @db.Timestamp(6)
 
@@ -176,10 +192,32 @@ model spot_verifications {
   // ── Desk review: an admin reads the document (stage 2) ──────────────────
   /// The name as printed on the document, typed by the admin.
   name_on_document      String?   @db.VarChar(150)
-  /// DIRECT_MATCH | GOOD_PARTIAL_MATCH | MODERATE_PARTIAL_MATCH | NO_MATCH,
-  /// against owner_verifications.aadhaar_name. Advises the admin; it does not
-  /// decide, because a human typed the input off a photograph.
+  /// DIRECT_MATCH | GOOD_PARTIAL_MATCH | MODERATE_PARTIAL_MATCH | NO_MATCH.
+  /// Advises the admin; it does not decide, because a human typed the input
+  /// off a photograph.
   name_match            String?   @db.VarChar(30)
+  /// WHOSE name name_match is about: aadhaar_name, or landlord_name for a
+  /// rented spot.
+  ///
+  /// Stored because name_match is unreadable without it. An owner-occupied
+  /// spot's document must name the OWNER; a rented spot's ownership document
+  /// must name the LANDLORD, which is what we asked the tenant to send. Those
+  /// are different claims and a bare DIRECT_MATCH does not say which was made.
+  ///
+  /// Until 15 Nov 2026 a tenant's document was compared to the TENANT's
+  /// Aadhaar name, so every correct tenant submission came out NO_MATCH and
+  /// demanded an override — training admins to click through the one blocker
+  /// that catches a forged owner submission.
+  name_checked_against  String?   @db.VarChar(20)
+  /// For a rented spot: the admin read the consent letter and confirmed it
+  /// names this owner and this address.
+  ///
+  /// We cannot read the letter, so this is a human's answer, and a desk pass
+  /// on a rented spot cannot be given without it. Nothing was asking before,
+  /// which left the tenant path holding a letter nobody had checked against
+  /// the person claiming it — a genuine khata plus a letter written for a
+  /// previous tenant would have passed, both documents real.
+  noc_names_owner       Boolean?
   /// Where claimed_address geocoded to, kept so address_match_metres can be
   /// explained months later instead of being an unaccountable number.
   geocoded_lat          Decimal?  @db.Decimal(10, 8)

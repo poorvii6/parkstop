@@ -90,8 +90,11 @@ describe('an initial standing for a name is good, but never direct', () => {
   });
 
   test('the initial has to be the right letter', () => {
-    // "S Kumar" is not Rajesh Kumar; one token matches out of two.
-    expect(verdict('S Kumar', 'Rajesh Kumar')).toBe(NAME_MATCH.MODERATE_PARTIAL);
+    // "S Kumar" is not Rajesh Kumar. The S cannot stand for RAJESH, so it is a
+    // part of the name that CONTRADICTS rather than one that merely says less,
+    // and it blocks. Was MODERATE_PARTIAL until 15 Nov 2026, which did not
+    // block — see the conflict note in compareNames.
+    expect(verdict('S Kumar', 'Rajesh Kumar')).toBe(NAME_MATCH.NONE);
   });
 
   test('never DIRECT, because an initial could be any number of people', () => {
@@ -112,10 +115,33 @@ describe('a name that says more, or less', () => {
 });
 
 describe('a different person', () => {
-  test('a shared surname alone is only moderate, and a human decides', () => {
-    // Kumar is one of the commonest surnames in India, so this must not read
-    // as confirmation -- and must not be refused outright either.
-    expect(verdict('Suresh Kumar', 'Rajesh Kumar')).toBe(NAME_MATCH.MODERATE_PARTIAL);
+  test('a shared surname is not enough: the given names contradict', () => {
+    // This used to be MODERATE_PARTIAL_MATCH, which is in REVIEW_NAME_MATCH
+    // and does NOT block a desk pass. So a document naming Suresh Kumar
+    // verified a spot for Rajesh Kumar with no override and no note — and
+    // Kumar is one of the commonest surnames in India, so the hole was wide.
+    //
+    // It is NO_MATCH now. Not an outright refusal: an admin who has read the
+    // document can still pass it with a written reason, which is recorded
+    // against the spot. What changed is that someone has to say why.
+    expect(verdict('Suresh Kumar', 'Rajesh Kumar')).toBe(NAME_MATCH.NONE);
+  });
+
+  test('a contradicted name reports how many parts disagree', () => {
+    expect(compareNames('Suresh Kumar', 'Rajesh Kumar').conflicting).toBe(1);
+    expect(compareNames('Amit Sharma', 'Rajesh Kumar').conflicting).toBe(2);
+  });
+
+  test('a name that only says less does not contradict, and is not blocked', () => {
+    // The distinction the old code could not make. "Ramesh" agrees with
+    // "Ramesh Kumar" as far as it goes; "Ramesh Gupta" does not.
+    const short = compareNames('Ramesh', 'Ramesh Kumar');
+    expect(short.conflicting).toBe(0);
+    expect(short.verdict).toBe(NAME_MATCH.MODERATE_PARTIAL);
+
+    const conflict = compareNames('Ramesh Gupta', 'Ramesh Kumar');
+    expect(conflict.conflicting).toBe(1);
+    expect(conflict.verdict).toBe(NAME_MATCH.NONE);
   });
 
   test('nothing in common is no match', () => {
@@ -155,7 +181,11 @@ describe('what the admin reads next to the two names', () => {
   test('each verdict gets a sentence, and the moderate one shows the count', () => {
     expect(explainNameMatch(compareNames('Rajesh Kumar', 'Rajesh Kumar'))).toMatch(/the same/i);
     expect(explainNameMatch(compareNames('R Kumar', 'Rajesh Kumar'))).toMatch(/initial/i);
-    expect(explainNameMatch(compareNames('Suresh Kumar', 'Rajesh Kumar'))).toMatch(/1 of 2 parts match/);
-    expect(explainNameMatch(compareNames('Amit Sharma', 'Rajesh Kumar'))).toMatch(/do not look like/i);
+    // A contradicted name says so, and says how much of it disagrees.
+    expect(explainNameMatch(compareNames('Suresh Kumar', 'Rajesh Kumar'))).toMatch(/contradict/i);
+    expect(explainNameMatch(compareNames('Suresh Kumar', 'Rajesh Kumar'))).toMatch(/different people/i);
+    // A name that merely says less reads differently, and shows the count.
+    expect(explainNameMatch(compareNames('Ramesh', 'Ramesh Kumar'))).toMatch(/1 of 2 parts match/);
+    expect(explainNameMatch(compareNames('Amit Sharma', 'Rajesh Kumar'))).toMatch(/contradict|do not look like/i);
   });
 });

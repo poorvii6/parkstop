@@ -4,7 +4,12 @@
  */
 import apiClient from './client';
 
-export type StepKey = 'aadhaar' | 'pan' | 'selfie' | 'bank' | 'property';
+/**
+ * 'property' was a fifth step. It is gone: it collected one document for the
+ * whole account and compared it to nothing. Each spot carries its own property
+ * document now, measured against that spot's pin.
+ */
+export type StepKey = 'aadhaar' | 'pan' | 'selfie' | 'bank';
 export type OwnerStatus = 'not_started' | 'in_progress' | 'pending' | 'approved' | 'rejected';
 
 export type OwnerVerification = {
@@ -17,7 +22,8 @@ export type OwnerVerification = {
     aadhaar: { name: string; last4: string } | null;
     pan: { masked: string } | null;
     bank: { last4: string; ifsc: string; bank_name: string | null } | null;
-    property: { doc_type: string; address: string } | null;
+    /** Only on accounts that used the old per-account property step. */
+    legacy_property: { doc_type: string; address: string; uploaded_at: string } | null;
   };
 };
 
@@ -51,14 +57,9 @@ export const ownerVerification = {
   verifyBank: async (account_number: string, ifsc: string) =>
     unwrap(await apiClient.post('/owner-verification/bank', { account_number, ifsc })),
 
-  uploadProperty: async (uri: string, mimeType: string | undefined, doc_type: string, address: string) => {
-    const form = new FormData();
-    const type = mimeType && /^image\/(jpe?g|png|webp)$/.test(mimeType) ? mimeType : 'image/jpeg';
-    form.append('document', { uri, name: `document.${type.split('/')[1]}`, type } as any);
-    form.append('doc_type', doc_type);
-    form.append('address', address);
-    return unwrap(await apiClient.post('/owner-verification/property', form, multipart));
-  },
+  // uploadProperty is gone with the step it served. A spot's property document
+  // goes to /spot-verification/:spotId/document, where it is measured against
+  // that spot's own pin.
 
   submit: async () => unwrap(await apiClient.post('/owner-verification/submit')),
 
@@ -69,14 +70,15 @@ export const ownerVerification = {
   adminReject: async (userId: number, reason: string) => (await apiClient.post(`/owner-verification/admin/${userId}/reject`, { reason })).data,
 };
 
-export const DOC_TYPES: { key: string; label: string }[] = [
-  { key: 'electricity_bill', label: 'Electricity bill' },
-  { key: 'property_tax', label: 'Property tax receipt' },
-  { key: 'rent_agreement', label: 'Rent agreement' },
-  { key: 'sale_deed', label: 'Sale deed' },
-  { key: 'water_bill', label: 'Water bill' },
-  { key: 'other', label: 'Other proof' },
-];
+/**
+ * The document list, re-exported from the one place it is defined.
+ *
+ * It used to be written out here, which made it the third copy of the same six
+ * strings and the one the owner actually saw. Electricity and water bills are
+ * gone: they prove you pay for power at an address, not that you own the land.
+ * See constants/propertyDocTypes.ts.
+ */
+export { PROPERTY_DOC_TYPES as DOC_TYPES, labelForDocType } from '../constants/propertyDocTypes';
 
 /** Plain-English labels for the warning flags an admin sees. */
 export const FLAG_LABELS: Record<string, string> = {
