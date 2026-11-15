@@ -47,6 +47,27 @@ export const PROPERTY_DOC_TYPES: PropertyDocType[] = [
   { key: 'other', label: 'Other ownership document', proves: OWNERSHIP },
 ];
 
+/**
+ * What can carry ownership from a dead holder to the person in front of us.
+ *
+ * An inherited khata still in a dead parent's name is ordinary in Bengaluru,
+ * so a document naming a LATE holder cannot simply be refused — that would
+ * leave honest heirs with no route at all. But it is cleared by NAMING the
+ * document the reviewer is holding, not by writing a note: a note is a
+ * keystroke, whereas "I am looking at a succession certificate" is a
+ * statement of fact that can be checked later and that someone has put their
+ * name to. Same distinction as the consent-letter confirmation.
+ *
+ * Mirrors INHERITANCE_DOC_TYPES in backend/src/constants/propertyDocTypes.js
+ * and is checked against it by the same drift test.
+ */
+export const INHERITANCE_DOC_TYPES: { key: string; label: string }[] = [
+  { key: 'khata_transfer', label: 'Khata transfer / mutation in the heir\'s name' },
+  { key: 'succession_certificate', label: 'Succession certificate' },
+  { key: 'partition_deed', label: 'Partition deed between the heirs' },
+  { key: 'probated_will', label: 'Probated will' },
+];
+
 /** The types that mean the submitter is a tenant and needs the landlord's NOC. */
 export const TENANCY_DOC_TYPE_KEYS: string[] = PROPERTY_DOC_TYPES
   .filter((d) => d.proves === TENANCY)
@@ -63,5 +84,7 @@ export const isTenancyDoc = (key?: string | null): boolean =>
  */
 export function labelForDocType(key?: string | null): string | null {
   if (!key) return null;
-  return PROPERTY_DOC_TYPES.find((d) => d.key === key)?.label || String(key);
+  return PROPERTY_DOC_TYPES.find((d) => d.key === key)?.label
+    || INHERITANCE_DOC_TYPES.find((d) => d.key === key)?.label
+    || String(key);
 }

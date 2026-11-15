@@ -105,7 +105,16 @@ export default function AdminDashboard() {
         <Text style={styles.sectionTitle}>Manage</Text>
         <TouchableOpacity style={[BlueprintTheme.glassCard, styles.actionCard]} onPress={() => router.push('/admin/verifications' as any)}>
           <Text style={styles.actionTitle}>Owner verifications</Text>
-          <Text style={styles.actionSub}>Review and approve new spot owners</Text>
+          <Text style={styles.actionSub}>Approve the PERSON — Aadhaar, PAN, selfie, bank</Text>
+        </TouchableOpacity>
+        {/*
+          A separate queue, because this approves a PLACE. An approved owner can
+          still have four driveways nobody has checked, and each is verified on
+          its own evidence.
+        */}
+        <TouchableOpacity style={[BlueprintTheme.glassCard, styles.actionCard]} onPress={() => router.push('/admin/spot-verifications' as any)}>
+          <Text style={styles.actionTitle}>Spot verifications</Text>
+          <Text style={styles.actionSub}>Approve the PLACE — document, address, registrar. 48-hour promise</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[BlueprintTheme.glassCard, styles.actionCard]} onPress={() => router.push('/admin/payouts' as any)}>
           <Text style={styles.actionTitle}>Owner payouts</Text>

@@ -32,6 +32,9 @@ export default function RootLayout() {
         <Stack.Screen name="admin/index" options={{ headerShown: false }} />
         <Stack.Screen name="admin/verifications" options={{ headerShown: false, animation: 'slide_from_right' }} />
         <Stack.Screen name="admin/verification/[userId]" options={{ headerShown: false, animation: 'slide_from_right' }} />
+        {/* Per-SPOT verification: the queue, and one submission at a time. */}
+        <Stack.Screen name="admin/spot-verifications" options={{ headerShown: false, animation: 'slide_from_right' }} />
+        <Stack.Screen name="admin/spot-verification/[spotId]" options={{ headerShown: false, animation: 'slide_from_right' }} />
         <Stack.Screen name="admin/payouts" options={{ headerShown: false, animation: 'slide_from_right' }} />
 
         {/* 7. Overlays */}
