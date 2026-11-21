@@ -11,6 +11,7 @@ const config = require('./config/env');
 const db = require('./config/database');
 const { initializeSocket } = require('./config/socket');
 const logger = require('./utils/logger');
+const { resolveBuild } = require('./utils/buildInfo');
 const { errorHandler, notFound } = require('./middleware/errorHandler');
 
 const authRoutes = require('./routes/auth');
@@ -163,6 +164,14 @@ if (config.env === 'production') {
   app.use(morgan('dev'));
 }
 
+/**
+ * Which build is answering. Resolved once at module load, because it
+ * identifies THIS process and cannot change while it is running — that is the
+ * whole point of reporting it. See src/utils/buildInfo.js for why /health
+ * needs this at all.
+ */
+const BUILD = resolveBuild(process.env);
+
 // Health check
 app.get('/health', async (req, res) => {
   try {
@@ -183,12 +192,17 @@ app.get('/health', async (req, res) => {
       environment: config.env,
       database: 'connected',
       payout_queue: queueMode,
+      build: BUILD,
       degraded: degraded.length ? degraded : undefined,
     });
   } catch (error) {
     res.status(500).json({
       success: false,
       database: 'disconnected',
+      // Reported on the failure path too: "the database is unreachable" is a
+      // different problem depending on whether the build that says so is the
+      // one just deployed or the one before it.
+      build: BUILD,
       error: error.message
     });
   }
