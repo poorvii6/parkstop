@@ -75,6 +75,121 @@ function assertValidPrice(value) {
 }
 
 /**
+ * The most bays one listing may claim.
+ *
+ * 50 is not a new number — it is what the create route has always enforced
+ * (`body('total_slots').isInt({ min: 1, max: 50 })`). The update route had no
+ * validators at all, so the same field was capped coming in one door and
+ * unbounded through the other. Reusing the cap rather than inventing a
+ * tighter one keeps a legitimate 40-bay listing editable.
+ */
+const MAX_SLOTS = Number(process.env.MAX_SPOT_SLOTS) || 50;
+
+/**
+ * A slot count: a whole number inside the cap.
+ *
+ * total_slots is not a cosmetic field. Three things read it:
+ *
+ *   - advertised availability, via withLiveAvailability above, which is
+ *     `total_slots - counted bookings` and ignores the stored counter. So
+ *     total_slots: 100 advertises 100 free bays on a driveway that holds one.
+ *   - the slot picker a driver chooses from: SpotController.getSlotStatus
+ *     generates one named slot per total_slots when slot_names is empty, so
+ *     100 invents a hundred bays called "Slot A1" to "Slot J10".
+ *   - the surge multiplier, via PricingService.demandMultiplierFor, which is
+ *     `active / total_slots`. One active booking on total_slots: 1 is a ratio
+ *     of 1.0, which is 2.0x — an owner doubling what the next driver pays.
+ *
+ * car_slots and bike_slots are live per-type counters that the booking flow
+ * decrements and increments (Booking.js), and Booking.create refuses a car
+ * when car_slots has run out. Raising them by hand lets through more bookings
+ * than the bay can physically hold.
+ */
+function assertSlotCount(value, field, { min }) {
+  // Deliberately not Number(value). Number('') and Number(null) are both 0,
+  // and 0 IS a valid car_slots — so a blank form field or an explicit null
+  // would pass this guard and silently zero a live counter instead of being
+  // refused. Only a number, or a string that actually contains one, counts.
+  const n = typeof value === 'number'
+    ? value
+    : (typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN);
+
+  if (!Number.isInteger(n) || n < min || n > MAX_SLOTS) {
+    const err = new Error(
+      `${field} must be a whole number between ${min} and ${MAX_SLOTS}`
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+  return n;
+}
+
+/**
+ * A per-type counter cannot exceed the capacity it is counting against.
+ *
+ * Checked against the row as it will BE after the write, not against whichever
+ * fields happen to be in this request: `{ total_slots: 1 }` alone on a spot
+ * carrying car_slots: 5 would otherwise leave five car bays on a one-bay
+ * driveway, which is the same lie by a different route.
+ *
+ * A number is required for `total` — a legacy row with total_slots NULL has no
+ * capacity to compare against, so there is nothing to enforce.
+ */
+function assertTypeSlotsFitTotal({ car, bike, total }) {
+  if (!Number.isFinite(total)) return;
+
+  for (const [field, value] of [['car_slots', car], ['bike_slots', bike]]) {
+    if (Number.isFinite(value) && value > total) {
+      const err = new Error(`${field} (${value}) cannot exceed total_slots (${total})`);
+      err.statusCode = 400;
+      throw err;
+    }
+  }
+}
+
+/**
+ * A coordinate, or a 400.
+ *
+ * The update path used to drop an unparseable coordinate on the floor:
+ * `coordsOk` was false and the column was simply left alone, so a client
+ * sending latitude: 'abc' got a 200 and believed the pin had moved. Present
+ * means it must be a real coordinate; absent still means "leave it alone".
+ */
+function assertCoordinate(value, field, limit) {
+  const n = typeof value === 'number'
+    ? value
+    : (typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN);
+
+  if (!Number.isFinite(n) || Math.abs(n) > limit) {
+    const err = new Error(`${field} must be a number between -${limit} and ${limit}`);
+    err.statusCode = 400;
+    throw err;
+  }
+  return n;
+}
+
+/** Whether a caller actually sent a field, as opposed to leaving it out. */
+const isGiven = (v) => v !== undefined && v !== null && v !== '';
+
+/** Metres between two coordinates. Flat-earth is ample at this scale. */
+function metresBetween(aLat, aLng, bLat, bLng) {
+  const dx = (bLng - aLng) * 111320 * Math.cos((aLat * Math.PI) / 180);
+  const dy = (bLat - aLat) * 110540;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+/**
+ * How far the pin may shift before it counts as a MOVE rather than the app
+ * sending back what it already had.
+ *
+ * Decimal(10,8) round-trips and a client re-serialising a float will not agree
+ * to the last digit, and refusing those would mean a verified owner could not
+ * edit their own title. Ten metres is below anything meaningful for finding a
+ * driveway and far above float noise.
+ */
+const PIN_MOVE_TOLERANCE_M = 10;
+
+/**
  * What location_type to write, given who is asking.
  *
  * location_type sets the commission rate: CommissionService charges 15% for
@@ -141,21 +256,32 @@ class ParkingSpot {
       const normalizedLocation = locationTypeFor(actorRole, location_type, { isCreate: true });
       const validatedPrice = assertValidPrice(price_per_hour);
 
+      const newTotal = assertSlotCount(total_slots, 'total_slots', { min: 1 });
+      const newCar = assertSlotCount(car_slots, 'car_slots', { min: 0 });
+      const newBike = assertSlotCount(bike_slots, 'bike_slots', { min: 0 });
+      assertTypeSlotsFitTotal({ car: newCar, bike: newBike, total: newTotal });
+
+      // A spot with no usable pin can never be found — the finder filters on a
+      // bounding box — so a listing is not created with one. parseFloat('abc')
+      // wrote NaN and Prisma turned that into a 500.
+      const newLat = assertCoordinate(latitude, 'latitude', 90);
+      const newLng = assertCoordinate(longitude, 'longitude', 180);
+
       const spot = await prisma.parking_spots.create({
         data: {
           spotter_id: parseInt(spotter_id),
           title,
           description,
           price_per_hour: validatedPrice,
-          latitude: parseFloat(latitude),
-          longitude: parseFloat(longitude),
+          latitude: newLat,
+          longitude: newLng,
           address,
           location_type: normalizedLocation,
           amenities: Array.isArray(amenities) ? amenities : [],
-          total_slots: parseInt(total_slots),
-          available_slots: parseInt(total_slots),
-          car_slots: parseInt(car_slots),
-          bike_slots: parseInt(bike_slots),
+          total_slots: newTotal,
+          available_slots: newTotal,
+          car_slots: newCar,
+          bike_slots: newBike,
           images: Array.isArray(images) ? images : [],
           is_available: true,
           is_active: true
@@ -356,10 +482,25 @@ class ParkingSpot {
       latitude,
       longitude
     } = updates;
-    // Moving the pin: only accept real coordinates.
-    const lat = latitude !== undefined && latitude !== null && latitude !== '' ? Number(latitude) : undefined;
-    const lng = longitude !== undefined && longitude !== null && longitude !== '' ? Number(longitude) : undefined;
-    const coordsOk = lat !== undefined && lng !== undefined && Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
+    // Moving the pin.
+    //
+    // A lone coordinate is refused rather than ignored. The old condition
+    // needed BOTH to be usable, so `{ latitude: 12.98 }` on its own wrote
+    // nothing and answered 200 — the owner is told the pin moved, the pin did
+    // not move, and the spot keeps sending drivers to the old place. Half a
+    // coordinate is not a location, so say so.
+    const movingPin = isGiven(latitude) || isGiven(longitude);
+    if (movingPin && !(isGiven(latitude) && isGiven(longitude))) {
+      const err = new Error('latitude and longitude must be sent together');
+      err.statusCode = 400;
+      throw err;
+    }
+
+    // Both present, so both are validated here: an unparseable coordinate used
+    // to leave `coordsOk` false and the column untouched, which is the same
+    // silent success by another name.
+    const lat = movingPin ? assertCoordinate(latitude, 'latitude', 90) : undefined;
+    const lng = movingPin ? assertCoordinate(longitude, 'longitude', 180) : undefined;
 
     const normalizedLocation = locationTypeFor(actorRole, location_type, { isCreate: false });
 
@@ -370,6 +511,112 @@ class ParkingSpot {
       ? undefined
       : assertValidPrice(price_per_hour);
 
+    const isAdmin = String(actorRole || '').toUpperCase() === 'ADMIN';
+
+    const nextTotal = total_slots !== undefined ? assertSlotCount(total_slots, 'total_slots', { min: 1 }) : undefined;
+    const nextCar = car_slots !== undefined ? assertSlotCount(car_slots, 'car_slots', { min: 0 }) : undefined;
+    const nextBike = bike_slots !== undefined ? assertSlotCount(bike_slots, 'bike_slots', { min: 0 }) : undefined;
+    const touchesCapacity = nextTotal !== undefined || nextCar !== undefined || nextBike !== undefined;
+
+    // Everything below needs the spot as it stands.
+    const needsCurrent = touchesCapacity || movingPin;
+    const current = needsCurrent
+      ? await prisma.parking_spots.findUnique({
+          where: { id: parseInt(spotId) },
+          select: {
+            latitude: true, longitude: true,
+            total_slots: true, car_slots: true, bike_slots: true,
+            users: { select: { verification_status: true } },
+          },
+        })
+      : null;
+
+    // The three capacity fields must agree once this write lands, so each is
+    // compared against the value the row will END UP with — which is how
+    // raising total_slots and car_slots together works, and how raising
+    // car_slots alone past the stored total is caught.
+    //
+    // Only when the request touches capacity. A row that is already
+    // inconsistent (nothing stopped car_slots > total_slots before this
+    // change) must not become uneditable: an owner renaming such a spot would
+    // be refused over a state they cannot see and did not cause.
+    if (touchesCapacity) {
+      const stored = (v) => (v === null || v === undefined ? undefined : Number(v));
+      assertTypeSlotsFitTotal({
+        car: nextCar ?? stored(current?.car_slots),
+        bike: nextBike ?? stored(current?.bike_slots),
+        total: nextTotal ?? stored(current?.total_slots),
+      });
+    }
+
+    // Capacity may not drop below the cars already in the bay.
+    //
+    // withLiveAvailability clamps `total - taken` at zero, so an owner setting
+    // total_slots: 1 with three cars parked makes the spot read as full and
+    // vanish from the finder while three drivers are mid-booking — and the
+    // surge ratio goes over 1.0, which is 2.0x for whoever books next.
+    if (nextTotal !== undefined) {
+      const taken = await prisma.bookings.count({
+        where: { spot_id: parseInt(spotId), status: { in: OCCUPYING_STATUSES } },
+      });
+      if (nextTotal < taken) {
+        const err = new Error(
+          `total_slots cannot be set to ${nextTotal}: ${taken} booking(s) are using this spot right now`
+        );
+        err.statusCode = 400;
+        throw err;
+      }
+    }
+
+    // Moving the pin of a live spot.
+    //
+    // Owner verification approves a PERSON, not a place, so nothing re-checks
+    // the location afterwards: an owner verified at one address could move the
+    // pin across the city, or onto a driveway they have no claim to, and the
+    // listing stays approved and bookable the whole time. Once an owner is
+    // approved their spots are visible to drivers — findNearby filters on
+    // `u.verification_status = 'approved'` — so from that point the pin is
+    // fixed, and a different place is a different listing.
+    //
+    // The alternative was to allow the move and reset verification instead.
+    // That is not implementable here: verification_status lives on USERS, not
+    // on parking_spots, so resetting it would hide every other spot the owner
+    // lists and push them back into the KYC queue over a 20-metre correction.
+    // Doing it properly needs a per-spot column and an admin review queue,
+    // which is a migration and a screen, not a guard.
+    let allowCoords = movingPin;
+    if (movingPin && current) {
+      const hasStoredPin = current.latitude !== null && current.longitude !== null;
+      const moved = hasStoredPin
+        ? metresBetween(Number(current.latitude), Number(current.longitude), lat, lng)
+        : Infinity;
+      const approved = current.users?.verification_status === 'approved';
+
+      if (hasStoredPin && moved <= PIN_MOVE_TOLERANCE_M) {
+        // Within tolerance nothing actually moved: the app sends the
+        // coordinates back with every save, and that is not a relocation.
+        // Leave the column alone rather than rewriting it with noise.
+        allowCoords = false;
+      } else if (!hasStoredPin) {
+        // Nothing to move FROM. A spot with no coordinates can never appear in
+        // the finder at all, so setting them for the first time is a fix, not
+        // a move — refusing it would strand the listing permanently.
+        logger.info(`Spot ${spotId} had no pin; coordinates set for the first time`);
+      } else if (isAdmin) {
+        logger.info(`Spot ${spotId} pin moved ${Math.round(moved)}m by an admin`);
+      } else if (approved) {
+        const err = new Error(
+          'This spot cannot be moved now that your account is verified, because drivers ' +
+          'are already navigating to it. List the new location as a new spot, or contact ' +
+          'ParkStop support to move this one.'
+        );
+        err.statusCode = 400;
+        throw err;
+      } else {
+        logger.info(`Spot ${spotId} pin moved ${Math.round(moved)}m by an unverified owner — allowed, not live yet`);
+      }
+    }
+
     return prisma.parking_spots.update({
       where: { id: parseInt(spotId) },
       data: {
@@ -379,12 +626,12 @@ class ParkingSpot {
         address,
         location_type: normalizedLocation,
         amenities: Array.isArray(amenities) ? amenities : undefined,
-        car_slots: car_slots !== undefined ? parseInt(car_slots) : undefined,
-        bike_slots: bike_slots !== undefined ? parseInt(bike_slots) : undefined,
-        total_slots: total_slots !== undefined ? parseInt(total_slots) : undefined,
+        car_slots: nextCar,
+        bike_slots: nextBike,
+        total_slots: nextTotal,
         images: Array.isArray(images) ? images : undefined,
-        latitude: coordsOk ? lat : undefined,
-        longitude: coordsOk ? lng : undefined,
+        latitude: allowCoords ? lat : undefined,
+        longitude: allowCoords ? lng : undefined,
         updated_at: new Date()
       }
     });
