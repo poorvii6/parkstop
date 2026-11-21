@@ -7,9 +7,10 @@ import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, RefreshCon
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { SC } from '../../../constants/SpotterTheme';
+import { SC, ICON } from '../../../constants/SpotterTheme';
 import { ownerVerification, OwnerVerification, StepKey, errorText } from '../../../api/ownerVerification';
 import { PrimaryButton, ErrorNote } from '../../../components/spotter/VerifyUI';
+import { LoadFailed } from '../../../components/LoadFailed';
 
 const STEPS: { key: StepKey; title: string; desc: string; icon: any; route: string }[] = [
   { key: 'aadhaar', title: 'Aadhaar', desc: 'Share your Aadhaar through DigiLocker', icon: 'finger-print', route: '/spotter/verification/aadhaar' },
@@ -65,7 +66,7 @@ export default function VerificationOverview() {
     <SafeAreaView style={s.safe} edges={['top', 'bottom']}>
       <View style={s.header}>
         <TouchableOpacity onPress={() => router.back()} style={s.back} hitSlop={12}>
-          <Ionicons name="chevron-back" size={22} color={SC.textPrimary} />
+          <Ionicons name="chevron-back" size={ICON.tile} color={SC.textPrimary} />
         </TouchableOpacity>
         <Text style={s.headerTitle}>Owner verification</Text>
         <View style={{ width: 36 }} />
@@ -73,6 +74,10 @@ export default function VerificationOverview() {
 
       {loading ? (
         <ActivityIndicator color={SC.accent} size="large" style={{ marginTop: 60 }} />
+      ) : !data ? (
+        // Pull-to-refresh was the only retry, and it isn't discoverable on a
+        // screen that is otherwise blank.
+        <LoadFailed message={error} onRetry={load} what="your verification" />
       ) : (
         <ScrollView
           contentContainerStyle={s.body}
@@ -103,7 +108,7 @@ export default function VerificationOverview() {
                 activeOpacity={0.85}
               >
                 <View style={[s.stepIcon, done && { backgroundColor: SC.successSoft }]}>
-                  <Ionicons name={done ? 'checkmark' : step.icon} size={20} color={done ? SC.success : SC.textPrimary} />
+                  <Ionicons name={done ? 'checkmark' : step.icon} size={ICON.tile} color={done ? SC.success : SC.textPrimary} />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={s.stepTitle}>{i + 1}. {step.title}</Text>
@@ -111,7 +116,7 @@ export default function VerificationOverview() {
                     {done ? doneText(step.key, data) : needsAadhaar ? 'Complete Aadhaar first' : step.desc}
                   </Text>
                 </View>
-                {!locked && <Ionicons name={needsAadhaar ? 'lock-closed' : 'chevron-forward'} size={18} color={SC.textMuted} />}
+                {!locked && <Ionicons name={needsAadhaar ? 'lock-closed' : 'chevron-forward'} size={ICON.row} color={SC.textMuted} />}
               </TouchableOpacity>
             );
           })}
@@ -157,7 +162,7 @@ function StatusCard({ data, doneCount }: { data: OwnerVerification | null; doneC
   const m = map[data.status] || map.not_started;
   return (
     <View style={[s.status, { backgroundColor: m.bg, borderColor: m.color + '55' }]}>
-      <Ionicons name={m.icon} size={26} color={m.color} />
+      <Ionicons name={m.icon} size={ICON.action} color={m.color} />
       <View style={{ flex: 1 }}>
         <Text style={[s.statusTitle, { color: m.color }]}>{m.title}</Text>
         <Text style={s.statusText}>{m.text}</Text>

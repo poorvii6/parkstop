@@ -245,6 +245,62 @@ function pinFreezeReason({ spotStatus, ownerApproved }) {
   return null;
 }
 
+/**
+ * What to tell an owner the moment they are approved as a PERSON.
+ *
+ * This lives here, next to pinFreezeReason and for the same reason: the true
+ * sentence is different in the two gate states, and the caller must not be
+ * what chooses between them.
+ *
+ * The old message said "Your parking spots are now visible to drivers on
+ * ParkStop." That was true before per-spot verification, and it is still true
+ * with the gate OFF. With the gate ON it is wrong in the worst way: the owner
+ * reads it, opens the app, and finds every spot hidden, because the finder now
+ * needs the owner approved AND each spot's own document check.
+ *
+ * @param {object}  arg
+ * @param {number}  arg.spotsNeedingVerification  how many of this owner's
+ *   spots are not yet visible to drivers. Counted by the caller, which is the
+ *   only side with the database. Ignored when the gate is off.
+ * @param {number}  arg.totalSpots  how many spots they have at all.
+ * @returns {{ title: string, body: string }}
+ */
+function ownerApprovedMessage({ spotsNeedingVerification = 0, totalSpots = 0 } = {}) {
+  if (!isSpotGateEnabled()) {
+    // Unchanged, because with the gate off nothing about a spot's own status
+    // affects whether a driver sees it. Promising the per-spot check here
+    // would send the owner looking for a step that does not apply to them.
+    return {
+      title: 'You are verified ✅',
+      body: 'Your parking spots are now visible to drivers on ParkStop.',
+    };
+  }
+
+  // Approved as a person, and nothing of theirs is waiting. Either they have
+  // no spots yet, or every one is already approved or grandfathered.
+  if (spotsNeedingVerification === 0) {
+    return {
+      title: 'You are verified ✅',
+      body: totalSpots > 0
+        ? 'You are verified as a person, and your spots are visible to drivers on ParkStop.'
+        : 'You are verified as a person. Add a spot and send its ownership document, and we '
+          + 'will check it within 48 hours.',
+    };
+  }
+
+  const n = spotsNeedingVerification;
+  const them = n === 1 ? 'it' : 'them';
+  const spot = n === 1 ? 'spot' : 'spots';
+  const needs = n === totalSpots ? `Your ${n === 1 ? 'spot' : `${n} spots`}` : `${n} of your ${spot}`;
+
+  return {
+    title: 'You are verified as a person ✅',
+    body: `${needs} still ${n === 1 ? 'needs' : 'need'} a separate document check before `
+      + `drivers can see ${them}. Send ${n === 1 ? 'its ownership document' : 'the ownership document for each'} `
+      + 'and we will check it within 48 hours.',
+  };
+}
+
 module.exports = {
   SPOT_VERIFICATION_STATUS,
   ALL_SPOT_VERIFICATION_STATUSES,
@@ -261,6 +317,7 @@ module.exports = {
   driverVisibilitySql,
   isPinFrozen,
   pinFreezeReason,
+  ownerApprovedMessage,
   // Re-exported so a screen or controller that already imports the spot
   // constants does not need a second require to turn a type into words.
   labelForDocType,

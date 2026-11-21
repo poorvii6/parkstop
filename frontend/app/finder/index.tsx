@@ -332,7 +332,10 @@ export default function FinderDashboard() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSlotLoading, setIsSlotLoading] = useState(false);
   const [slotLoadError, setSlotLoadError] = useState(false); // true when slots couldn't load due to being offline
-  const [isNearbyLoading, setIsNearbyLoading] = useState(false);
+  // Starts TRUE: the screen is loading from the first paint, before the effect
+  // below has even asked for a position. Starting false showed one frame of
+  // "No spots found" on mount. The effect clears it on every exit.
+  const [isNearbyLoading, setIsNearbyLoading] = useState(true);
 
   useEffect(() => {
     const backAction = () => {
@@ -411,9 +414,29 @@ export default function FinderDashboard() {
     let headingSub: any = null;
     (async () => {
       try {
+        /*
+         * The list is loading from here, not from when the spots request goes
+         * out. Getting a position is the slow part of a cold start —
+         * getLocationFast below races its strategies against a 5 SECOND
+         * timeout, and falls back to an untimed high-accuracy fix after that.
+         * fetchNearbySpots then takes a few milliseconds.
+         *
+         * isNearbyLoading used to be set only inside fetchNearbySpots, so it
+         * covered the fast step and not the slow one. For the whole wait the
+         * sheet rendered "No spots found — try searching a different area",
+         * then every spot appeared at once. That is the slowness, and it was
+         * never the query: measured 1.4ms at 2,000 spots, 6.4ms at 10,000.
+         *
+         * Set on every run of the effect, not just at mount, so retrying
+         * through locationRetryTick shows the skeleton again. EVERY exit below
+         * has to clear it or the skeleton becomes the permanent state.
+         */
+        setIsNearbyLoading(true);
+
         let { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') {
           setHasLocationPermission(false);
+          setIsNearbyLoading(false);
           return;
         }
         setHasLocationPermission(true);
@@ -464,6 +487,12 @@ export default function FinderDashboard() {
           lastUpdateCoords.current = coords;
           saveLastLocation(coords);
           fetchNearbySpots(coords.lat, coords.lng);
+        } else {
+          // No fix. fetchNearbySpots will never run, so nothing else is going
+          // to clear the flag — the watcher may deliver a position in a second
+          // or never. Stop pretending to load and let the "Location is off"
+          // banner and the empty state say what is actually happening.
+          setIsNearbyLoading(false);
         }
         // If coords is null we deliberately CONTINUE rather than bail: the
         // watcher below will deliver a position the moment GPS becomes
@@ -535,33 +564,26 @@ export default function FinderDashboard() {
         // MapLibreNative now owns this (see positionOnFirstFix) and fires on
         // whichever of {map ready, first fix} completes last.
 
-        // Guarded: with no fix there is nothing to search around. The watcher
-        // above fetches spots itself once a position finally arrives.
-        try {
-          if (!coords) throw new Error('no-fix');
-          const res = await apiClient.get(`/spots/nearby?lat=${coords.lat}&lng=${coords.lng}&radius=10`);
-          if (res.data.success) {
-            setSpots(res.data.data.map((sp: any) => ({
-              id: sp.id.toString(),
-              title: sp.title,
-              lat: parseFloat(sp.latitude),
-              lng: parseFloat(sp.longitude),
-              price: parseFloat(sp.price_per_hour),
-              available: parseInt(sp.available_slots) > 0,
-              available_slots: parseInt(sp.available_slots) || 0,
-              distance: sp.distance ? parseFloat(sp.distance).toFixed(1) : undefined,
-              location_type: sp.location_type,
-              images: Array.isArray(sp.images) ? sp.images : []
-            })));
-          }
-        } catch (e: any) {
-          if (e?.message !== 'no-fix') {
-            console.log('Error fetching initial spots', e);
-            setSpots([]);
-          }
-        }
+        /*
+         * There is deliberately no spots fetch here any more.
+         *
+         * This was a second inline apiClient.get for /spots/nearby, with its own
+         * copy of the row mapping — a duplicate of the fetchNearbySpots call
+         * made above as soon as `coords` arrived. Every cold start issued the
+         * same request twice and called setSpots twice with the same data.
+         *
+         * The copy had also drifted from the shared function: it emptied the
+         * list on failure, which rendered "No spots found" for what was really
+         * a network error, and it never cleared nearbyFetchFailed on success.
+         *
+         * With no fix there is nothing to search around, and the watcher above
+         * fetches spots itself the moment a position arrives.
+         */
       } catch (error) {
+        // The last exit that could leave the skeleton turning for ever. Every
+        // other one clears the flag inline; this one covers whatever is left.
         console.log('[Location] Error during initialization:', error);
+        setIsNearbyLoading(false);
       }
     })();
 
@@ -680,10 +702,22 @@ export default function FinderDashboard() {
   // }, [userLocation, searchQuery]);
 
   const lastNearbyFetch = useRef({ t: 0, lat: 0, lng: 0 });
+  // Whether a nearby fetch is actually in flight, as opposed to the screen
+  // merely being in a loading state. The throttle needs to tell the two apart
+  // before it decides whether clearing the flag is safe.
+  const nearbyInFlight = useRef(false);
   const spotsLenRef = useRef(0);
   useEffect(() => { spotsLenRef.current = spots.length; }, [spots]);
 
-  const fetchNearbySpots = async (lat: number | string, lon: number | string, radius: number = 10) => {
+  const fetchNearbySpots = async (
+    lat: number | string,
+    lon: number | string,
+    radius: number = 10,
+    // Set by anything the USER asked for — the retry button. The throttle
+    // exists to swallow GPS ticks, not deliberate taps: a dropped tap is a
+    // button that visibly does nothing.
+    force: boolean = false,
+  ) => {
     // Throttle: identical-area refreshes within 5s are dropped (GPS ticks were
     // spamming this several times per second).
     const nLat = parseFloat(String(lat));
@@ -692,12 +726,26 @@ export default function FinderDashboard() {
     const prev = lastNearbyFetch.current;
     const dLat = (nLat - prev.lat) * 110540;
     const dLng = (nLng - prev.lng) * 111320;
-    if (now - prev.t < 5000 && Math.sqrt(dLat * dLat + dLng * dLng) < 30) return;
+    if (!force && now - prev.t < 5000 && Math.sqrt(dLat * dLat + dLng * dLng) < 30) {
+      /*
+       * Dropping the fetch means we are not loading — and this return is
+       * BEFORE the try/finally, so nothing downstream will clear the flag.
+       * The location effect now sets it before waiting on a GPS fix, so a
+       * throttled call could otherwise leave the skeleton turning for ever.
+       *
+       * Unless a fetch really is in flight: that one owns the flag and will
+       * clear it when it finishes. Clearing it here would uncover the empty
+       * state mid-load, which is the bug this is all about.
+       */
+      if (!nearbyInFlight.current) setIsNearbyLoading(false);
+      return;
+    }
     lastNearbyFetch.current = { t: now, lat: nLat, lng: nLng };
 
     // Quiet refresh: only show the loading skeleton when there's nothing on
     // screen yet — background refreshes must not blink the list.
     if (spotsLenRef.current === 0) setIsNearbyLoading(true);
+    nearbyInFlight.current = true;
     try {
       const res = await apiClient.get(`/spots/nearby?lat=${lat}&lng=${lon}&radius=${radius}`);
       if (res.data.success) {
@@ -723,6 +771,7 @@ export default function FinderDashboard() {
       console.log('Nearby spots fetch failed — keeping last known list', e);
       setNearbyFetchFailed(true);
     } finally {
+      nearbyInFlight.current = false;
       setIsNearbyLoading(false);
     }
   };
@@ -1685,7 +1734,7 @@ export default function FinderDashboard() {
                         Check your connection — this doesn&apos;t mean there are none nearby.
                       </Text>
                       <TouchableOpacity
-                        onPress={() => { if (userLocation) fetchNearbySpots(userLocation.lat, userLocation.lng); }}
+                        onPress={() => { if (userLocation) fetchNearbySpots(userLocation.lat, userLocation.lng, 10, true); }}
                         style={{ marginTop: 12, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 10, backgroundColor: 'rgba(66,133,244,0.18)', borderWidth: 1, borderColor: 'rgba(66,133,244,0.4)' }}
                         accessibilityRole="button"
                         accessibilityLabel="Retry loading nearby spots"

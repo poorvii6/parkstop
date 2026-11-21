@@ -18,7 +18,7 @@ import { View, Text, Image, TouchableOpacity, StyleSheet, Linking } from 'react-
 import * as ImagePicker from 'expo-image-picker';
 import * as DocPicker from 'expo-document-picker';
 import { Ionicons } from '@expo/vector-icons';
-import { SC } from '../../constants/SpotterTheme';
+import { SC, ICON } from '../../constants/SpotterTheme';
 import type { PickedDoc } from '../../api/spotVerification';
 
 const IMAGE_MIME = /^image\/(jpe?g|png|webp)$/;
@@ -91,7 +91,9 @@ export default function DocumentPickerField({
       <View>
         {isPdf(value) ? (
           <View style={s.pdfCard}>
-            <Ionicons name="document-text" size={30} color={SC.accent} />
+            {/* Outline: this stands in for the document rather than
+                reporting a state, like the other illustrations. */}
+            <Ionicons name="document-text-outline" size={ICON.empty} color={SC.accent} />
             <View style={{ flex: 1 }}>
               <Text style={s.pdfName} numberOfLines={2}>{value.name}</Text>
               <Text style={s.pdfHint}>PDF · ready to upload</Text>
@@ -113,17 +115,17 @@ export default function DocumentPickerField({
     <View style={{ gap: 10 }}>
       {/* First, because it is what owners actually have. */}
       <TouchableOpacity style={s.pdfBtn} onPress={pickFile} disabled={disabled || busy}>
-        <Ionicons name="document-attach" size={22} color="#fff" />
+        <Ionicons name="document-attach" size={ICON.tile} color="#fff" />
         <Text style={s.pdfBtnText}>{busy ? 'Opening…' : 'Choose a PDF or file'}</Text>
       </TouchableOpacity>
       <Text style={s.or}>or take a photo of the document</Text>
       <View style={{ flexDirection: 'row', gap: 10 }}>
         <TouchableOpacity style={s.pickBtn} onPress={() => pickImage('camera')} disabled={disabled}>
-          <Ionicons name="camera" size={22} color={SC.textPrimary} />
+          <Ionicons name="camera" size={ICON.tile} color={SC.textPrimary} />
           <Text style={s.pickText}>Camera</Text>
         </TouchableOpacity>
         <TouchableOpacity style={s.pickBtn} onPress={() => pickImage('library')} disabled={disabled}>
-          <Ionicons name="images" size={22} color={SC.textPrimary} />
+          <Ionicons name="images" size={ICON.tile} color={SC.textPrimary} />
           <Text style={s.pickText}>Gallery</Text>
         </TouchableOpacity>
       </View>

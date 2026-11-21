@@ -11,7 +11,7 @@ import NotificationBell from '../../components/NotificationBell';
 import Toast from '../../components/Toast';
 import RevenueChart from '../../components/spotter/RevenueChart';
 import { useSpotterDashboard } from '../../hooks/useSpotterDashboard';
-import { SC, TF, SP, RAD, SS } from '../../constants/SpotterTheme';
+import { SC, TF, SP, RAD, SS, ICON } from '../../constants/SpotterTheme';
 import OwnerVerificationBanner from '../../components/spotter/OwnerVerificationBanner';
 import { Alert } from 'react-native';
 
@@ -205,7 +205,7 @@ export default function SpotterDashboard() {
               accessibilityRole="button"
               accessibilityLabel="Open profile and settings"
             >
-              <Ionicons name="person" size={18} color={SC.info} />
+              <Ionicons name="person" size={ICON.row} color={SC.info} />
             </TouchableOpacity>
           </View>
         </View>
@@ -239,7 +239,9 @@ export default function SpotterDashboard() {
             accessibilityRole="button"
             accessibilityLabel="Could not sync. Tap to retry."
           >
-            <Ionicons name="cloud-offline-outline" size={18} color={SC.warning} />
+            {/* Solid: this banner announces state, like the warning and
+                wallet banners below it. See the weight rule in SpotterTheme. */}
+            <Ionicons name="cloud-offline" size={ICON.tile} color={SC.warning} />
             <View style={{ flex: 1 }}>
               <Text style={{ color: SC.warning, fontWeight: '800', fontSize: 13 }}>
                 Couldn&apos;t sync
@@ -250,7 +252,7 @@ export default function SpotterDashboard() {
                   : 'These figures may be incomplete. Tap to retry.'}
               </Text>
             </View>
-            <Ionicons name="refresh" size={16} color={SC.warning} />
+            <Ionicons name="refresh" size={ICON.label} color={SC.warning} />
           </TouchableOpacity>
         )}
 
@@ -262,7 +264,7 @@ export default function SpotterDashboard() {
             accessibilityRole="button"
             accessibilityLabel="Verify a finder's booking"
           >
-            <Ionicons name="scan-circle-outline" size={24} color="#FFF" style={{ marginBottom: 4 }} />
+            <Ionicons name="scan-circle-outline" size={ICON.action} color="#FFF" style={{ marginBottom: 4 }} />
             <Text style={{ color: '#FFF', fontWeight: '800', fontSize: 13 }}>Verify Finder</Text>
           </TouchableOpacity>
           <TouchableOpacity
@@ -271,7 +273,7 @@ export default function SpotterDashboard() {
             accessibilityRole="button"
             accessibilityLabel="Add a new parking spot"
           >
-            <Ionicons name="add-circle-outline" size={24} color="#FFF" style={{ marginBottom: 4 }} />
+            <Ionicons name="add-circle-outline" size={ICON.action} color="#FFF" style={{ marginBottom: 4 }} />
             <Text style={{ color: '#FFF', fontWeight: '800', fontSize: 13 }}>Add Spot</Text>
           </TouchableOpacity>
         </View>
@@ -288,12 +290,12 @@ export default function SpotterDashboard() {
             ].map((step: any, i: number) => (
               <TouchableOpacity key={i} onPress={step.done ? undefined : step.onPress} activeOpacity={step.done ? 1 : 0.8}
                 style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderTopWidth: i === 0 ? 0 : 1, borderTopColor: SC.border }}>
-                <Ionicons name={step.done ? 'checkmark-circle' : 'ellipse-outline'} size={22} color={step.done ? SC.success : SC.textMuted} style={{ marginRight: 12 }} />
+                <Ionicons name={step.done ? 'checkmark-circle' : 'ellipse-outline'} size={ICON.tile} color={step.done ? SC.success : SC.textMuted} style={{ marginRight: 12 }} />
                 <View style={{ flex: 1 }}>
                   <Text style={{ color: step.done ? SC.textMuted : SC.textPrimary, fontWeight: '700', fontSize: 14, textDecorationLine: step.done ? 'line-through' : 'none' }}>{step.label}</Text>
                   {!step.done && <Text style={{ color: SC.textSecondary, fontSize: 11.5, marginTop: 1 }}>{step.hint}</Text>}
                 </View>
-                {!step.done && <Ionicons name="chevron-forward" size={18} color={SC.textMuted} />}
+                {!step.done && <Ionicons name="chevron-forward" size={ICON.row} color={SC.textMuted} />}
               </TouchableOpacity>
             ))}
           </View>
@@ -303,7 +305,7 @@ export default function SpotterDashboard() {
         <View style={{ marginBottom: SP.xl, gap: 8 }}>
           {payoutInfo?.open_request ? (
             <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(59,130,246,0.15)', padding: 12, borderRadius: RAD.md, borderWidth: 1, borderColor: 'rgba(59,130,246,0.3)' }}>
-              <Ionicons name="paper-plane-outline" size={20} color="#60a5fa" style={{ marginRight: 8 }} />
+              <Ionicons name="paper-plane" size={ICON.tile} color="#60a5fa" style={{ marginRight: 8 }} />
               <View style={{ flex: 1 }}>
                 <Text style={{ color: '#60a5fa', fontWeight: '800', fontSize: 14 }}>₹{Number(payoutInfo.open_request.amount).toFixed(2)} on its way</Text>
                 <Text style={{ color: '#93c5fd', fontSize: 12 }}>
@@ -319,12 +321,12 @@ export default function SpotterDashboard() {
               accessibilityRole="button"
               accessibilityLabel={`You owe ParkStop ${Math.abs(dashboardData.balance).toFixed(2)} rupees. Contact support.`}
             >
-              <Ionicons name="warning" size={20} color="#ef4444" style={{ marginRight: 8 }} />
+              <Ionicons name="warning" size={ICON.tile} color="#ef4444" style={{ marginRight: 8 }} />
               <View style={{ flex: 1 }}>
                 <Text style={{ color: '#ef4444', fontWeight: '800', fontSize: 14 }}>Owed to ParkStop: ₹{Math.abs(dashboardData.balance).toFixed(2)}</Text>
                 <Text style={{ color: '#f87171', fontSize: 12 }}>From earlier cash bookings. Tap to contact support.</Text>
               </View>
-              <Ionicons name="chevron-forward" size={18} color="#ef4444" />
+              <Ionicons name="chevron-forward" size={ICON.row} color="#ef4444" />
             </TouchableOpacity>
           ) : null}
 
@@ -337,7 +339,7 @@ export default function SpotterDashboard() {
               accessibilityRole="button"
               accessibilityLabel="See a breakdown of where your dues came from"
             >
-              <Ionicons name="receipt-outline" size={14} color={SC.textSecondary} />
+              <Ionicons name="receipt-outline" size={ICON.inline} color={SC.textSecondary} />
               <Text style={{ color: SC.textSecondary, fontSize: 12, fontWeight: '700' }}>
                 Where did this come from?
               </Text>
@@ -348,7 +350,7 @@ export default function SpotterDashboard() {
             dashboardData.balance > 0 ? (
               <View style={{ backgroundColor: 'rgba(16,185,129,0.15)', padding: 14, borderRadius: RAD.md, borderWidth: 1, borderColor: 'rgba(16,185,129,0.3)' }}>
                 <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  <Ionicons name="wallet" size={20} color="#10b981" style={{ marginRight: 8 }} />
+                  <Ionicons name="wallet" size={ICON.tile} color="#10b981" style={{ marginRight: 8 }} />
                   <View style={{ flex: 1 }}>
                     <Text style={{ color: '#10b981', fontWeight: '800', fontSize: 14 }}>Available to pay out</Text>
                     <Text style={{ color: '#34d399', fontSize: 12 }}>Your share after ParkStop's fee, paid out every Saturday.</Text>
@@ -361,7 +363,7 @@ export default function SpotterDashboard() {
                   accessibilityRole="button"
                   accessibilityLabel={`Next payout ${payoutInfo?.next_payout_at ? new Date(payoutInfo.next_payout_at).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' }) : 'on Saturday'}. Tap for details.`}
                 >
-                  <Ionicons name="calendar-outline" size={16} color="#10b981" />
+                  <Ionicons name="calendar-outline" size={ICON.label} color="#10b981" />
                   <Text style={{ color: '#10b981', fontWeight: '800', fontSize: 13 }}>
                     {payoutInfo?.open_request
                       ? 'Payout on its way'
@@ -373,7 +375,7 @@ export default function SpotterDashboard() {
               </View>
             ) : (
               <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(16,185,129,0.15)', padding: 12, borderRadius: RAD.md, borderWidth: 1, borderColor: 'rgba(16,185,129,0.3)' }}>
-                <Ionicons name="checkmark-circle" size={20} color="#10b981" style={{ marginRight: 8 }} />
+                <Ionicons name="checkmark-circle" size={ICON.tile} color="#10b981" style={{ marginRight: 8 }} />
                 <View style={{ flex: 1 }}>
                   <Text style={{ color: '#10b981', fontWeight: '800', fontSize: 14 }}>Wallet</Text>
                   <Text style={{ color: '#34d399', fontSize: 12 }}>Earnings from paid bookings show up here.</Text>
@@ -388,12 +390,12 @@ export default function SpotterDashboard() {
               style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(245,158,11,0.15)', padding: 12, borderRadius: RAD.md, borderWidth: 1, borderColor: 'rgba(245,158,11,0.3)' }}
               onPress={() => router.push('/spotter/verification' as any)}
             >
-              <Ionicons name="wallet" size={20} color="#f59e0b" style={{ marginRight: 8 }} />
+              <Ionicons name="wallet" size={ICON.tile} color="#f59e0b" style={{ marginRight: 8 }} />
               <View style={{ flex: 1 }}>
                 <Text style={{ color: '#f59e0b', fontWeight: '800', fontSize: 14 }}>Setup Payouts</Text>
                 <Text style={{ color: '#fbbf24', fontSize: 12 }}>Link bank to receive earnings.</Text>
               </View>
-              <Ionicons name="chevron-forward" size={18} color="#f59e0b" />
+              <Ionicons name="chevron-forward" size={ICON.row} color="#f59e0b" />
             </TouchableOpacity>
           )}
         </View>
@@ -402,7 +404,7 @@ export default function SpotterDashboard() {
         <View style={{ flexDirection: 'row', gap: 12, marginBottom: 12 }}>
           {/* Earnings Card */}
           <View style={{ flex: 1, backgroundColor: SC.bgCard, borderRadius: RAD.lg, padding: 16, borderWidth: 1, borderColor: SC.border, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10 }}>
-            <Ionicons name="cash-outline" size={20} color={SC.accent} style={{ marginBottom: 8 }} />
+            <Ionicons name="cash-outline" size={ICON.tile} color={SC.accent} style={{ marginBottom: 8 }} />
             <Text style={{ color: SC.textMuted, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 }}>TOTAL EARNED</Text>
             <Text style={{ color: '#FFF', fontSize: 20, fontWeight: '900', marginTop: 4 }}>₹{dashboardData.earnings.toFixed(0)}</Text>
             <Text style={{ color: SC.textMuted, fontSize: 10, marginTop: 2 }}>All-time income</Text>
@@ -410,7 +412,7 @@ export default function SpotterDashboard() {
 
           {/* Occupancy Card */}
           <View style={{ flex: 1, backgroundColor: SC.bgCard, borderRadius: RAD.lg, padding: 16, borderWidth: 1, borderColor: SC.border, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10 }}>
-            <Ionicons name="pie-chart-outline" size={20} color={SC.info} style={{ marginBottom: 8 }} />
+            <Ionicons name="pie-chart-outline" size={ICON.tile} color={SC.info} style={{ marginBottom: 8 }} />
             <Text style={{ color: SC.textMuted, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 }}>OCCUPANCY</Text>
             <Text style={{ color: '#FFF', fontSize: 20, fontWeight: '900', marginTop: 4 }}>{dashboardData.occupancy_rate || 0}%</Text>
             <Text style={{ color: SC.textMuted, fontSize: 10, marginTop: 2 }}>{occupiedSlots} of {totalSlots} active</Text>
@@ -420,7 +422,7 @@ export default function SpotterDashboard() {
         <View style={{ flexDirection: 'row', gap: 12, marginBottom: SP.xl }}>
           {/* Avg Duration Card */}
           <View style={{ flex: 1, backgroundColor: SC.bgCard, borderRadius: RAD.lg, padding: 16, borderWidth: 1, borderColor: SC.border, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10 }}>
-            <Ionicons name="time-outline" size={20} color={SC.success} style={{ marginBottom: 8 }} />
+            <Ionicons name="time-outline" size={ICON.tile} color={SC.success} style={{ marginBottom: 8 }} />
             <Text style={{ color: SC.textMuted, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 }}>AVG DURATION</Text>
             <Text style={{ color: '#FFF', fontSize: 20, fontWeight: '900', marginTop: 4 }}>{(dashboardData.avg_duration || 0).toFixed(1)} hrs</Text>
             <Text style={{ color: SC.textMuted, fontSize: 10, marginTop: 2 }}>Per booking avg</Text>
@@ -428,7 +430,7 @@ export default function SpotterDashboard() {
 
           {/* Demand Surge Card */}
           <View style={{ flex: 1, backgroundColor: SC.bgCard, borderRadius: RAD.lg, padding: 16, borderWidth: 1, borderColor: SC.border, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10 }}>
-            <Ionicons name="flash-outline" size={20} color={SC.warning} style={{ marginBottom: 8 }} />
+            <Ionicons name="flash-outline" size={ICON.tile} color={SC.warning} style={{ marginBottom: 8 }} />
             <Text style={{ color: SC.textMuted, fontSize: 10, fontWeight: '800', letterSpacing: 0.5 }}>SURGE FACTOR</Text>
             <Text style={{ color: '#FFF', fontSize: 20, fontWeight: '900', marginTop: 4 }}>{dashboardData.surge_factor || 1.0}x</Text>
             <Text style={{ color: SC.textMuted, fontSize: 10, marginTop: 2 }}>Demand pricing</Text>
@@ -442,7 +444,7 @@ export default function SpotterDashboard() {
           </View>
           {(!dashboardData.recent_traffic || dashboardData.recent_traffic.length === 0) ? (
             <View style={[SS.card, { alignItems: 'center', paddingVertical: 28 }]}>
-              <Ionicons name="car-sport-outline" size={32} color={SC.textMuted} />
+              <Ionicons name="car-sport-outline" size={ICON.empty} color={SC.textMuted} />
               <Text style={SS.emptyText}>No recent activity</Text>
               <Text style={{ color: SC.textMuted, fontSize: 12, textAlign: 'center', marginTop: 6, paddingHorizontal: 20 }}>
                 Bookings appear here the moment a driver reserves one of your spots.
@@ -461,7 +463,7 @@ export default function SpotterDashboard() {
                   <View style={[s.trafficIcon, { backgroundColor: iconBg }]}>
                     <Ionicons
                       name={isArrival || isReserved ? 'arrow-forward' : isDeparture ? 'checkmark' : 'time'}
-                      size={16}
+                      size={ICON.label}
                       color={iconColor}
                     />
                   </View>
@@ -503,7 +505,7 @@ export default function SpotterDashboard() {
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
                 <Text style={{ color: SC.accent, fontSize: 12, fontWeight: '700' }}>Breakdown</Text>
-                <Ionicons name="chevron-forward" size={13} color={SC.accent} />
+                <Ionicons name="chevron-forward" size={ICON.inline} color={SC.accent} />
               </TouchableOpacity>
             </View>
             <RevenueChart data={dashboardData.revenue_trend || [0, 0, 0, 0, 0, 0, 0]} />
@@ -534,7 +536,7 @@ export default function SpotterDashboard() {
           <Text style={{ color: SC.textMuted, fontSize: 12, fontWeight: '700', marginBottom: 8, marginLeft: 8 }}>ACTIVE SPOTS ({dashboardData.inventory?.length || 0})</Text>
           {(!dashboardData.inventory || dashboardData.inventory.length === 0) ? (
             <View style={[SS.card, { alignItems: 'center', paddingVertical: 32 }]}>
-              <Ionicons name="location-outline" size={36} color={SC.textMuted} />
+              <Ionicons name="location-outline" size={ICON.empty} color={SC.textMuted} />
               <Text style={[SS.emptyText, { marginTop: 12 }]}>No spots listed yet</Text>
               <Text style={{ color: SC.textMuted, fontSize: 12, textAlign: 'center', marginTop: 6, paddingHorizontal: 20 }}>
                 List your driveway or garage to start earning from drivers nearby.
@@ -551,9 +553,9 @@ export default function SpotterDashboard() {
               <View key={i} style={s.inventoryCard}>
                 <View style={s.inventoryIcon}>
                   {spot.car_slots > 0 ? (
-                    <FontAwesome5 name="car-side" size={20} color={SC.accent} />
+                    <FontAwesome5 name="car-side" size={ICON.tile} color={SC.accent} />
                   ) : (
-                    <MaterialCommunityIcons name="motorbike" size={24} color={SC.textSecondary} />
+                    <MaterialCommunityIcons name="motorbike" size={ICON.action} color={SC.textSecondary} />
                   )}
                 </View>
                 <View style={{ flex: 1 }}>
@@ -589,7 +591,7 @@ export default function SpotterDashboard() {
           </View>
           {(!dashboardData.payout_history || dashboardData.payout_history.length === 0) ? (
             <View style={[SS.card, { alignItems: 'center', paddingVertical: 24 }]}>
-              <Ionicons name="card-outline" size={32} color={SC.textMuted} />
+              <Ionicons name="card-outline" size={ICON.empty} color={SC.textMuted} />
               <Text style={SS.emptyText}>No payout history</Text>
               <Text style={{ color: SC.textMuted, fontSize: 12, textAlign: 'center', marginTop: 6, paddingHorizontal: 20 }}>
                 Earnings are paid out automatically after each completed booking.
@@ -605,7 +607,7 @@ export default function SpotterDashboard() {
               return (
                 <View key={i} style={[SS.card, { flexDirection: 'row', alignItems: 'center', marginBottom: 10, paddingVertical: 14 }]}>
                   <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.03)', justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
-                    <Ionicons name="receipt-outline" size={18} color={SC.textSecondary} />
+                    <Ionicons name="receipt-outline" size={ICON.row} color={SC.textSecondary} />
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={{ color: '#FFF', fontWeight: '800', fontSize: 13 }}>UPI Transfer ({payout.mode || 'UPI'})</Text>

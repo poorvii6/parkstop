@@ -40,14 +40,15 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
-import { SC } from '../../../constants/SpotterTheme';
+import { SC, ICON } from '../../../constants/SpotterTheme';
 import { PROPERTY_DOC_TYPES, isTenancyDoc, labelForDocType } from '../../../constants/propertyDocTypes';
 import {
   spotVerification, errorText, alsoUsedFor,
   type SpotVerification, type PickedDoc,
 } from '../../../api/spotVerification';
 import DocumentPickerField from '../../../components/spotter/DocumentPicker';
-import { PrimaryButton, ErrorNote } from '../../../components/spotter/VerifyUI';
+import { PrimaryButton, ErrorNote, WhatsMissing } from '../../../components/spotter/VerifyUI';
+import { LoadFailed } from '../../../components/LoadFailed';
 
 /** Where the owner is in filling this in. Not a server status. */
 type Sheet = 'none' | 'document' | 'landlord';
@@ -90,7 +91,14 @@ export default function SpotVerificationScreen() {
     return (
       <SafeAreaView style={s.safe} edges={['top', 'bottom']}>
         <Header title="Verify this spot" onBack={() => router.back()} />
-        <View style={{ padding: 20 }}><ErrorNote text={error || 'Could not load this spot.'} /></View>
+        {/*
+          A retry, not just a message. Without one the only way out of a
+          failed load was to back out of the screen and come in again.
+          Nothing to retry if the spot id itself is unusable, though.
+        */}
+        {Number.isInteger(spotId)
+          ? <LoadFailed message={error || 'Could not load this spot.'} onRetry={() => load()} what="this spot" />
+          : <View style={{ padding: 20 }}><ErrorNote text={error || 'That spot could not be found.'} /></View>}
       </SafeAreaView>
     );
   }
@@ -201,7 +209,7 @@ function Overview({
             <Text style={s.missingTitle}>Still needed before we can check this spot</Text>
             {data.missing.map((m) => (
               <View key={m.code} style={s.missingRow}>
-                <Ionicons name="ellipse-outline" size={15} color={SC.warning} style={{ marginTop: 3 }} />
+                <Ionicons name="ellipse-outline" size={ICON.label} color={SC.warning} style={{ marginTop: 3 }} />
                 <Text style={s.missingText}>{m.message}</Text>
               </View>
             ))}
@@ -210,7 +218,7 @@ function Overview({
 
         {/* The promise, stated plainly, wherever the owner is in the process. */}
         <View style={s.promise}>
-          <Ionicons name="time-outline" size={17} color={SC.textSecondary} />
+          <Ionicons name="time-outline" size={ICON.label} color={SC.textSecondary} />
           <Text style={s.promiseText}>
             Once everything is in, we verify this spot and list it within{' '}
             <Text style={{ fontWeight: '800', color: SC.textPrimary }}>{data.promised_hours} hours</Text>.
@@ -219,7 +227,7 @@ function Overview({
         </View>
 
         <View style={s.privacy}>
-          <Ionicons name="lock-closed" size={15} color={SC.textSecondary} />
+          <Ionicons name="lock-closed" size={ICON.label} color={SC.textSecondary} />
           <Text style={s.privacyText}>
             Your documents are stored privately. Only the ParkStop team reviewing this spot can open
             them, and drivers never see them.
@@ -267,7 +275,7 @@ function StatusCard({ data }: { data: SpotVerification }) {
   return (
     <View style={[s.statusCard, { backgroundColor: bg, borderColor: `${colour}55` }]}>
       <View style={s.statusTop}>
-        <Ionicons name={icon as any} size={20} color={colour} />
+        <Ionicons name={icon as any} size={ICON.tile} color={colour} />
         <Text style={[s.statusLive, { color: colour }]}>
           {data.is_live ? 'Drivers can see this spot' : 'Drivers cannot see this spot yet'}
         </Text>
@@ -312,7 +320,7 @@ function WhatIsNeeded({ isTenant }: { isTenant: boolean }) {
       <Text style={s.needTitle}>What this spot needs</Text>
 
       <View style={s.needRow}>
-        <Ionicons name="document-text-outline" size={17} color={SC.accent} style={{ marginTop: 2 }} />
+        <Ionicons name="document-text-outline" size={ICON.label} color={SC.accent} style={{ marginTop: 2 }} />
         <Text style={s.needText}>
           <Text style={s.needStrong}>A document that proves who owns this address</Text>
           {' — '}
@@ -321,7 +329,7 @@ function WhatIsNeeded({ isTenant }: { isTenant: boolean }) {
       </View>
 
       <View style={s.needRow}>
-        <Ionicons name="person-outline" size={17} color={SC.accent} style={{ marginTop: 2 }} />
+        <Ionicons name="person-outline" size={ICON.label} color={SC.accent} style={{ marginTop: 2 }} />
         <Text style={s.needText}>
           <Text style={s.needStrong}>It must be in your own name</Text>
           {' — the name on your Aadhaar. We compare the two.'}
@@ -330,7 +338,7 @@ function WhatIsNeeded({ isTenant }: { isTenant: boolean }) {
       </View>
 
       <View style={s.needRow}>
-        <Ionicons name="close-circle-outline" size={17} color={SC.textSecondary} style={{ marginTop: 2 }} />
+        <Ionicons name="close-circle-outline" size={ICON.label} color={SC.textSecondary} style={{ marginTop: 2 }} />
         <Text style={[s.needText, { color: SC.textSecondary }]}>
           An electricity or water bill is not enough. A bill shows you pay for power here, not that
           you own the place.
@@ -343,7 +351,7 @@ function WhatIsNeeded({ isTenant }: { isTenant: boolean }) {
         instead of letting the owner find out at the submit button.
       */}
       <View style={s.tenantNote}>
-        <Ionicons name="information-circle" size={17} color={SC.warning} style={{ marginTop: 1 }} />
+        <Ionicons name="information-circle" size={ICON.label} color={SC.warning} style={{ marginTop: 1 }} />
         <Text style={s.tenantText}>
           <Text style={s.needStrong}>Renting this place?</Text> You need two things: the ownership
           document in your <Text style={s.needStrong}>landlord&apos;s</Text> name, and a signed letter
@@ -370,7 +378,7 @@ function DocumentRow({ data, onEdit }: { data: SpotVerification; onEdit: () => v
     >
       <Ionicons
         name={doc ? (doc.is_pdf ? 'document-text' : 'image') : 'add-circle-outline'}
-        size={26}
+        size={ICON.action}
         color={doc ? SC.success : SC.warning}
       />
       <View style={{ flex: 1 }}>
@@ -390,7 +398,7 @@ function DocumentRow({ data, onEdit }: { data: SpotVerification; onEdit: () => v
           </>
         )}
       </View>
-      {data.editable ? <Ionicons name="chevron-forward" size={20} color={SC.textSecondary} /> : null}
+      {data.editable ? <Ionicons name="chevron-forward" size={ICON.tile} color={SC.textSecondary} /> : null}
     </TouchableOpacity>
   );
 }
@@ -404,7 +412,7 @@ function LandlordRow({ data, onEdit }: { data: SpotVerification; onEdit: () => v
       <TouchableOpacity style={s.itemCard} onPress={onEdit} disabled={!data.editable} activeOpacity={0.8}>
         <Ionicons
           name={have ? 'checkmark-circle' : 'alert-circle-outline'}
-          size={26}
+          size={ICON.action}
           color={have ? SC.success : SC.warning}
         />
         <View style={{ flex: 1 }}>
@@ -417,7 +425,7 @@ function LandlordRow({ data, onEdit }: { data: SpotVerification; onEdit: () => v
               : 'A signed letter naming you and this spot. We cannot check a rented spot without it.'}
           </Text>
         </View>
-        {data.editable ? <Ionicons name="chevron-forward" size={20} color={SC.textSecondary} /> : null}
+        {data.editable ? <Ionicons name="chevron-forward" size={ICON.tile} color={SC.textSecondary} /> : null}
       </TouchableOpacity>
     </>
   );
@@ -450,7 +458,22 @@ function DocumentSheet({
    * that will be applied to them.
    */
   const tenant = relationship === 'tenant' || isTenancyDoc(docType);
-  const ready = !!docType && address.trim().length >= 10 && !!file;
+
+  /**
+   * What is still missing, in the order the form asks for it. `ready` is
+   * derived from this list rather than written separately, so the button and
+   * the explanation can never disagree — the 10-character address rule used to
+   * be enforced here and stated nowhere.
+   */
+  const addressLen = address.trim().length;
+  const missing = [
+    !docType && 'Choose the document type',
+    addressLen < 10 && (addressLen === 0
+      ? 'Enter the address printed on the document'
+      : `The address needs at least 10 characters — you have ${addressLen}`),
+    !file && 'Attach the document',
+  ].filter(Boolean) as string[];
+  const ready = missing.length === 0;
 
   const save = async () => {
     if (!ready || !file) {
@@ -505,7 +528,7 @@ function DocumentSheet({
             >
               <Ionicons
                 name={relationship === r ? 'radio-button-on' : 'radio-button-off'}
-                size={18}
+                size={ICON.row}
                 color={relationship === r ? SC.accent : SC.textSecondary}
               />
               <Text style={[s.toggleText, relationship === r && { color: SC.textPrimary }]}>
@@ -518,7 +541,7 @@ function DocumentSheet({
         {/* Said the moment it becomes true, not at the submit button. */}
         {tenant ? (
           <View style={s.tenantNote}>
-            <Ionicons name="information-circle" size={17} color={SC.warning} style={{ marginTop: 1 }} />
+            <Ionicons name="information-circle" size={ICON.label} color={SC.warning} style={{ marginTop: 1 }} />
             <Text style={s.tenantText}>
               {isTenancyDoc(docType) && relationship === 'owner'
                 ? 'A rent agreement is a tenant\'s document, so this spot counts as rented. '
@@ -567,6 +590,7 @@ function DocumentSheet({
         ) : null}
       </ScrollView>
       <View style={s.footer}>
+        <WhatsMissing items={missing} />
         <PrimaryButton
           label={current.document ? 'Replace document' : 'Save document'}
           onPress={save}
@@ -593,7 +617,13 @@ function LandlordSheet({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
-  const ready = name.trim().length >= 2 && !!file;
+  // Same shape as DocumentSheet: the list is the single source for both the
+  // button's disabled state and what the owner is told.
+  const missing = [
+    name.trim().length < 2 && "Enter the landlord's full name",
+    !file && 'Attach the signed letter',
+  ].filter(Boolean) as string[];
+  const ready = missing.length === 0;
 
   const save = async () => {
     if (!ready || !file) {
@@ -632,7 +662,7 @@ function LandlordSheet({
             'Their signature and the date',
           ].map((line) => (
             <View key={line} style={s.needRow}>
-              <Ionicons name="checkmark" size={16} color={SC.accent} style={{ marginTop: 3 }} />
+              <Ionicons name="checkmark" size={ICON.label} color={SC.accent} style={{ marginTop: 3 }} />
               <Text style={s.needText}>{line}</Text>
             </View>
           ))}
@@ -658,6 +688,7 @@ function LandlordSheet({
         <ErrorNote text={error} />
       </ScrollView>
       <View style={s.footer}>
+        <WhatsMissing items={missing} />
         <PrimaryButton
           label={current.landlord.noc_uploaded ? 'Replace letter' : 'Save letter'}
           onPress={save}
@@ -673,7 +704,7 @@ function Header({ title, onBack }: { title: string; onBack: () => void }) {
   return (
     <View style={s.header}>
       <TouchableOpacity onPress={onBack} style={s.back} hitSlop={12}>
-        <Ionicons name="chevron-back" size={22} color={SC.textPrimary} />
+        <Ionicons name="chevron-back" size={ICON.tile} color={SC.textPrimary} />
       </TouchableOpacity>
       <Text style={s.headerTitle} numberOfLines={1}>{title}</Text>
       <View style={{ width: 36 }} />

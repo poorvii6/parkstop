@@ -9,7 +9,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { SC } from '../../../constants/SpotterTheme';
+import { SC, ICON } from '../../../constants/SpotterTheme';
 import { ownerVerification, errorText, errorCode } from '../../../api/ownerVerification';
 import { StepScreen, PrimaryButton, ErrorNote, InfoNote, vs } from '../../../components/spotter/VerifyUI';
 
@@ -74,7 +74,7 @@ export default function AadhaarStep() {
         <SafeAreaView style={{ flex: 1, backgroundColor: '#fff' }} edges={['top', 'bottom']}>
           <View style={st.bar}>
             <TouchableOpacity onPress={() => setUrl(null)} hitSlop={12}>
-              <Ionicons name="close" size={26} color="#111" />
+              <Ionicons name="close" size={ICON.action} color="#111" />
             </TouchableOpacity>
             <Text style={st.barTitle}>DigiLocker</Text>
             <TouchableOpacity onPress={complete} hitSlop={12}>

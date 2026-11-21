@@ -7,7 +7,7 @@ import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, ScrollView
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { SC } from '../../constants/SpotterTheme';
+import { SC, ICON } from '../../constants/SpotterTheme';
 
 export function StepScreen({ title, subtitle, children, footer }: { title: string; subtitle?: string; children: React.ReactNode; footer?: React.ReactNode }) {
   const router = useRouter();
@@ -15,7 +15,7 @@ export function StepScreen({ title, subtitle, children, footer }: { title: strin
     <SafeAreaView style={s.safe} edges={['top', 'bottom']}>
       <View style={s.header}>
         <TouchableOpacity onPress={() => router.back()} style={s.back} hitSlop={12}>
-          <Ionicons name="chevron-back" size={22} color={SC.textPrimary} />
+          <Ionicons name="chevron-back" size={ICON.tile} color={SC.textPrimary} />
         </TouchableOpacity>
         <Text style={s.headerTitle} numberOfLines={1}>{title}</Text>
         <View style={{ width: 36 }} />
@@ -44,8 +44,32 @@ export function ErrorNote({ text }: { text?: string }) {
   if (!text) return null;
   return (
     <View style={s.error}>
-      <Ionicons name="alert-circle" size={18} color={SC.error} />
+      <Ionicons name="alert-circle" size={ICON.row} color={SC.error} />
       <Text style={s.errorText}>{text}</Text>
+    </View>
+  );
+}
+
+/**
+ * Why the button below is greyed out.
+ *
+ * A disabled primary button with nothing explaining it is a dead end: the rule
+ * lives in a `ready` expression the owner cannot see. Pass the same list the
+ * `disabled` prop is derived from and the two cannot drift apart.
+ *
+ * Renders nothing when the list is empty, so it disappears as the form fills.
+ */
+export function WhatsMissing({ items }: { items: string[] }) {
+  if (!items.length) return null;
+  return (
+    <View style={s.missing}>
+      <Text style={s.missingTitle}>{items.length === 1 ? 'Still needed' : `Still needed (${items.length})`}</Text>
+      {items.map((t) => (
+        <View key={t} style={s.missingRow}>
+          <Ionicons name="ellipse-outline" size={ICON.inline} color={SC.textMuted} style={{ marginTop: 3 }} />
+          <Text style={s.missingText}>{t}</Text>
+        </View>
+      ))}
     </View>
   );
 }
@@ -53,7 +77,7 @@ export function ErrorNote({ text }: { text?: string }) {
 export function InfoNote({ icon = 'lock-closed', text }: { icon?: any; text: string }) {
   return (
     <View style={s.info}>
-      <Ionicons name={icon} size={16} color={SC.textSecondary} />
+      <Ionicons name={icon} size={ICON.label} color={SC.textSecondary} />
       <Text style={s.infoText}>{text}</Text>
     </View>
   );
@@ -84,4 +108,9 @@ const s = StyleSheet.create({
   errorText: { color: '#FCA5A5', fontSize: 14, lineHeight: 20, flex: 1, fontWeight: '600' },
   info: { flexDirection: 'row', gap: 8, marginTop: 16, alignItems: 'flex-start' },
   infoText: { color: SC.textSecondary, fontSize: 13, lineHeight: 19, flex: 1 },
+
+  missing: { marginBottom: 12, gap: 5 },
+  missingTitle: { color: SC.textSecondary, fontSize: 11, fontWeight: '800', letterSpacing: 0.6, textTransform: 'uppercase' },
+  missingRow: { flexDirection: 'row', gap: 7, alignItems: 'flex-start' },
+  missingText: { color: SC.textPrimary, fontSize: 13, lineHeight: 19, flex: 1, fontWeight: '600' },
 });

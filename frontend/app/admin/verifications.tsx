@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { SC } from '../../constants/SpotterTheme';
 import { ownerVerification, errorText, FLAG_LABELS as FLAG_TEXT } from '../../api/ownerVerification';
+import { LoadFailed } from '../../components/LoadFailed';
 
 const TABS = [
   { key: 'pending', label: 'To review' },
@@ -50,14 +51,21 @@ export default function AdminVerifications() {
         ))}
       </View>
 
-      {error ? <Text style={s.error}>{error}</Text> : null}
-
+      {/*
+        "Nothing here." is a fact about the queue, so it is only shown when we
+        actually know. A failed load gets the error and a retry instead of
+        rendering both at once, which is what it used to do.
+      */}
       <FlatList
-        data={rows}
+        data={error ? [] : rows}
         keyExtractor={(r) => String(r.user_id)}
         contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
         refreshControl={<RefreshControl refreshing={loading} onRefresh={() => load(tab)} tintColor={SC.accent} />}
-        ListEmptyComponent={!loading ? <Text style={s.empty}>Nothing here.</Text> : <ActivityIndicator color={SC.accent} style={{ marginTop: 40 }} />}
+        ListEmptyComponent={
+          loading ? <ActivityIndicator color={SC.accent} style={{ marginTop: 40 }} />
+            : error ? <LoadFailed message={error} onRetry={() => load(tab)} what="the queue" />
+              : <Text style={s.empty}>Nothing here.</Text>
+        }
         renderItem={({ item }) => (
           <TouchableOpacity style={s.row} onPress={() => router.push(`/admin/verification/${item.user_id}` as any)}>
             <View style={{ flex: 1 }}>

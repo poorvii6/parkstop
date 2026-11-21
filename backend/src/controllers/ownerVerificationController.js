@@ -36,6 +36,7 @@ const { GOOD_NAME_MATCH, REVIEW_NAME_MATCH } = require('../services/nameMatch');
  * what happens to a document already stored under a removed type.
  */
 const { PROPERTY_DOC_TYPE_KEYS: DOC_TYPES } = require('../constants/propertyDocTypes');
+const { ownerApprovedMessage, driverVisibilityWhere } = require('../constants/spotVerification');
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -527,8 +528,19 @@ async function adminDetail(req, res) {
       },
     });
     if (!r) return fail(res, 404, 'No verification found for this user.');
-    const docUrl = r.property_doc_public_id
-      ? cloudinary.url(r.property_doc_public_id, { type: 'authenticated', sign_url: true, secure: true })
+    /**
+     * Two URLs, for the same reason as spotVerificationController.signedDocUrls:
+     * the inline <Image> on the admin screen was loading the untouched original
+     * — a full-resolution phone photo — to fill a 200pt-tall box, which is why
+     * it took seconds to appear. The preview is resized, the original is what
+     * the full-screen view opens. Both stay authenticated and signed.
+     */
+    const docBase = { type: 'authenticated', sign_url: true, secure: true };
+    const docUrl = r.property_doc_public_id ? cloudinary.url(r.property_doc_public_id, docBase) : null;
+    const docPreviewUrl = r.property_doc_public_id
+      ? cloudinary.url(r.property_doc_public_id, {
+        ...docBase, width: 1200, crop: 'limit', quality: 'auto', fetch_format: 'auto',
+      })
       : null;
     return ok(res, {
       user: r.users,
@@ -554,6 +566,7 @@ async function adminDetail(req, res) {
           address: r.property_address,
           uploaded_at: r.property_uploaded_at,
           doc_url: docUrl,
+          doc_preview_url: docPreviewUrl,
           note: 'Uploaded under the old per-account property step. It was never '
             + "compared to any spot, pin or name. This spot's own verification is what counts.",
         }
@@ -571,9 +584,34 @@ async function adminApprove(req, res) {
     if (!summarize(r).all_done) return fail(res, 409, 'Some steps are not complete.');
 
     await setStatus(userId, 'approved', { reviewed_at: new Date(), reviewed_by: req.user.id, rejection_reason: null });
+
+    /*
+     * Count this owner's spots that a driver still cannot see, so the message
+     * is about THEIR spots rather than a generality. driverVisibilityWhere is
+     * the same fragment the finder filters on, so "hidden" here means hidden
+     * there — including the gate being off, where the fragment is empty and
+     * the count is therefore zero. Grandfathered spots count as visible,
+     * which is why this is a query and not a status comparison.
+     *
+     * Wrapped: a failure here must not turn a completed approval into a 500.
+     * The message then falls back to the no-spots-waiting wording.
+     */
+    let totalSpots = 0;
+    let visibleSpots = 0;
+    try {
+      totalSpots = await prisma.parking_spots.count({ where: { spotter_id: userId } });
+      visibleSpots = await prisma.parking_spots.count({
+        where: { spotter_id: userId, ...driverVisibilityWhere() },
+      });
+    } catch (countErr) {
+      logger.warn(`Could not count spots for owner ${userId} approval message:`, countErr);
+    }
+
     NotificationService.sendPushNotification(userId, {
-      title: 'You are verified ✅',
-      body: 'Your parking spots are now visible to drivers on ParkStop.',
+      ...ownerApprovedMessage({
+        spotsNeedingVerification: Math.max(0, totalSpots - visibleSpots),
+        totalSpots,
+      }),
       data: { type: 'owner_verification_approved' },
     }).catch(() => {});
     logger.info(`Owner ${userId} approved by admin ${req.user.id}`);

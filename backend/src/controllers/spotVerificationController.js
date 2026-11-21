@@ -113,18 +113,41 @@ async function saveAndSync(record, data, logEntry = null) {
  */
 const PDF_FORMAT = 'pdf';
 
+/**
+ * How wide a preview is delivered.
+ *
+ * The preview used to carry no transformation at all, so the admin screen
+ * downloaded the untouched original — up to MAX_DOC_BYTES, 15MB, straight off
+ * a phone camera at full sensor resolution — to fill an <Image> 260pt tall.
+ * That is the several-second wait before a document appears.
+ *
+ * `c_limit` never upscales, so a small scan is left alone. 1200px is well
+ * above what the preview can show (260pt is ~780 device pixels at 3x) and is
+ * deliberately generous: an admin reads the name and the address off this
+ * image to make the decision, so it has to stay legible, and a tighter crop
+ * would save bytes the reviewer needs. The full original is still one tap
+ * away on `url`.
+ */
+const PREVIEW_MAX_WIDTH = 1200;
+
 function signedDocUrls(publicId, format) {
   if (!publicId) return { url: null, preview_url: null, format: null, is_pdf: false };
 
+  // Still authenticated, still signed. Cloudinary signs the transformation as
+  // part of the URL, so a derived preview is exactly as private as the
+  // original — the signature does not grant access to anything else.
   const base = { type: 'authenticated', resource_type: 'image', sign_url: true, secure: true };
+  const sized = { ...base, width: PREVIEW_MAX_WIDTH, crop: 'limit', quality: 'auto' };
   const isPdf = String(format || '').toLowerCase() === PDF_FORMAT;
 
   return {
     url: cloudinary.url(publicId, isPdf ? { ...base, format: PDF_FORMAT } : base),
-    // Page 1 as a JPEG. For an image this is just the image.
+    // Page 1 as a JPEG. For an image this is the image, resized.
     preview_url: isPdf
-      ? cloudinary.url(publicId, { ...base, format: 'jpg', page: 1 })
-      : cloudinary.url(publicId, base),
+      ? cloudinary.url(publicId, { ...sized, format: 'jpg', page: 1 })
+      // fetch_format: 'auto' lets the CDN serve WebP where the client takes
+      // it. Not used on the PDF branch, where the explicit jpg is the point.
+      : cloudinary.url(publicId, { ...sized, fetch_format: 'auto' }),
     format: format || null,
     is_pdf: isPdf,
   };
@@ -1378,4 +1401,6 @@ module.exports = {
   getOrCreateRecord,
   saveAndSync,
   summarizeForOwner,
+  signedDocUrls,
+  PREVIEW_MAX_WIDTH,
 };

@@ -15,10 +15,15 @@ class AnalyticsController {
         });
       }
 
+      // Every COUNT is cast to ::int. Postgres returns bigint, which arrives as
+      // a JS BigInt, and res.json() cannot serialize one — the whole response
+      // 500s. Same convention as ParkingSpot.findNearby. The SUMs need no cast:
+      // the money columns are numeric, so they arrive as Prisma Decimals and
+      // serialize to strings, which is what the clients parseFloat.
       const summaryResult = await prisma.$queryRaw`
-        SELECT 
-          COUNT(b.id) FILTER (WHERE b.status = 'completed') AS total_completed_bookings,
-          COUNT(b.id) AS total_bookings,
+        SELECT
+          COUNT(b.id) FILTER (WHERE b.status = 'completed')::int AS total_completed_bookings,
+          COUNT(b.id)::int AS total_bookings,
           COALESCE(SUM(b.total_price) FILTER (WHERE b.status = 'completed'),0) AS total_revenue,
           COALESCE(SUM(b.spotter_earning) FILTER (WHERE b.status = 'completed'),0) AS total_earnings,
           COALESCE(SUM(b.platform_fee) FILTER (WHERE b.status = 'completed'),0) AS total_platform_commission,
@@ -35,7 +40,7 @@ class AnalyticsController {
         SELECT 
           ps.id AS spot_id,
           ps.location_type,
-          COUNT(b.id) FILTER (WHERE b.status = 'completed') AS total_bookings,
+          COUNT(b.id) FILTER (WHERE b.status = 'completed')::int AS total_bookings,
           COALESCE(SUM(b.spotter_earning),0) AS total_earnings
          FROM bookings b
          JOIN parking_spots ps ON b.spot_id = ps.id
@@ -67,8 +72,8 @@ class AnalyticsController {
     try {
       const summary = await prisma.$queryRaw`
         SELECT
-          COUNT(id) FILTER (WHERE status = 'completed') AS total_completed_bookings,
-          COUNT(id) AS total_bookings,
+          COUNT(id) FILTER (WHERE status = 'completed')::int AS total_completed_bookings,
+          COUNT(id)::int AS total_bookings,
           COALESCE(SUM(total_price),0) AS total_revenue,
           COALESCE(SUM(platform_fee),0) AS platform_earnings,
           COALESCE(SUM(spotter_earning),0) AS spotter_payout
@@ -107,7 +112,7 @@ class AnalyticsController {
       const result = await prisma.$queryRaw`
         SELECT 
           ps.spotter_id,
-          COUNT(b.id) AS total_bookings,
+          COUNT(b.id)::int AS total_bookings,
           COALESCE(SUM(b.spotter_earning),0) AS total_earnings,
           COALESCE(SUM(b.platform_fee),0) AS platform_revenue
         FROM bookings b

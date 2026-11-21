@@ -7,6 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import apiClient from '../api/client';
 import { getCurrentPushToken } from '../services/notifications';
 import { useOnlineRefresh } from '../hooks/useOnlineRefresh';
+import { LoadFailed, loadErrorText } from '../components/LoadFailed';
 import DateTimePicker from '@react-native-community/datetimepicker';
 
 // Unified colors matching SpotterTheme
@@ -29,6 +30,10 @@ export default function ProfileModal() {
   const [profile, setProfile] = useState<any>(null);
   const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  // Without this, a failed load fell through to the render below, which filled
+  // the gaps with defaults: name "User", no email, role "spotter". It looked
+  // like a real profile and it wasn't.
+  const [error, setError] = useState('');
   const [screen, setScreen] = useState<Screen>('profile');
   const [alerts, setAlerts] = useState({ push: true, email: true, sms: false });
   const [editName, setEditName] = useState('');
@@ -56,8 +61,11 @@ export default function ProfileModal() {
   useEffect(() => { fetchProfile(); }, []);
 
   const fetchProfile = async () => {
+    setLoading(true);
+    setError('');
     try {
       const res = await apiClient.get('/auth/profile');
+      if (!res.data.success) setError(res.data?.message || 'Could not load your profile.');
       if (res.data.success) {
         const u = res.data.data.user;
         const s = res.data.data.stats;
@@ -76,7 +84,7 @@ export default function ProfileModal() {
            });
         }
       }
-    } catch (e) { console.log('Profile fetch error', e); }
+    } catch (e) { setError(loadErrorText(e, 'Could not load your profile.')); }
     finally { setLoading(false); }
   };
 
@@ -226,6 +234,17 @@ export default function ProfileModal() {
 
   if (loading) {
     return <View style={[st.page, { justifyContent: 'center', alignItems: 'center' }]}><ActivityIndicator color={C.accent} size="large" /></View>;
+  }
+
+  if (!profile) {
+    return (
+      <SafeAreaView style={[st.page, { justifyContent: 'center' }]}>
+        <LoadFailed message={error} onRetry={fetchProfile} what="your profile" />
+        <TouchableOpacity onPress={() => router.back()} style={{ alignSelf: 'center', padding: 12 }}>
+          <Text style={{ color: C.textSec, fontWeight: '700' }}>Close</Text>
+        </TouchableOpacity>
+      </SafeAreaView>
+    );
   }
 
   const name = profile?.full_name || profile?.name || 'User';

@@ -35,6 +35,7 @@ import {
   spotVerificationAdmin, errorText, SLA_LABEL,
   type Queue, type QueueRow, type Backlog, type BacklogRow, type Sla,
 } from '../../api/spotVerificationAdmin';
+import { LoadFailed } from '../../components/LoadFailed';
 
 type TabKey = 'all' | 'desk' | 'field' | 'backlog';
 
@@ -95,27 +96,41 @@ export default function AdminSpotVerifications() {
         ))}
       </View>
 
-      {tab !== 'backlog' && queue ? <Counts q={queue} /> : null}
-      {tab === 'backlog' && backlog ? <BacklogNote b={backlog} /> : null}
+      {/*
+        The counts and the backlog note are hidden on a failed load rather than
+        left showing the previous tab's figures beside an error.
+      */}
+      {tab !== 'backlog' && queue && !error ? <Counts q={queue} /> : null}
+      {tab === 'backlog' && backlog && !error ? <BacklogNote b={backlog} /> : null}
 
-      {error ? <Text style={s.error}>{error}</Text> : null}
-
+      {/*
+        "The queue is empty" and "the backlog is clear" are the two sentences an
+        admin acts on by going home. Neither may stand in for a failed request.
+      */}
       {tab === 'backlog' ? (
         <FlatList
-          data={backlog?.items || []}
+          data={error ? [] : backlog?.items || []}
           keyExtractor={(r) => String(r.spot_id)}
           contentContainerStyle={s.list}
           refreshControl={<RefreshControl refreshing={loading} onRefresh={() => load(tab)} tintColor={SC.accent} />}
-          ListEmptyComponent={!loading ? <Empty text="The backlog is clear." /> : <Spinner />}
+          ListEmptyComponent={
+            loading ? <Spinner />
+              : error ? <LoadFailed message={error} onRetry={() => load(tab)} what="the backlog" />
+                : <Empty text="The backlog is clear." />
+          }
           renderItem={({ item }) => <BacklogCard row={item} onPress={() => open(item.spot_id)} />}
         />
       ) : (
         <FlatList
-          data={queue?.items || []}
+          data={error ? [] : queue?.items || []}
           keyExtractor={(r) => String(r.spot_id)}
           contentContainerStyle={s.list}
           refreshControl={<RefreshControl refreshing={loading} onRefresh={() => load(tab)} tintColor={SC.accent} />}
-          ListEmptyComponent={!loading ? <Empty text="Nothing waiting. The queue is empty." /> : <Spinner />}
+          ListEmptyComponent={
+            loading ? <Spinner />
+              : error ? <LoadFailed message={error} onRetry={() => load(tab)} what="the queue" />
+                : <Empty text="Nothing waiting. The queue is empty." />
+          }
           renderItem={({ item }) => <QueueCard row={item} onPress={() => open(item.spot_id)} />}
         />
       )}

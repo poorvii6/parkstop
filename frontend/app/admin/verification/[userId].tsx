@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SC } from '../../../constants/SpotterTheme';
 import { ownerVerification, errorText, FLAG_LABELS } from '../../../api/ownerVerification';
+import { LoadFailed } from '../../../components/LoadFailed';
 import { labelForDocType } from '../../../constants/propertyDocTypes';
 
 export default function AdminVerificationDetail() {
@@ -52,7 +53,9 @@ export default function AdminVerificationDetail() {
   if (!d) {
     return (
       <SafeAreaView style={s.safe}>
-        {error ? <Text style={s.error}>{error}</Text> : <ActivityIndicator color={SC.accent} style={{ marginTop: 60 }} size="large" />}
+        {error
+          ? <LoadFailed message={error} onRetry={load} what="this owner" />
+          : <ActivityIndicator color={SC.accent} style={{ marginTop: 60 }} size="large" />}
       </SafeAreaView>
     );
   }
@@ -132,7 +135,13 @@ export default function AdminVerificationDetail() {
             <Row k="Address" v={d.legacy_property.address} />
             {d.legacy_property.doc_url ? (
               <TouchableOpacity onPress={() => setDocFull(true)}>
-                <Image source={{ uri: d.legacy_property.doc_url }} style={s.doc} resizeMode="cover" />
+                {/* Resized server-side. doc_preview_url is absent on a response
+                    from an older backend, so fall back to the original. */}
+                <Image
+                  source={{ uri: d.legacy_property.doc_preview_url || d.legacy_property.doc_url }}
+                  style={s.doc}
+                  resizeMode="cover"
+                />
                 <Text style={s.tapHint}>Tap to view full size</Text>
               </TouchableOpacity>
             ) : null}

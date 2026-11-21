@@ -13,7 +13,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { SC } from '../../constants/SpotterTheme';
+import { SC, ICON } from '../../constants/SpotterTheme';
 
 export type SpotVerification = {
   status?: string | null;
@@ -58,12 +58,12 @@ export default function SpotVerificationBadge({
 
   const body = (
     <>
-      <Ionicons name={cfg.icon as any} size={14} color={cfg.color} />
+      <Ionicons name={cfg.icon as any} size={ICON.inline} color={cfg.color} />
       <View style={{ flex: 1 }}>
         <Text style={[s.label, { color: cfg.color }]}>{cfg.label}</Text>
         {!!v.message && <Text style={s.detail} numberOfLines={2}>{v.message}</Text>}
       </View>
-      {onPress ? <Ionicons name="chevron-forward" size={15} color={cfg.color} style={{ marginTop: 1 }} /> : null}
+      {onPress ? <Ionicons name="chevron-forward" size={ICON.label} color={cfg.color} style={{ marginTop: 1 }} /> : null}
     </>
   );
 

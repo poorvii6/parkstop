@@ -96,6 +96,50 @@ export const RAD = {
   full: 999,
 };
 
+/* ── Icon sizes ────────────────────────────────────────────────── */
+/**
+ * Named by ROLE, not by size, because the drift these replace was never about
+ * taste: the same role was drawn at different sizes on different rows. The
+ * spotter screens had sixteen distinct icon sizes — 13, 14, 15, 16, 17, 18,
+ * 20, 22, 24, 26, 28, 30, 32, 36, 40 — with chevrons at both 18 and 13 and
+ * empty states at 32 and 36. A role name makes the next icon obvious and
+ * stops the set growing again.
+ *
+ * Pick by what the icon is DOING:
+ *   inline  inside a line of caption text (12px)
+ *   label   inside a line of body text, or a chip
+ *   row     a list row's leading icon, and every chevron affordance
+ *   tile    a stat tile, or a banner announcing state
+ *   action  a large tappable tile
+ *   empty   the illustration in an empty or failed state
+ *   hero    a full-screen empty state
+ *   avatar  a stand-in for a photo that has not been taken yet
+ */
+export const ICON = {
+  inline: 14,
+  label: 16,
+  row: 18,
+  tile: 20,
+  action: 24,
+  empty: 32,
+  hero: 40,
+  avatar: 96,
+};
+
+/**
+ * Outline or solid, which was the other half of the mess — fifteen icons
+ * appeared both ways, sometimes for the same meaning two rows apart.
+ *
+ * THE RULE: solid announces STATE. Outline is everything else — an action, a
+ * category, a neutral label, an illustration.
+ *
+ * So: a banner saying what is happening to the owner's money is solid; the
+ * four stat tiles describing categories of number are outline; a chevron is
+ * outline because it is an affordance. The deliberate exception is a done/
+ * not-done pair (`checkmark-circle` against `ellipse-outline`), where the
+ * weight difference IS the information.
+ */
+
 /* ── Shared StyleSheet ─────────────────────────────────────────── */
 export const SS = StyleSheet.create({
   /* Page */

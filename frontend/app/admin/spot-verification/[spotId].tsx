@@ -44,6 +44,7 @@ import {
   SLA_LABEL, NAME_VERDICT_LABEL, ADDRESS_VERDICT_LABEL,
   type SpotDetail, type CheckResult, type Blocker,
 } from '../../../api/spotVerificationAdmin';
+import { LoadFailed } from '../../../components/LoadFailed';
 
 export default function AdminSpotVerification() {
   const router = useRouter();
@@ -79,7 +80,9 @@ export default function AdminSpotVerification() {
   if (!d) {
     return (
       <Shell title="Review spot" onBack={() => router.back()}>
-        <Text style={s.error}>{error || 'Could not load this submission.'}</Text>
+        {Number.isInteger(spotId)
+          ? <LoadFailed message={error || 'Could not load this submission.'} onRetry={() => load()} what="this submission" />
+          : <Text style={s.error}>{error || 'That spot could not be found.'}</Text>}
       </Shell>
     );
   }

@@ -5,6 +5,7 @@ import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import apiClient from '../api/client';
 import { useOnlineRefresh } from '../hooks/useOnlineRefresh';
+import { LoadFailed, loadErrorText } from '../components/LoadFailed';
 import { belongsToAudience, Audience } from '../utils/notificationAudience';
 
 const C = {
@@ -50,6 +51,9 @@ export default function NotificationsScreen() {
   const [items, setItems] = useState<Notif[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // "No notifications yet" is a claim about the account. It must not be what a
+  // dropped connection looks like.
+  const [error, setError] = useState('');
 
   // Quiet hours
   const [qStart, setQStart] = useState<number | null>(null);
@@ -58,6 +62,7 @@ export default function NotificationsScreen() {
 
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true); else setLoading(true);
+    setError('');
     try {
       const [list, prefs] = await Promise.all([
         apiClient.get('/notifications'),
@@ -76,7 +81,7 @@ export default function NotificationsScreen() {
       const unreadIds = visible.filter((n) => !n.read).map((n) => n.id);
       if (unreadIds.length) apiClient.post('/notifications/read', { ids: unreadIds }).catch(() => {});
     } catch (e) {
-      console.log('Load notifications failed', e);
+      setError(loadErrorText(e, 'Could not load your notifications.'));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -151,6 +156,8 @@ export default function NotificationsScreen() {
           <View style={{ paddingVertical: 60, alignItems: 'center' }}>
             <ActivityIndicator color={C.accent} />
           </View>
+        ) : error ? (
+          <LoadFailed message={error} onRetry={() => load()} what="your notifications" />
         ) : items.length === 0 ? (
           <View style={{ paddingVertical: 60, alignItems: 'center', gap: 10 }}>
             <Ionicons name="notifications-off-outline" size={40} color={C.muted} />
