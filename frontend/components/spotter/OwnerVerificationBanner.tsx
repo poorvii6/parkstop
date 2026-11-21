@@ -6,7 +6,7 @@ import React, { useCallback, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { SC } from '../../constants/SpotterTheme';
+import { SC, ICON } from '../../constants/SpotterTheme';
 import { ownerVerification, OwnerVerification } from '../../api/ownerVerification';
 
 export default function OwnerVerificationBanner() {
@@ -37,12 +37,12 @@ export default function OwnerVerificationBanner() {
       activeOpacity={0.85}
       accessibilityRole="button"
     >
-      <Ionicons name={cfg.icon as any} size={24} color={cfg.color} />
+      <Ionicons name={cfg.icon as any} size={ICON.action} color={cfg.color} />
       <View style={{ flex: 1 }}>
         <Text style={[s.title, { color: cfg.color }]}>{cfg.title}</Text>
         <Text style={s.text} numberOfLines={2}>{cfg.text}</Text>
       </View>
-      <Ionicons name="chevron-forward" size={18} color={cfg.color} />
+      <Ionicons name="chevron-forward" size={ICON.row} color={cfg.color} />
     </TouchableOpacity>
   );
 }

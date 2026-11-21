@@ -9,6 +9,8 @@
   "scripts": {
     "start": "npx prisma migrate deploy && node src/server.js",
     "dev": "npx prisma migrate dev && nodemon src/server.js",
+    "dev:gate-on": "npx prisma migrate deploy && SPOT_VERIFICATION_GATE=on nodemon src/server.js",
+    "seed:verification": "node scripts/dev/seed-spot-verification.js",
     "dev:push": "npx prisma db push --accept-data-loss && nodemon src/server.js",
     "migrate:create": "npx prisma migrate dev",
     "migrate:deploy": "npx prisma migrate deploy",

@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Tabs, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { SC, TF } from '../../constants/SpotterTheme';
+import { SC, TF, ICON } from '../../constants/SpotterTheme';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { View, ActivityIndicator, Text, TouchableOpacity, Animated, Platform, Alert, AppState } from 'react-native';
 import * as Haptics from 'expo-haptics';
@@ -179,7 +179,7 @@ export default function SpotterTabsLayout() {
           options={{
             title: 'Dashboard',
             tabBarIcon: ({ color, size }) => (
-              <Ionicons name="grid" size={22} color={color} />
+              <Ionicons name="grid" size={ICON.tile} color={color} />
             ),
           }}
         />
@@ -188,7 +188,7 @@ export default function SpotterTabsLayout() {
           options={{
             title: 'Verify',
             tabBarIcon: ({ focused, size }) => (
-              <Ionicons name="shield-checkmark" size={22} color={focused ? SC.warning : SC.textMuted} />
+              <Ionicons name="shield-checkmark" size={ICON.tile} color={focused ? SC.warning : SC.textMuted} />
             ),
             tabBarActiveTintColor: SC.warning,
           }}
@@ -198,7 +198,7 @@ export default function SpotterTabsLayout() {
           options={{
             title: 'Spots',
             tabBarIcon: ({ color, size }) => (
-              <Ionicons name="location" size={22} color={color} />
+              <Ionicons name="location" size={ICON.tile} color={color} />
             ),
           }}
         />
@@ -207,7 +207,7 @@ export default function SpotterTabsLayout() {
           options={{
             title: 'Support',
             tabBarIcon: ({ color, size }) => (
-              <Ionicons name="chatbubble-ellipses" size={22} color={color} />
+              <Ionicons name="chatbubble-ellipses" size={ICON.tile} color={color} />
             ),
           }}
         />
@@ -226,6 +226,20 @@ export default function SpotterTabsLayout() {
             tabBarStyle: { display: 'none' },
           }}
         />
+        {/*
+          Per-SPOT verification. href: null because it is reached from the
+          badge on a spot in the Spots tab, not from the tab bar — an owner
+          with four driveways opens it once per driveway, so it is never a
+          single destination.
+        */}
+        <Tabs.Screen
+          name="spot-verification"
+          options={{
+            title: 'Verify spot',
+            href: null,
+            tabBarStyle: { display: 'none' },
+          }}
+        />
       </Tabs>
 
       {/* #2 Loud new-booking banner overlay */}
@@ -239,12 +253,12 @@ export default function SpotterTabsLayout() {
             onPress={openVerify}
             style={{ marginHorizontal: 12, backgroundColor: SC.success, borderRadius: 16, paddingVertical: 14, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 10 }}
           >
-            <Ionicons name="notifications" size={24} color="#fff" style={{ marginRight: 12 }} />
+            <Ionicons name="notifications" size={ICON.action} color="#fff" style={{ marginRight: 12 }} />
             <View style={{ flex: 1 }}>
               <Text style={{ color: '#fff', fontWeight: '900', fontSize: 16 }}>{banner.title}</Text>
               <Text style={{ color: 'rgba(255,255,255,0.92)', fontSize: 12.5, marginTop: 1 }} numberOfLines={1}>{banner.sub}</Text>
             </View>
-            <Ionicons name="chevron-forward" size={20} color="#fff" />
+            <Ionicons name="chevron-forward" size={ICON.tile} color="#fff" />
           </TouchableOpacity>
         </Animated.View>
       ) : null}
@@ -260,14 +274,14 @@ export default function SpotterTabsLayout() {
             onPress={confirmCheckout}
             style={{ marginHorizontal: 12, backgroundColor: SC.warning, borderRadius: 16, paddingVertical: 14, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.35, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 10 }}
           >
-            <Ionicons name="exit-outline" size={24} color="#fff" style={{ marginRight: 12 }} />
+            <Ionicons name="exit-outline" size={ICON.action} color="#fff" style={{ marginRight: 12 }} />
             <View style={{ flex: 1 }}>
               <Text style={{ color: '#fff', fontWeight: '900', fontSize: 16 }}>Driver checking out</Text>
               <Text style={{ color: 'rgba(255,255,255,0.92)', fontSize: 12.5, marginTop: 1 }} numberOfLines={1}>
                 {checkoutReq.title}{checkoutReq.slot ? ` · slot ${checkoutReq.slot}` : ''} · tap to confirm
               </Text>
             </View>
-            {confirming ? <ActivityIndicator color="#fff" /> : <Ionicons name="checkmark-circle" size={22} color="#fff" />}
+            {confirming ? <ActivityIndicator color="#fff" /> : <Ionicons name="checkmark-circle" size={ICON.tile} color="#fff" />}
           </TouchableOpacity>
         </Animated.View>
       ) : null}

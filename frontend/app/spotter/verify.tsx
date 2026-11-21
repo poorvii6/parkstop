@@ -7,7 +7,8 @@ import { Ionicons } from '@expo/vector-icons';
 import apiClient from '../../api/client';
 import { onRealtime } from '../../services/realtime';
 import Toast from '../../components/Toast';
-import { SC, TF, SP, RAD, SS } from '../../constants/SpotterTheme';
+import { LoadFailed, loadErrorText } from '../../components/LoadFailed';
+import { SC, TF, SP, RAD, SS, ICON } from '../../constants/SpotterTheme';
 
 export default function VerifyScreen() {
   const router = useRouter();
@@ -20,6 +21,10 @@ export default function VerifyScreen() {
   // Active bookings for quick-verify
   const [activeBookings, setActiveBookings] = useState<any[]>([]);
   const [fetchingBookings, setFetchingBookings] = useState(true);
+  // A failed load is not the same as a quiet night. This screen is how an owner
+  // admits a driver who is standing at the gate, so "No active bookings" when
+  // the request actually failed is the worst possible wrong answer.
+  const [bookingsError, setBookingsError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
 
   const [spotterUpiId, setSpotterUpiId] = useState<string | null>(null);
@@ -122,13 +127,16 @@ export default function VerifyScreen() {
   };
 
   const fetchActiveBookings = async () => {
+    setBookingsError('');
     try {
       const res = await apiClient.get('/bookings/spotter-bookings');
       if (res.data?.success) {
         setActiveBookings(res.data.data || []);
+      } else {
+        setBookingsError(res.data?.message || 'Could not load your current bookings.');
       }
     } catch (e) {
-      console.log('Error fetching spotter bookings', e);
+      setBookingsError(loadErrorText(e, 'Could not load your current bookings.'));
     } finally {
       setFetchingBookings(false);
       setRefreshing(false);
@@ -244,7 +252,7 @@ export default function VerifyScreen() {
               </View>
             </View>
             <TouchableOpacity onPress={() => router.push('/modal')} style={SS.profileBtn}>
-              <Ionicons name="person" size={18} color={SC.info} />
+              <Ionicons name="person" size={ICON.row} color={SC.info} />
             </TouchableOpacity>
           </View>
         </View>
@@ -271,14 +279,14 @@ export default function VerifyScreen() {
             style={[s.toggleBtn, mode === 'checkin' && s.toggleActive]}
             onPress={() => setMode('checkin')}
           >
-            <Ionicons name="arrow-forward-circle" size={18} color={mode === 'checkin' ? '#FFF' : SC.textMuted} />
+            <Ionicons name="arrow-forward-circle" size={ICON.row} color={mode === 'checkin' ? '#FFF' : SC.textMuted} />
             <Text style={[s.toggleText, mode === 'checkin' && { color: '#FFF' }]}>Check-In</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[s.toggleBtn, mode === 'checkout' && s.toggleActiveCheckout]}
             onPress={() => setMode('checkout')}
           >
-            <Ionicons name="arrow-back-circle" size={18} color={mode === 'checkout' ? '#FFF' : SC.textMuted} />
+            <Ionicons name="arrow-back-circle" size={ICON.row} color={mode === 'checkout' ? '#FFF' : SC.textMuted} />
             <Text style={[s.toggleText, mode === 'checkout' && { color: '#FFF' }]}>Checkout</Text>
           </TouchableOpacity>
         </View>
@@ -358,7 +366,7 @@ export default function VerifyScreen() {
                     the wrong car when several are parked. */}
                 {selectedBooking && (
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 }}>
-                    <Ionicons name="checkmark-circle" size={16} color={SC.accent} />
+                    <Ionicons name="checkmark-circle" size={ICON.label} color={SC.accent} />
                     <Text style={{ color: SC.textMuted, ...TF.caption, flex: 1 }} numberOfLines={1}>
                       {selectedBooking.users?.full_name || 'Driver'} · {selectedBooking.parking_spots?.title || 'Spot'} · {selectedBooking.status}
                     </Text>
@@ -384,7 +392,7 @@ export default function VerifyScreen() {
               {/* Inline error — correct the OTP without dismissing a modal */}
               {formError && (
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: SP.md, padding: 12, borderRadius: RAD.md, backgroundColor: 'rgba(239,68,68,0.10)', borderWidth: 1, borderColor: 'rgba(239,68,68,0.35)' }}>
-                  <Ionicons name="alert-circle" size={18} color={SC.error} />
+                  <Ionicons name="alert-circle" size={ICON.row} color={SC.error} />
                   <Text style={{ color: SC.error, ...TF.caption, flex: 1 }}>{formError}</Text>
                 </View>
               )}
@@ -427,15 +435,23 @@ export default function VerifyScreen() {
           <View style={SS.sectionHeader}>
             <Text style={SS.sectionTitle}>Current Bookings</Text>
             <View style={SS.badge}>
-              <Text style={SS.badgeText}>{activeBookings.length} TOTAL</Text>
+              {/* Not "0 TOTAL" when the request failed — we don't know. */}
+              <Text style={SS.badgeText}>{bookingsError ? '— TOTAL' : `${activeBookings.length} TOTAL`}</Text>
             </View>
           </View>
 
           {fetchingBookings ? (
             <ActivityIndicator color={SC.accent} style={{ marginTop: 20 }} />
+          ) : bookingsError ? (
+            <LoadFailed
+              message={bookingsError}
+              onRetry={() => { setFetchingBookings(true); fetchActiveBookings(); }}
+              what="your current bookings"
+              compact
+            />
           ) : activeBookings.length === 0 ? (
             <View style={[SS.card, { alignItems: 'center', paddingVertical: 28 }]}>
-              <Ionicons name="shield-outline" size={32} color={SC.textMuted} />
+              <Ionicons name="shield-outline" size={ICON.empty} color={SC.textMuted} />
               <Text style={SS.emptyText}>No active bookings to verify</Text>
             </View>
           ) : (
@@ -458,7 +474,7 @@ export default function VerifyScreen() {
                   <View style={[s.bookingIcon, { backgroundColor: chipBg }]}>
                     <Ionicons
                       name={isReserved ? 'time' : isActive ? 'car' : 'checkmark-circle'}
-                      size={18}
+                      size={ICON.row}
                       color={chipColor}
                     />
                   </View>

@@ -78,7 +78,17 @@ describe('Booking API', () => {
         location_type: 'urban',
         is_active: true,
         amenities: [],
-        slot_names: ['Slot A', 'Slot B']
+        slot_names: ['Slot A', 'Slot B'],
+
+        // The SPOT's own address verification, which is separate from the
+        // owner's approval above and just as compulsory: Booking.create
+        // refuses a spot that is not visible to drivers, so without this the
+        // booking test fails on an unverified driveway rather than on anything
+        // about booking. A spot created through the API starts at
+        // 'not_started' by design — a new listing is not live until we have
+        // checked its address.
+        spot_verification_status: 'approved',
+        spot_verification: { create: { status: 'approved' } }
       }
     });
     spotId = spot.id;

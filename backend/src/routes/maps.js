@@ -1,5 +1,7 @@
 const router = require('express').Router();
 const { authenticate } = require('../middleware/auth');
+const { geocodeAddress } = require('../services/geocoding');
+const { kmBetween } = require('../utils/geo');
 
 /**
  * SECURITY: every /maps/* endpoint requires a signed-in user.
@@ -23,18 +25,9 @@ const { authenticate } = require('../middleware/auth');
  */
 router.use(authenticate);
 
-// Haversine formula to calculate distance in km
-function getDistance(lat1, lon1, lat2, lon2) {
-    const R = 6371; // Radius of the earth in km
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = 
-        Math.sin(dLat/2) * Math.sin(dLat/2) +
-        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
-        Math.sin(dLon/2) * Math.sin(dLon/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    return R * c;
-}
+// Distance in km. One copy, in utils/geo.js — there were two of this formula
+// and the per-spot address check needed a third caller.
+const getDistance = kmBetween;
 
 // ── LRU Cache with TTL ──────────────────────────────────────────────────
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -397,6 +390,23 @@ router.get('/place-details', async (req, res) => {
 // frontend calls this when a suggestion is selected to get the real lat/lon
 // (otherwise the map would drop the destination pin at 0,0). Falls back to
 // Nominatim, which always returns coordinates.
+/**
+ * Resolve an address or place name to a point.
+ *
+ * The provider order and its reasons now live in services/geocoding.js, which
+ * this delegates to: Nominatim first (Ola's free-text geocode has dropped
+ * city/state searches tens or hundreds of km away — "Mysuru" ~30 km off,
+ * "Jammu and Kashmir" onto Ludhiana), one retry without a leading house
+ * number, then Ola.
+ *
+ * The response still carries `lat` and `lon` as strings, which is all the map
+ * search reads. What is NEW is everything next to them: `precision` (building,
+ * point, street, locality, region, unknown) and `uncertainty_m` (how big the
+ * thing found actually is). The old version threw those away, which was fine
+ * for flying a map to a city and useless for the per-spot address check — a
+ * full Indian street address comes back as the street, and a locality comes
+ * back as a box kilometres across. A distance means nothing without them.
+ */
 router.get('/geocode', async (req, res) => {
     try {
         const q = (req.query.q || '').toString().trim();
@@ -408,45 +418,20 @@ router.get('/geocode', async (req, res) => {
         const cached = getCached(cacheKey);
         if (cached) return res.json({ success: true, data: cached, cached: true });
 
-        // Resolve a place NAME via OpenStreetMap (Nominatim) FIRST. Ola's
-        // free-text geocode is unreliable for administrative names — it has
-        // dropped city/state searches tens or hundreds of km away (e.g. "Mysuru"
-        // ~30km off, "Jammu and Kashmir" onto Ludhiana). Nominatim is
-        // importance-ranked and returns the correct city / state / locality.
-        try {
-            const nomUrl = `https://nominatim.openstreetmap.org/search?format=json&countrycodes=in&limit=1&q=${encodeURIComponent(q)}`;
-            const nomRes = await fetch(nomUrl, { headers: { 'User-Agent': 'ParkStop-App' } });
-            const nomData = await nomRes.json();
-            if (Array.isArray(nomData) && nomData.length > 0 && nomData[0].lat && nomData[0].lon) {
-                const result = { lat: nomData[0].lat, lon: nomData[0].lon };
-                setCached(cacheKey, result);
-                return res.json({ success: true, data: result });
-            }
-        } catch (nomErr) {
-            console.error('[API ERROR] Nominatim geocode failed, trying Ola:', nomErr.message);
-        }
+        const hit = await geocodeAddress(q);
+        if (!hit) return res.json({ success: false, message: 'Location not found' });
 
-        // Last resort: Ola's free-text geocode.
-        const apiKey = process.env.OLA_MAPS_API_KEY;
-        if (apiKey) {
-            try {
-                const url = `https://api.olamaps.io/places/v1/geocode?address=${encodeURIComponent(q)}&api_key=${apiKey}`;
-                const response = await fetch(url, { headers: { 'X-Request-Id': `req-${Date.now()}` } });
-                if (response.ok) {
-                    const olaData = await response.json();
-                    const loc = olaData.geocodingResults?.[0]?.geometry?.location;
-                    if (loc && loc.lat != null && loc.lng != null) {
-                        const result = { lat: loc.lat.toString(), lon: loc.lng.toString() };
-                        setCached(cacheKey, result);
-                        return res.json({ success: true, data: result });
-                    }
-                }
-            } catch (olaError) {
-                console.error('[API ERROR] Ola geocode failed:', olaError.message);
-            }
-        }
-
-        return res.json({ success: false, message: 'Location not found' });
+        const result = {
+            lat: hit.lat,
+            lon: hit.lon,
+            precision: hit.precision,
+            uncertainty_m: hit.uncertainty_m,
+            source: hit.source,
+            display_name: hit.display_name,
+            bbox: hit.bbox,
+        };
+        setCached(cacheKey, result);
+        return res.json({ success: true, data: result });
     } catch (error) {
         console.error('[Geocode error]', error.message);
         res.status(500).json({ success: false, message: 'Geocoding failed' });

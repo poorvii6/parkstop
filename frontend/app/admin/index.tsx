@@ -6,10 +6,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import apiClient from '../../api/client';
 import { useOnlineRefresh } from '../../hooks/useOnlineRefresh';
 import { BlueprintTheme, BlueprintColors } from '../../constants/BlueprintTheme';
+import { LoadFailed, loadErrorText } from '../../components/LoadFailed';
 
 type PlatformStats = {
-  total_completed_bookings: string;
-  total_bookings: string;
+  // The counts are cast to ::int server-side, so they arrive as numbers. The
+  // money columns are numeric in Postgres and arrive as strings — hence the
+  // parseFloat below rather than toFixed straight off.
+  total_completed_bookings: number;
+  total_bookings: number;
   total_revenue: string;
   platform_earnings: string;
   spotter_payout: string;
@@ -19,19 +23,24 @@ export default function AdminDashboard() {
   const router = useRouter();
   const [stats, setStats] = useState<PlatformStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     fetchAnalytics();
   }, []);
 
   const fetchAnalytics = async () => {
+    setLoading(true);
+    setError('');
     try {
       const response = await apiClient.get('/analytics/platform');
       if (response.data.success) {
         setStats(response.data.data.summary);
+      } else {
+        setError(response.data?.message || 'Could not load the platform figures.');
       }
-    } catch (error) {
-      console.log('Failed to fetch platform analytics', error);
+    } catch (e) {
+      setError(loadErrorText(e, 'Could not load the platform figures.'));
     } finally {
       setLoading(false);
     }
@@ -79,8 +88,15 @@ export default function AdminDashboard() {
           <Text style={styles.subtitle}>Real-time system diagnostics and revenue tracking.</Text>
         </View>
 
-        {loading || !stats ? (
+        {/*
+          Keyed on `loading`, never on `!stats`. `loading || !stats` was true
+          forever after a failed request — setLoading(false) ran but stats
+          stayed null — so a 500 rendered as a spinner that never stopped.
+        */}
+        {loading ? (
            <ActivityIndicator color={BlueprintColors.primaryAccent} size="large" style={{ marginTop: 40 }} />
+        ) : !stats ? (
+          <LoadFailed message={error} onRetry={fetchAnalytics} what="the platform figures" compact />
         ) : (
           <View style={styles.statsGrid}>
             <View style={[BlueprintTheme.glassCard, styles.statCard]}>
@@ -105,7 +121,16 @@ export default function AdminDashboard() {
         <Text style={styles.sectionTitle}>Manage</Text>
         <TouchableOpacity style={[BlueprintTheme.glassCard, styles.actionCard]} onPress={() => router.push('/admin/verifications' as any)}>
           <Text style={styles.actionTitle}>Owner verifications</Text>
-          <Text style={styles.actionSub}>Review and approve new spot owners</Text>
+          <Text style={styles.actionSub}>Approve the PERSON — Aadhaar, PAN, selfie, bank</Text>
+        </TouchableOpacity>
+        {/*
+          A separate queue, because this approves a PLACE. An approved owner can
+          still have four driveways nobody has checked, and each is verified on
+          its own evidence.
+        */}
+        <TouchableOpacity style={[BlueprintTheme.glassCard, styles.actionCard]} onPress={() => router.push('/admin/spot-verifications' as any)}>
+          <Text style={styles.actionTitle}>Spot verifications</Text>
+          <Text style={styles.actionSub}>Approve the PLACE — document, address, registrar. 48-hour promise</Text>
         </TouchableOpacity>
         <TouchableOpacity style={[BlueprintTheme.glassCard, styles.actionCard]} onPress={() => router.push('/admin/payouts' as any)}>
           <Text style={styles.actionTitle}>Owner payouts</Text>

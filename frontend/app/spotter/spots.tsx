@@ -10,7 +10,9 @@ import MapLibreView from '../../components/MapLibreView';
 import apiClient from '../../api/client';
 import { presentError } from '../../utils/authErrors';
 import { useOnlineRefresh } from '../../hooks/useOnlineRefresh';
-import { SC, TF, SP, RAD, SS } from '../../constants/SpotterTheme';
+import SpotVerificationBadge from '../../components/spotter/SpotVerificationBadge';
+import { LoadFailed, loadErrorText } from '../../components/LoadFailed';
+import { SC, TF, SP, RAD, SS, ICON } from '../../constants/SpotterTheme';
 
 export default function SpotsScreen() {
   const router = useRouter();
@@ -19,6 +21,10 @@ export default function SpotsScreen() {
   // List state
   const [mySpots, setMySpots] = useState<any[]>([]);
   const [loadingSpots, setLoadingSpots] = useState(true);
+  // Tracked separately from an empty list. A failed load used to fall straight
+  // through to "No Spots Yet", which invites an owner who already has four
+  // driveways to create a fifth copy of one.
+  const [spotsError, setSpotsError] = useState('');
 
   // Create form state
   const [title, setTitle] = useState('');
@@ -98,13 +104,17 @@ export default function SpotsScreen() {
   }, []);
 
   const fetchMySpots = async () => {
+    setLoadingSpots(true);
+    setSpotsError('');
     try {
       const res = await apiClient.get('/spots/dashboard');
       if (res.data?.success) {
         setMySpots(res.data.data.inventory || []);
+      } else {
+        setSpotsError(res.data?.message || 'Could not load your spots.');
       }
     } catch (e) {
-      console.log('Error fetching spots', e);
+      setSpotsError(loadErrorText(e, 'Could not load your spots.'));
     } finally {
       setLoadingSpots(false);
     }
@@ -265,7 +275,7 @@ export default function SpotsScreen() {
               </View>
             </View>
             <TouchableOpacity onPress={() => router.push('/modal')} style={SS.profileBtn}>
-              <Ionicons name="person" size={18} color={SC.info} />
+              <Ionicons name="person" size={ICON.row} color={SC.info} />
             </TouchableOpacity>
           </View>
         </View>
@@ -286,14 +296,14 @@ export default function SpotsScreen() {
             style={[s.toggleBtn, mode === 'list' && s.toggleActive]}
             onPress={() => { setMode('list'); setEditingSpotId(null); setTitle(''); setAddress(''); setPrice(''); setPickedImages([]); setUseLiveLocation(true); }}
           >
-            <Ionicons name="list" size={18} color={mode === 'list' ? '#FFF' : SC.textMuted} />
+            <Ionicons name="list" size={ICON.row} color={mode === 'list' ? '#FFF' : SC.textMuted} />
             <Text style={[s.toggleText, mode === 'list' && { color: '#FFF' }]}>My Spots</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[s.toggleBtn, mode === 'create' && s.toggleActive]}
             onPress={() => { setMode('create'); setEditingSpotId(null); setTitle(''); setAddress(''); setPrice(''); setPickedImages([]); setUseLiveLocation(true); }}
           >
-            <Ionicons name="add-circle" size={18} color={mode === 'create' ? '#FFF' : SC.textMuted} />
+            <Ionicons name="add-circle" size={ICON.row} color={mode === 'create' ? '#FFF' : SC.textMuted} />
             <Text style={[s.toggleText, mode === 'create' && { color: '#FFF' }]}>{editingSpotId ? 'Edit Spot' : 'Create New'}</Text>
           </TouchableOpacity>
         </View>
@@ -303,10 +313,12 @@ export default function SpotsScreen() {
           <>
             {loadingSpots ? (
               <ActivityIndicator color={SC.accent} style={{ marginTop: 40 }} />
+            ) : spotsError ? (
+              <LoadFailed message={spotsError} onRetry={fetchMySpots} what="your spots" />
             ) : mySpots.length === 0 ? (
               <View style={[SS.card, { alignItems: 'center', paddingVertical: 40 }]}>
                 <View style={s.emptyIconBg}>
-                  <Ionicons name="location-outline" size={40} color={SC.accent} />
+                  <Ionicons name="location-outline" size={ICON.hero} color={SC.accent} />
                 </View>
                 <Text style={{ color: SC.textPrimary, ...TF.h3, marginTop: 16 }}>No Spots Yet</Text>
                 <Text style={{ color: SC.textMuted, ...TF.bodySm, marginTop: 6, textAlign: 'center' }}>
@@ -327,7 +339,7 @@ export default function SpotsScreen() {
                       {spot.images && spot.images.length > 0 ? (
                         <Image source={{ uri: spot.images[0] }} style={{ width: '100%', height: '100%', borderRadius: 8 }} />
                       ) : (
-                        <Ionicons name="location" size={20} color={SC.accent} />
+                        <Ionicons name="location" size={ICON.tile} color={SC.accent} />
                       )}
                     </View>
                     <View style={{ flex: 1 }}>
@@ -341,16 +353,25 @@ export default function SpotsScreen() {
                         style={[s.deleteBtn, { backgroundColor: 'rgba(59,130,246,0.1)' }]}
                         onPress={() => handleEditClick(spot)}
                       >
-                        <Ionicons name="pencil" size={16} color="#3b82f6" />
+                        <Ionicons name="pencil" size={ICON.label} color="#3b82f6" />
                       </TouchableOpacity>
                       <TouchableOpacity
                         style={s.deleteBtn}
                         onPress={() => handleDelete(spot.id)}
                       >
-                        <Ionicons name="trash-outline" size={16} color={SC.error} />
+                        <Ionicons name="trash-outline" size={ICON.label} color={SC.error} />
                       </TouchableOpacity>
                     </View>
                   </View>
+                  {/*
+                    Whether a driver can actually see this spot, and why not —
+                    and now a way in. Each spot is verified on its own, so this
+                    opens THIS spot's document, not an account-wide one.
+                  */}
+                  <SpotVerificationBadge
+                    v={spot.verification}
+                    onPress={() => router.push(`/spotter/spot-verification/${spot.id}` as any)}
+                  />
                   <View style={s.spotStatsRow}>
                     <View style={s.spotStat}>
                       <Text style={s.spotStatValue}>{spot.total_slots}</Text>
@@ -372,6 +393,27 @@ export default function SpotsScreen() {
         ) : (
           /* ── CREATE FORM ─────────────────────────────────────── */
           <View style={SS.glassCard}>
+            {/*
+              Said BEFORE the form, not after submitting.
+              A new spot is not visible to drivers until its own address is
+              checked -- being a verified owner is not enough, because
+              verification approves a person and this is a place. Burying that
+              until the end would mean someone fills in a listing believing it
+              goes live when they tap Create.
+            */}
+            {!editingSpotId && (
+              <View style={s.verifyNotice}>
+                <Ionicons name="information-circle" size={ICON.row} color={SC.info} />
+                <Text style={s.verifyNoticeText}>
+                  New spots are not visible to drivers straight away. After you create this
+                  one, send us a document proving who owns its address — a khata certificate,
+                  sale deed, property tax receipt or encumbrance certificate{' '}
+                  <Text style={{ fontWeight: '800' }}>in your own name</Text>. A utility bill is
+                  not enough. If you rent, you will also need your landlord&apos;s signed consent.
+                  We verify it and list the spot within 48 hours of a complete submission.
+                </Text>
+              </View>
+            )}
             <View style={SS.inputGroup}>
               <Text style={SS.inputLabel}>SPOT NAME *</Text>
               <TextInput
@@ -454,7 +496,7 @@ export default function SpotsScreen() {
                       onPress={() => removePickedImage(idx)} 
                       style={{ position: 'absolute', top: 4, right: 4, backgroundColor: 'rgba(0,0,0,0.6)', borderRadius: 10, width: 20, height: 20, justifyContent: 'center', alignItems: 'center' }}
                     >
-                      <Ionicons name="close" size={14} color="#FFF" />
+                      <Ionicons name="close" size={ICON.inline} color="#FFF" />
                     </TouchableOpacity>
                   </View>
                 ))}
@@ -463,7 +505,7 @@ export default function SpotsScreen() {
                     onPress={pickImages} 
                     style={{ width: 72, height: 72, backgroundColor: SC.bgCard, borderRadius: RAD.sm, borderStyle: 'dashed', borderWidth: 1.5, borderColor: SC.borderActive, justifyContent: 'center', alignItems: 'center' }}
                   >
-                    <Ionicons name="camera" size={22} color={SC.accent} />
+                    <Ionicons name="camera" size={ICON.tile} color={SC.accent} />
                     <Text style={{ color: SC.textMuted, fontSize: 9, marginTop: 4, fontWeight: '800' }}>Add Photo</Text>
                   </TouchableOpacity>
                 )}
@@ -551,7 +593,7 @@ export default function SpotsScreen() {
                     marginBottom: 12
                   }}
                 >
-                  <Ionicons name="refresh-circle" size={16} color={SC.accent} style={{ marginRight: 6 }} />
+                  <Ionicons name="refresh-circle" size={ICON.label} color={SC.accent} style={{ marginRight: 6 }} />
                   <Text style={{ color: SC.accent, fontSize: 12, fontWeight: '800' }}>Recenter to Live GPS Location</Text>
                 </TouchableOpacity>
               )}
@@ -601,6 +643,24 @@ export default function SpotsScreen() {
 }
 
 const s = StyleSheet.create({
+  verifyNotice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: SC.infoSoft,
+    borderColor: SC.info + '55',
+    borderWidth: 1,
+    borderRadius: RAD.sm,
+    padding: 12,
+    marginBottom: SP.lg,
+  },
+  verifyNoticeText: {
+    flex: 1,
+    color: SC.textPrimary,
+    opacity: 0.9,
+    fontSize: 12,
+    lineHeight: 17,
+  },
   toggleRow: {
     flexDirection: 'row',
     gap: 10,

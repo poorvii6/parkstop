@@ -7,7 +7,7 @@ import { View, Image, Text, TouchableOpacity, StyleSheet, Linking } from 'react-
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { SC } from '../../../constants/SpotterTheme';
+import { SC, ICON } from '../../../constants/SpotterTheme';
 import { ownerVerification, errorText, errorCode } from '../../../api/ownerVerification';
 import { StepScreen, PrimaryButton, ErrorNote, InfoNote, vs } from '../../../components/spotter/VerifyUI';
 
@@ -67,7 +67,7 @@ export default function SelfieStep() {
           <Image source={{ uri: photo }} style={st.photo} />
         ) : (
           <View style={st.placeholder}>
-            <Ionicons name="person-circle-outline" size={96} color={SC.textMuted} />
+            <Ionicons name="person-circle-outline" size={ICON.avatar} color={SC.textMuted} />
           </View>
         )}
       </View>
@@ -94,7 +94,7 @@ export default function SelfieStep() {
 function Tip({ text }: { text: string }) {
   return (
     <View style={vs.bullet}>
-      <Ionicons name="checkmark-circle" size={18} color={SC.success} />
+      <Ionicons name="checkmark-circle" size={ICON.row} color={SC.success} />
       <Text style={vs.bulletText}>{text}</Text>
     </View>
   );

@@ -5,7 +5,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SC } from '../../../constants/SpotterTheme';
-import { ownerVerification, errorText, FLAG_LABELS, DOC_TYPES } from '../../../api/ownerVerification';
+import { ownerVerification, errorText, FLAG_LABELS } from '../../../api/ownerVerification';
+import { LoadFailed } from '../../../components/LoadFailed';
+import { labelForDocType } from '../../../constants/propertyDocTypes';
 
 export default function AdminVerificationDetail() {
   const router = useRouter();
@@ -51,12 +53,16 @@ export default function AdminVerificationDetail() {
   if (!d) {
     return (
       <SafeAreaView style={s.safe}>
-        {error ? <Text style={s.error}>{error}</Text> : <ActivityIndicator color={SC.accent} style={{ marginTop: 60 }} size="large" />}
+        {error
+          ? <LoadFailed message={error} onRetry={load} what="this owner" />
+          : <ActivityIndicator color={SC.accent} style={{ marginTop: 60 }} size="large" />}
       </SafeAreaView>
     );
   }
 
-  const doc = DOC_TYPES.find((t) => t.key === d.property?.doc_type)?.label || d.property?.doc_type;
+  // labelForDocType falls back to the raw string, so a document stored under a
+  // type we no longer offer still reads as something.
+  const doc = labelForDocType(d.legacy_property?.doc_type);
   const pct = (n: number | null) => (n == null ? '—' : `${Math.round(n * 100)}%`);
 
   return (
@@ -114,17 +120,37 @@ export default function AdminVerificationDetail() {
           <Row k="Name match" v={d.bank?.name_match} />
         </Section>
 
-        <Section title="Property proof" ok={!!d.property?.uploaded_at}>
-          <Row k="Document" v={doc} />
-          <Row k="Address" v={d.property?.address} />
-          {d.property?.doc_url ? (
-            <TouchableOpacity onPress={() => setDocFull(true)}>
-              <Image source={{ uri: d.property.doc_url }} style={s.doc} resizeMode="cover" />
-              <Text style={s.tapHint}>Tap to view full size</Text>
-            </TouchableOpacity>
-          ) : null}
-          <Text style={s.checkHint}>Check: the name matches the Aadhaar name (or the owner has a rent agreement), and the address matches the spot below.</Text>
-        </Section>
+        {/*
+          Shown only on accounts that used the old per-account property step,
+          and deliberately NOT presented as a check. It told an admin to
+          confirm the name and the address, recorded neither, and compared the
+          document to no spot — so it could not say which of an owner's
+          driveways, if any, it was about. Each spot carries its own document
+          now, measured against its own pin. This is kept because the file
+          still exists and an admin may need to see it.
+        */}
+        {d.legacy_property ? (
+          <Section title="Property proof (old flow)" ok={false}>
+            <Row k="Document" v={doc} />
+            <Row k="Address" v={d.legacy_property.address} />
+            {d.legacy_property.doc_url ? (
+              <TouchableOpacity onPress={() => setDocFull(true)}>
+                {/* Resized server-side. doc_preview_url is absent on a response
+                    from an older backend, so fall back to the original. */}
+                <Image
+                  source={{ uri: d.legacy_property.doc_preview_url || d.legacy_property.doc_url }}
+                  style={s.doc}
+                  resizeMode="cover"
+                />
+                <Text style={s.tapHint}>Tap to view full size</Text>
+              </TouchableOpacity>
+            ) : null}
+            <Text style={s.checkHint}>
+              This is not a property check. It was uploaded once for the whole account and
+              never compared to any spot, pin or name. Verify each spot on its own screen.
+            </Text>
+          </Section>
+        ) : null}
 
         <Section title={`Spots (${d.user?.parking_spots?.length || 0})`}>
           {(d.user?.parking_spots || []).map((sp: any) => (
@@ -176,7 +202,7 @@ export default function AdminVerificationDetail() {
 
       <Modal visible={docFull} transparent animationType="fade" onRequestClose={() => setDocFull(false)}>
         <TouchableOpacity style={s.full} activeOpacity={1} onPress={() => setDocFull(false)}>
-          {d.property?.doc_url ? <Image source={{ uri: d.property.doc_url }} style={{ width: '100%', height: '85%' }} resizeMode="contain" /> : null}
+          {d.legacy_property?.doc_url ? <Image source={{ uri: d.legacy_property.doc_url }} style={{ width: '100%', height: '85%' }} resizeMode="contain" /> : null}
           <Text style={s.tapHint}>Tap to close</Text>
         </TouchableOpacity>
       </Modal>

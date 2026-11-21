@@ -169,12 +169,27 @@ describe('Bank', () => {
 });
 
 describe('Submit and admin review', () => {
-  const allDone = () => ({ ...AADHAAR_DONE, pan_verified_at: new Date(), selfie_verified_at: new Date(), bank_verified_at: new Date(), property_uploaded_at: new Date() });
+  // Four steps, all of them checked against a record by Cashfree. The fifth
+  // was a property document that was compared to nothing and still blocked an
+  // owner from being approved, and therefore from withdrawing. It is gone;
+  // property proof is per spot now.
+  const allDone = () => ({ ...AADHAAR_DONE, pan_verified_at: new Date(), selfie_verified_at: new Date(), bank_verified_at: new Date() });
   it('cannot submit with steps missing', async () => {
     const res = resMock();
     await C.submit(req(), res);
     expect(res.status).toHaveBeenCalledWith(400);
-    expect(res.json.mock.calls[0][0].missing).toEqual(['pan', 'selfie', 'bank', 'property']);
+    expect(res.json.mock.calls[0][0].missing).toEqual(['pan', 'selfie', 'bank']);
+  });
+
+  it('a property document is not required, and not having one is not "missing"', async () => {
+    // The point of removing it: an owner with verified identity is approvable
+    // and can be paid. Whether their DRIVEWAY is verified is a per-spot
+    // question, asked and answered in spot_verifications.
+    rec = allDone();
+    const res = resMock();
+    await C.submit(req(), res);
+    expect(res.status).not.toHaveBeenCalledWith(400);
+    expect(rec.status).toBe('pending');
   });
   it('submit sets pending on both tables', async () => {
     rec = allDone();

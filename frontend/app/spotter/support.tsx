@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Linking } from 'r
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { SC, TF, SP, RAD, SS } from '../../constants/SpotterTheme';
+import { SC, TF, SP, RAD, SS, ICON } from '../../constants/SpotterTheme';
 
 const FAQ_ITEMS = [
   {
@@ -56,7 +56,7 @@ export default function SupportPage() {
               </View>
             </View>
             <TouchableOpacity onPress={() => router.push('/modal')} style={SS.profileBtn}>
-              <Ionicons name="person" size={18} color={SC.info} />
+              <Ionicons name="person" size={ICON.row} color={SC.info} />
             </TouchableOpacity>
           </View>
         </View>
@@ -67,7 +67,7 @@ export default function SupportPage() {
         <View style={s.helpCard}>
           <View style={s.helpIconRow}>
             <View style={s.helpIconBg}>
-              <Ionicons name="headset" size={28} color={SC.accent} />
+              <Ionicons name="headset" size={ICON.empty} color={SC.accent} />
             </View>
           </View>
           <Text style={{ color: SC.textPrimary, ...TF.h1, marginBottom: 6 }}>Need Help?</Text>
@@ -77,24 +77,24 @@ export default function SupportPage() {
 
           <TouchableOpacity style={s.contactItem} onPress={handleCall}>
             <View style={[s.contactIcon, { backgroundColor: SC.successSoft }]}>
-              <Ionicons name="call" size={18} color={SC.success} />
+              <Ionicons name="call" size={ICON.row} color={SC.success} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={{ color: SC.textMuted, ...TF.labelSm }}>CALL PRIORITY HOTLINE</Text>
               <Text style={{ color: SC.textPrimary, ...TF.bodyBold, marginTop: 2 }}>+91 98457 05793</Text>
             </View>
-            <Ionicons name="chevron-forward" size={18} color={SC.textMuted} />
+            <Ionicons name="chevron-forward" size={ICON.row} color={SC.textMuted} />
           </TouchableOpacity>
 
           <TouchableOpacity style={s.contactItem} onPress={handleEmail}>
             <View style={[s.contactIcon, { backgroundColor: SC.infoSoft }]}>
-              <Ionicons name="mail" size={18} color={SC.info} />
+              <Ionicons name="mail" size={ICON.row} color={SC.info} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={{ color: SC.textMuted, ...TF.labelSm }}>EMAIL SUPPORT</Text>
               <Text style={{ color: SC.textPrimary, ...TF.bodyBold, marginTop: 2 }}>twin.win500@gmail.com</Text>
             </View>
-            <Ionicons name="chevron-forward" size={18} color={SC.textMuted} />
+            <Ionicons name="chevron-forward" size={ICON.row} color={SC.textMuted} />
           </TouchableOpacity>
         </View>
 
@@ -124,7 +124,7 @@ export default function SupportPage() {
               </Text>
               <Ionicons
                 name={expandedIndex === index ? 'chevron-up' : 'chevron-down'}
-                size={16}
+                size={ICON.label}
                 color={SC.accent}
               />
             </TouchableOpacity>

@@ -159,6 +159,32 @@ function validateEnv() {
     );
   }
 
+  /**
+   * Say the gate's state at boot, every boot.
+   *
+   * Whether a spot's own verification hides it from drivers is the single
+   * biggest behavioural switch on the server, and the difference between the
+   * two states is invisible from the outside until an owner submits something.
+   * Printing it means "is the gate on?" is answered by the deploy log rather
+   * than by reading code or guessing from behaviour.
+   *
+   * Required here and not in `recommended`, because its absence is a
+   * DELIBERATE state, not a degraded one.
+   */
+  const { GATE_VARIABLE, GATE_ON_VALUE, isSpotGateEnabled } = require('../constants/spotVerification');
+  if (isSpotGateEnabled()) {
+    console.log(
+      `🔒 ${GATE_VARIABLE}=${GATE_ON_VALUE} — per-spot verification IS enforced. `
+      + 'A spot is hidden from drivers until its own address passes both checks.'
+    );
+  } else {
+    console.log(
+      `🔓 ${GATE_VARIABLE} is not "${GATE_ON_VALUE}" — per-spot verification is NOT enforced. `
+      + 'Spots are visible to drivers regardless of their verification status; submissions '
+      + 'are still recorded and reviewed.'
+    );
+  }
+
   console.log('✅ Environment variables validated');
 }
 

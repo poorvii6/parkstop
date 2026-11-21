@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import apiClient from '../../api/client';
 import { SC } from '../../constants/SpotterTheme';
+import { LoadFailed, loadErrorText } from '../../components/LoadFailed';
 
 const TABS = [
   { key: 'requested', label: 'To pay' },
@@ -52,7 +53,7 @@ export default function AdminPayouts() {
       const r = await apiClient.get(`/payouts/admin/requests?status=${t}`);
       setRows(r.data?.data || []);
     } catch (e: any) {
-      setError(e?.response?.data?.message || 'Could not load payouts.');
+      setError(loadErrorText(e, 'Could not load payouts.'));
       setRows([]);
     } finally {
       setLoading(false);
@@ -104,14 +105,16 @@ export default function AdminPayouts() {
         ))}
       </View>
 
-      {error ? <Text style={s.error}>{error}</Text> : null}
-
       <FlatList
-        data={rows}
+        data={error ? [] : rows}
         keyExtractor={(r: Row) => String(r.id)}
         contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
         refreshControl={<RefreshControl refreshing={loading} onRefresh={() => load(tab)} tintColor={SC.accent} />}
-        ListEmptyComponent={!loading ? <Text style={s.empty}>Nothing here.</Text> : <ActivityIndicator color={SC.accent} style={{ marginTop: 40 }} />}
+        ListEmptyComponent={
+          loading ? <ActivityIndicator color={SC.accent} style={{ marginTop: 40 }} />
+            : error ? <LoadFailed message={error} onRetry={() => load(tab)} what="the payout requests" />
+              : <Text style={s.empty}>Nothing here.</Text>
+        }
         renderItem={({ item }: { item: Row }) => (
           <View style={s.card}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>

@@ -21,7 +21,8 @@ import { useRouter, useFocusEffect } from 'expo-router';
 import { useOnlineRefresh } from '../../hooks/useOnlineRefresh';
 import { Ionicons } from '@expo/vector-icons';
 import apiClient from '../../api/client';
-import { SC, TF, SP, RAD, SS } from '../../constants/SpotterTheme';
+import { LoadFailed } from '../../components/LoadFailed';
+import { SC, TF, SP, RAD, SS, ICON } from '../../constants/SpotterTheme';
 
 /* ── Types ─────────────────────────────────────────────────────── */
 type Item = {
@@ -124,7 +125,7 @@ export default function EarningsBreakdown() {
             accessibilityLabel="Go back"
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
-            <Ionicons name="chevron-back" size={24} color={SC.textPrimary} />
+            <Ionicons name="chevron-back" size={ICON.action} color={SC.textPrimary} />
           </TouchableOpacity>
           <Text style={SS.sectionTitle}>Earnings Breakdown</Text>
           <View style={{ width: 38 }} />
@@ -156,19 +157,9 @@ export default function EarningsBreakdown() {
           <Text style={SS.emptyText}>Loading your earnings…</Text>
         </View>
       ) : error ? (
-        <View style={st.center}>
-          <Ionicons name="cloud-offline-outline" size={44} color={SC.textMuted} />
-          <Text style={[SS.emptyText, { marginBottom: SP.lg }]}>{error}</Text>
-          <TouchableOpacity
-            onPress={() => load(days)}
-            style={st.retryBtn}
-            accessibilityRole="button"
-            accessibilityLabel="Retry loading earnings"
-          >
-            <Ionicons name="refresh" size={16} color={SC.accent} />
-            <Text style={st.retryText}>Try again</Text>
-          </TouchableOpacity>
-        </View>
+        // This screen's hand-rolled version is where components/LoadFailed came
+        // from. Using the shared one keeps every screen's failure identical.
+        <LoadFailed message={error} onRetry={() => load(days)} what="your earnings" />
       ) : (
         <ScrollView
           contentContainerStyle={SS.scrollContent}
@@ -204,7 +195,7 @@ export default function EarningsBreakdown() {
           {!!totals?.cash_fees_owed && totals.cash_fees_owed > 0 && (
             <View style={[SS.card, st.duesCard]}>
               <View style={st.duesHead}>
-                <Ionicons name="information-circle" size={18} color={SC.warning} />
+                <Ionicons name="information-circle" size={ICON.row} color={SC.warning} />
                 <Text style={st.duesTitle}>Why you owe {money(totals.cash_fees_owed)}</Text>
               </View>
               <Text style={st.duesBody}>
@@ -250,7 +241,7 @@ export default function EarningsBreakdown() {
           <View style={SS.card}>
             {items.length === 0 ? (
               <View style={{ alignItems: 'center', paddingVertical: SP.xl }}>
-                <Ionicons name="receipt-outline" size={40} color={SC.textMuted} />
+                <Ionicons name="receipt-outline" size={ICON.hero} color={SC.textMuted} />
                 <Text style={SS.emptyText}>
                   No completed bookings in this period.{'\n'}
                   Earnings appear here once a driver checks out.
@@ -293,14 +284,6 @@ export default function EarningsBreakdown() {
 const st = StyleSheet.create({
   backBtn: { width: 38, height: 38, justifyContent: 'center' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: SP.xl },
-
-  retryBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: SP.lg, paddingVertical: SP.md,
-    borderRadius: RAD.full, backgroundColor: SC.accentSoft,
-    borderWidth: 1, borderColor: SC.borderActive,
-  },
-  retryText: { color: SC.accent, ...TF.btnSecondary },
 
   periodRow: {
     flexDirection: 'row', gap: SP.sm,
