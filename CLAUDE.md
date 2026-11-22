@@ -85,6 +85,19 @@ Read these before touching anything that moves money.
   diagnoses and fixes this for one account.
 - `backend/node_modules` was copied from Windows at one point. If anything says
   `node.exe: not found`, run `rm -rf node_modules && npm install`.
+- **Run `gh pr update-branch` after retargeting a stacked PR.** CI runs on every
+  pull request now, whatever it targets — but `edited` is not one of the default
+  `pull_request` trigger types, so changing a PR's base fires no run. The checks
+  on the page are the ones that ran against the OLD base: a green tick
+  describing a merge nobody built. A branch update is a `synchronize`, which
+  does trigger, so the green then describes the merge you are about to do.
+  This is not a workaround for a gap; it is the step that makes the tick mean
+  something.
+- **An empty check rollup and a failing check look the same from outside.**
+  `gh pr checks --watch` exits non-zero for both, and a PR with no checks at all
+  still reads `MERGEABLE/CLEAN`. PR #21 sat in exactly that state. Before
+  trusting a green PR, confirm the jobs are actually listed —
+  `gh pr view <n> --json statusCheckRollup` is empty when nothing ran.
 
 ## Useful commands
 
