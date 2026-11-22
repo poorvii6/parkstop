@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Tabs, useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { SC, TF, ICON } from '../../constants/SpotterTheme';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { View, ActivityIndicator, Text, TouchableOpacity, Animated, Platform, Alert, AppState } from 'react-native';
@@ -199,6 +199,27 @@ export default function SpotterTabsLayout() {
             title: 'Spots',
             tabBarIcon: ({ color, size }) => (
               <Ionicons name="location" size={ICON.tile} color={color} />
+            ),
+          }}
+        />
+        {/*
+          Earnings had NO entry here, and Expo Router auto-creates a tab for
+          every route file in this directory — so the tab existed anyway, with
+          a placeholder glyph and the raw filename "earnings" as its label,
+          sitting in production next to four properly titled tabs.
+
+          MaterialCommunityIcons rather than Ionicons because Ionicons has no
+          rupee glyph at all (checked: nothing matching rupee, inr or currency
+          in its glyph map), and a rupee says "money" in one character where
+          Ionicons' generic "cash" does not. Size is ICON.tile, the same as the
+          other four.
+        */}
+        <Tabs.Screen
+          name="earnings"
+          options={{
+            title: 'Earnings',
+            tabBarIcon: ({ color }) => (
+              <MaterialCommunityIcons name="currency-inr" size={ICON.tile} color={color} />
             ),
           }}
         />
