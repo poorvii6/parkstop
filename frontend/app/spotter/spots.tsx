@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, TextInput, Alert, ScrollView, ActivityIndicator, Platform, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -13,6 +13,32 @@ import { useOnlineRefresh } from '../../hooks/useOnlineRefresh';
 import SpotVerificationBadge from '../../components/spotter/SpotVerificationBadge';
 import { LoadFailed, loadErrorText } from '../../components/LoadFailed';
 import { SC, TF, SP, RAD, SS, ICON } from '../../constants/SpotterTheme';
+
+/**
+ * When a GPS fix is too coarse to place a spot with.
+ *
+ * NOT a round number picked for feel. The desk review measures the distance
+ * between this pin and the address on the owner's document, and
+ * SpotVerificationPolicy bands that at ADDRESS_CONSISTENT_M = 150 m (consistent)
+ * and ADDRESS_REVIEW_M = 1000 m (needs a human). So the pin's own uncertainty
+ * is subtracted from the band before anyone has done anything wrong: a ±50 m
+ * capture spends a third of the inner band on nothing, and a bad pin does not
+ * merely sit in the wrong place — it corrupts the check whose whole job is to
+ * notice a spot being in the wrong place. Two failures from one cause.
+ *
+ * 30 m is a fifth of that band: loose enough that an ordinary phone outdoors
+ * clears it in seconds, tight enough that the check still has most of its
+ * margin to work with.
+ */
+const POOR_FIX_M = 30;
+
+/**
+ * How long a held fix stays authoritative before a worse one may replace it.
+ *
+ * Without this the pin would stick to the best fix ever seen, and an owner who
+ * walked from the gate to the actual bay would watch it refuse to follow them.
+ */
+const FIX_STALE_MS = 15000;
 
 export default function SpotsScreen() {
   const router = useRouter();
@@ -56,6 +82,76 @@ export default function SpotsScreen() {
   const [locationError, setLocationError] = useState('');
   const [locationRetryTick, setLocationRetryTick] = useState(0);
 
+  /**
+   * How precise the pin currently on screen is, in metres.
+   *
+   * null means "no GPS claim attached to it" — either nothing has been
+   * captured yet, or the owner placed the pin by hand on the map, which is
+   * exact by intent and has no accuracy to report or warn about.
+   *
+   * detectLocation already told the owner "±Nm" in an alert and then threw the
+   * number away. Holding it is what lets the screen show it while watching and
+   * warn at the moment of saving, which is the moment that costs something.
+   */
+  const [pinAccuracyM, setPinAccuracyM] = useState<number | null>(null);
+
+  /** The accuracy and age of the fix the pin came from. See acceptFix below. */
+  const heldFix = useRef<{ acc: number; at: number } | null>(null);
+
+  /**
+   * Take a fix, or ignore it.
+   *
+   * The watcher fires every ~2 s with distanceInterval: 1, and every single
+   * sample used to be written straight into the coordinate fields with no look
+   * at coords.accuracy. So the pin visibly wandered while it settled, and
+   * whatever it happened to be showing when the owner tapped Save is what got
+   * saved. The gate from d93e9de does not help here: that one lives in
+   * useInAppNavigation and governs the driver's navigation fixes — it was one
+   * file, and this screen talks to expo-location directly.
+   *
+   * The rule: ignore a fix that is BOTH coarser than the band tolerance AND
+   * worse than what the pin already shows. Anything else is taken.
+   *
+   * It is deliberately not "keep the best fix ever seen". This is a static
+   * capture, so converging is right, but an owner does walk from the gate to
+   * the bay — and a strictly-improving rule would refuse to follow them once
+   * accuracy plateaued. Good fixes are therefore always accepted, so the pin
+   * still tracks real movement; only genuinely poor ones are dropped. A held
+   * fix also goes stale after FIX_STALE_MS, so a long run of poor readings
+   * eventually updates rather than freezing the pin forever.
+   *
+   * Fails open on the first fix: with nothing held, whatever arrives is taken,
+   * so the preview appears as promptly as it did before.
+   */
+  const acceptFix = (loc: Location.LocationObject) => {
+    // null accuracy means the platform will not say. Treated as the worst
+    // possible rather than as fine, so it cannot displace a known-good fix.
+    const acc = loc.coords.accuracy ?? Infinity;
+    const held = heldFix.current;
+    const stale = held !== null && Date.now() - held.at > FIX_STALE_MS;
+
+    if (held !== null && !stale && acc > POOR_FIX_M && acc > held.acc) return;
+
+    heldFix.current = { acc, at: Date.now() };
+    setPinAccuracyM(Number.isFinite(acc) ? acc : null);
+
+    /**
+     * EIGHT DECIMAL PLACES IS ABOUT A MILLIMETRE, AND MEANS NOTHING HERE.
+     *
+     * A phone fix is good to metres at best — the accuracy this very function
+     * gates on is typically ±5 to ±50 m. So digits three through eight are not
+     * precision, they are the float's own decimal expansion written out.
+     *
+     * They are kept because the column is Decimal(10,8) and a round trip
+     * through the form should not quietly move the pin, and because the map tap
+     * and the manual fields use the same width. What they must never be read as
+     * is confidence: pinAccuracyM is the only honest statement of that, which
+     * is why it is shown beside the coordinates and warned about on save.
+     */
+    setLatitude(loc.coords.latitude.toFixed(8));
+    setLongitude(loc.coords.longitude.toFixed(8));
+  };
+
   useEffect(() => {
     let subscription: Location.LocationSubscription | null = null;
 
@@ -76,8 +172,7 @@ export default function SpotsScreen() {
           }
 
           const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-          setLatitude(current.coords.latitude.toFixed(8));
-          setLongitude(current.coords.longitude.toFixed(8));
+          acceptFix(current);
 
           subscription = await Location.watchPositionAsync(
             {
@@ -85,10 +180,7 @@ export default function SpotsScreen() {
               timeInterval: 2000,
               distanceInterval: 1,
             },
-            (loc) => {
-              setLatitude(loc.coords.latitude.toFixed(8));
-              setLongitude(loc.coords.longitude.toFixed(8));
-            }
+            acceptFix
           );
         } catch (e) {
           console.log('Error watching live location', e);
@@ -160,6 +252,12 @@ export default function SpotsScreen() {
       // A spot's coordinates are permanent — capture them with the strongest
       // GPS mode and tell the Spotter how precise the fix actually was.
       const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.BestForNavigation });
+      // Deliberately NOT through acceptFix: the owner asked for this one, so it
+      // wins outright. It does record the accuracy, which this function used to
+      // report in the alert and then throw away — so the number now survives to
+      // the save-time check instead of being shown once and forgotten.
+      heldFix.current = { acc: loc.coords.accuracy ?? Infinity, at: Date.now() };
+      setPinAccuracyM(loc.coords.accuracy ?? null);
       setLatitude(loc.coords.latitude.toFixed(8));
       setLongitude(loc.coords.longitude.toFixed(8));
       const accM = Math.round(loc.coords.accuracy || 0);
@@ -169,7 +267,19 @@ export default function SpotsScreen() {
     }
   };
 
-  const handleCreate = async () => {
+  /**
+   * Validate, then warn about a coarse pin before saving one.
+   *
+   * The warning belongs HERE and not only beside the map: an owner who taps
+   * Save during the window while the fix is still settling is the case that
+   * actually costs something, and that is the moment to say so.
+   *
+   * It does NOT block. A basement or a stilt park may never produce a good
+   * fix, and refusing to save would leave those owners with no way to list at
+   * all. So the warning points at the map tap, which is the honest way out,
+   * and saving anyway stays one press away.
+   */
+  const handleCreate = () => {
     if (!title.trim()) return Alert.alert('Missing', 'Spot name is required.');
     if (!price || parseFloat(price) <= 0) return Alert.alert('Missing', 'Enter a valid price per hour.');
     if (!latitude || !longitude) return Alert.alert('Missing', 'Please detect or enter your location.');
@@ -177,6 +287,26 @@ export default function SpotsScreen() {
     const totalSlots = parseInt(carSlots || '0') + parseInt(bikeSlots || '0');
     if (totalSlots <= 0) return Alert.alert('Missing', 'Add at least one parking slot.');
 
+    if (pinAccuracyM != null && pinAccuracyM > POOR_FIX_M) {
+      return Alert.alert(
+        'This pin may be off',
+        `Your GPS is only accurate to about ±${Math.round(pinAccuracyM)} m right now, so this pin `
+        + 'could be that far from the actual bay.\n\n'
+        + 'We check this pin against the address on your document, so a loose one can hold up '
+        + 'your verification. Tapping the spot on the map is more exact than waiting.',
+        [
+          { text: 'Set it on the map', style: 'cancel' },
+          { text: 'Save anyway', onPress: () => submitSpot(totalSlots) },
+        ]
+      );
+    }
+
+    submitSpot(totalSlots);
+  };
+
+  /** The save itself. totalSlots is passed rather than recomputed so the
+   *  figure that was validated is the figure that is sent. */
+  const submitSpot = async (totalSlots: number) => {
     setCreating(true);
     try {
       const existingWebImages = pickedImages.filter(img => img.startsWith('http') || img.startsWith('https'));
@@ -567,7 +697,15 @@ export default function SpotsScreen() {
                 >
                   <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: useLiveLocation ? '#10b981' : '#3b82f6', marginRight: 5 }} />
                   <Text style={{ color: useLiveLocation ? '#10b981' : '#3b82f6', fontSize: 10, fontWeight: '800' }}>
-                    {useLiveLocation ? 'Live GPS Active' : 'Custom Pin Set'}
+                    {/*
+                      The accuracy, while watching — not only in an alert after
+                      pressing Detect. An owner cannot judge a pin they are
+                      given no measure of, and this is the number the desk
+                      review's 150 m band is spent on.
+                    */}
+                    {useLiveLocation
+                      ? (pinAccuracyM != null ? `Live GPS ±${Math.round(pinAccuracyM)}m` : 'Live GPS Active')
+                      : 'Custom Pin Set'}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -588,6 +726,12 @@ export default function SpotsScreen() {
                     onMapPress={(coords) => {
                       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
                       setUseLiveLocation(false); // Disable live tracking when placing custom pin
+                      // A hand-placed pin is exact by intent: there is no GPS
+                      // uncertainty to report, and nothing to warn about on
+                      // save. This is the honest way out of a basement or a
+                      // stilt park that will never get a good fix.
+                      heldFix.current = null;
+                      setPinAccuracyM(null);
                       setLatitude(coords[0].toFixed(8));
                       setLongitude(coords[1].toFixed(8));
                     }}
