@@ -260,8 +260,11 @@ export default function SpotsScreen() {
       setPinAccuracyM(loc.coords.accuracy ?? null);
       setLatitude(loc.coords.latitude.toFixed(8));
       setLongitude(loc.coords.longitude.toFixed(8));
-      const accM = Math.round(loc.coords.accuracy || 0);
-      Alert.alert('📍 Location Detected', `Lat: ${loc.coords.latitude.toFixed(6)}\nLng: ${loc.coords.longitude.toFixed(6)}${accM ? `\nAccuracy: ±${accM}m` : ''}`);
+      // The accuracy is NOT repeated here. The badge shows it continuously now
+      // ("Live GPS ±12m") and the save warns on a coarse one, so saying it in
+      // this alert as well told a coarse capture twice and let the owner
+      // dismiss the one place it persists.
+      Alert.alert('📍 Location Detected', `Lat: ${loc.coords.latitude.toFixed(6)}\nLng: ${loc.coords.longitude.toFixed(6)}`);
     } catch (e) {
       Alert.alert('Error', 'Failed to get current location.');
     }
@@ -713,6 +716,20 @@ export default function SpotsScreen() {
               {/* Map Preview Webview */}
               {latitude && longitude ? (
                 <View style={{ height: 200, borderRadius: RAD.md, overflow: 'hidden', marginBottom: 12, borderWidth: 1, borderColor: SC.border }}>
+                  {/*
+                    userLocation is the SPOT here, not the owner — the one
+                    place in the app where that prop means something else.
+
+                    Left as it is rather than renamed, because the behaviour is
+                    the behaviour this preview wants: the prop drives the
+                    opening camera centre and zoom, and the follow camera keeps
+                    that point in frame. Pointing it at the pin is how the
+                    preview stays on the pin.
+
+                    It does NOT draw a false "you are here". The blue dot comes
+                    from showsUserLocation inside GoogleMapNative, which uses
+                    the device's own fix and ignores this prop.
+                  */}
                   <MapLibreView
                     userLocation={{ lat: parseFloat(latitude), lng: parseFloat(longitude) }}
                     markers={[{
