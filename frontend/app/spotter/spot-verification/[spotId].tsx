@@ -163,9 +163,15 @@ function Overview({
     try {
       const next = await spotVerification.submit(spotId);
       onSubmitted(next);
+      // The promise is made at the moment of submitting, which is when it
+      // matters — but only when there is one to make. With the gate off
+      // `promised_hours` is null, the spot is already visible to drivers, and
+      // naming a deadline would be inventing one.
       Alert.alert(
         'Sent for checking',
-        `We will verify this spot and list it within ${next.promised_hours} hours. `
+        (next.promised_hours != null
+          ? `We will verify this spot and list it within ${next.promised_hours} hours. `
+          : 'We will check this spot and let you know. ')
         + 'You do not need to do anything else.'
       );
     } catch (e) {
@@ -216,15 +222,26 @@ function Overview({
           </View>
         ) : null}
 
-        {/* The promise, stated plainly, wherever the owner is in the process. */}
-        <View style={s.promise}>
-          <Ionicons name="time-outline" size={ICON.label} color={SC.textSecondary} />
-          <Text style={s.promiseText}>
-            Once everything is in, we verify this spot and list it within{' '}
-            <Text style={{ fontWeight: '800', color: SC.textPrimary }}>{data.promised_hours} hours</Text>.
-            The clock starts when your submission is complete — not before.
-          </Text>
-        </View>
+        {/*
+          The promise, stated plainly, wherever the owner is in the process —
+          and absent entirely when there is no promise to state.
+
+          `promised_hours` is null when the spot gate is off, and this block
+          used to render it anyway: the interpolation produced an empty string
+          in JSX, so the screen read "we verify this spot and list it within
+          hours". The condition is the field itself rather than a re-derived
+          48, because the server decides whether a promise exists.
+        */}
+        {data.promised_hours != null ? (
+          <View style={s.promise}>
+            <Ionicons name="time-outline" size={ICON.label} color={SC.textSecondary} />
+            <Text style={s.promiseText}>
+              Once everything is in, we verify this spot and list it within{' '}
+              <Text style={{ fontWeight: '800', color: SC.textPrimary }}>{data.promised_hours} hours</Text>.
+              The clock starts when your submission is complete — not before.
+            </Text>
+          </View>
+        ) : null}
 
         <View style={s.privacy}>
           <Ionicons name="lock-closed" size={ICON.label} color={SC.textSecondary} />
@@ -262,7 +279,36 @@ function Overview({
  * existed stays visible while its review is in flight, and telling its owner
  * "not visible" would be a lie.
  */
+/**
+ * The waiting line, or null when there is nothing honest to say.
+ *
+ * Three cases, which is one more than the chain of ternaries this replaced
+ * could express — and the missing one is what put the word "null" on screen:
+ *
+ *   no submission yet          -> nothing (waiting_hours is null)
+ *   gate off                   -> the elapsed time, and no promise clause
+ *   gate on                    -> time left, or past the promise
+ *
+ * `promised_hours` and `hours_left` are BOTH null when the spot gate is off
+ * (ownerSummary in SpotVerificationPolicy nulls exactly those two). The old
+ * code tested `hours_left` alone, so with the gate off it fell through to the
+ * "past the ... hours we promised" branch and interpolated null into it.
+ *
+ * waiting_hours is NOT gated, and "how long it has been" is still true with
+ * the gate off, so that part stays. What goes is the comparison against a
+ * promise that was never made.
+ */
+function clockText(data: SpotVerification): string | null {
+  if (data.waiting_hours === null) return null;
+  if (data.promised_hours == null) return `Waiting ${data.waiting_hours} h`;
+
+  return data.hours_left && data.hours_left > 0
+    ? `Waiting ${data.waiting_hours} h · about ${Math.ceil(data.hours_left)} h left of the ${data.promised_hours} we promised`
+    : `Waiting ${data.waiting_hours} h · past the ${data.promised_hours} hours we promised. We are on it.`;
+}
+
 function StatusCard({ data }: { data: SpotVerification }) {
+  const clock = clockText(data);
   const tone = data.status === 'approved' ? 'good'
     : data.status === 'rejected' ? 'bad'
       : data.status === 'desk_pending' || data.status === 'desk_approved' ? 'wait'
@@ -284,13 +330,7 @@ function StatusCard({ data }: { data: SpotVerification }) {
       {/* The sentence is the server's. One definition, two screens. */}
       <Text style={s.statusMessage}>{data.message}</Text>
 
-      {data.waiting_hours !== null ? (
-        <Text style={s.statusClock}>
-          {data.hours_left && data.hours_left > 0
-            ? `Waiting ${data.waiting_hours} h · about ${Math.ceil(data.hours_left)} h left of the ${data.promised_hours} we promised`
-            : `Waiting ${data.waiting_hours} h · past the ${data.promised_hours} hours we promised. We are on it.`}
-        </Text>
-      ) : null}
+      {clock !== null ? <Text style={s.statusClock}>{clock}</Text> : null}
 
       {/*
         A rejection, with the reason the reviewer wrote FOR the owner. This is

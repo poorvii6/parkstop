@@ -52,10 +52,27 @@ export type SpotVerification = {
   editable: boolean;
   submitted_at: string | null;
   waiting_hours: number | null;
+  /**
+   * Both of these are NULL when the spot gate is off, and this type used to
+   * say `promised_hours: number`. That lie is why the word "null" reached
+   * production: `${data.promised_hours} hours` looked safe to write, and tsc
+   * had no reason to object.
+   *
+   * With the gate off a spot is visible whatever its verification status, so
+   * there is no countdown and nothing being promised — see `ownerSummary` in
+   * SpotVerificationPolicy, which nulls exactly these two and nothing else.
+   * A screen that reads them must treat null as "say nothing", not as 0 and
+   * not as a default of 48.
+   */
   hours_left: number | null;
-  promised_hours: number;
+  promised_hours: number | null;
   rejection_reason: string | null;
   pin_locked: boolean;
+  /**
+   * Whether this spot's own verification gates anything yet. The server's
+   * decision, not something to infer from the other fields.
+   */
+  gate_enforced: boolean;
 };
 
 const unwrap = (res: any) => res.data?.data as SpotVerification;
