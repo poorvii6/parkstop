@@ -3,8 +3,21 @@ name: CI
 on:
   push:
     branches: [main, develop]
+  # Every pull request, whatever it targets.
+  #
+  # This used to filter on `branches: [main]`, which meant a PR stacked on
+  # another branch got NO checks at all — while still reading MERGEABLE/CLEAN,
+  # because an empty check rollup looks exactly like a satisfied one. PR #21
+  # sat in that state: three jobs' worth of nothing, presented as ready.
+  #
+  # Adding `edited` to the trigger types was the other option and is not
+  # enough. It would only cover the moment a PR is retargeted at main; while
+  # the PR was still stacked it would remain unchecked, which is precisely the
+  # state that reads as green. Removing the filter checks it from the start.
+  #
+  # The push trigger keeps its branches: that one is about which branches are
+  # worth a build on every commit, which is a different question.
   pull_request:
-    branches: [main]
 
 jobs:
   # Fast, deterministic unit tests. No database or Redis — everything is mocked.
