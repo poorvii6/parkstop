@@ -40,14 +40,40 @@ export default function SpotsScreen() {
   const [pickedImages, setPickedImages] = useState<string[]>([]);
   const [useLiveLocation, setUseLiveLocation] = useState(true);
 
+  /**
+   * Why the location fetch needs an error state of its own.
+   *
+   * Both failure paths below used to exit without touching any state: a denied
+   * permission returned, and a thrown error went to console.log. Nothing else
+   * writes latitude, so the map preview kept rendering its placeholder and the
+   * owner sat on "Waiting for GPS signal..." forever, with no error and nothing
+   * to press. The same lie the rest of the app stopped telling.
+   *
+   * The tick re-runs the effect, which re-requests the permission — on Android
+   * a denial that was not "never ask again" will prompt again, so the retry is
+   * worth offering rather than sending them straight to Settings.
+   */
+  const [locationError, setLocationError] = useState('');
+  const [locationRetryTick, setLocationRetryTick] = useState(0);
+
   useEffect(() => {
     let subscription: Location.LocationSubscription | null = null;
 
     if (mode === 'create' && useLiveLocation && !editingSpotId) {
       (async () => {
+        setLocationError('');
         try {
           const { status } = await Location.requestForegroundPermissionsAsync();
-          if (status !== 'granted') return;
+          if (status !== 'granted') {
+            // Not "tap the map": with no coordinates there is no map on
+            // screen, only this block. The way out is the Live GPS badge,
+            // which toggles to Custom Pin and reveals the manual fields.
+            setLocationError(
+              'ParkStop needs location access to place this spot. Allow it and try again, '
+              + 'or switch Live GPS off to enter the coordinates yourself.'
+            );
+            return;
+          }
 
           const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
           setLatitude(current.coords.latitude.toFixed(8));
@@ -66,6 +92,7 @@ export default function SpotsScreen() {
           );
         } catch (e) {
           console.log('Error watching live location', e);
+          setLocationError(loadErrorText(e, 'Could not get your location.'));
         }
       })();
     }
@@ -75,7 +102,7 @@ export default function SpotsScreen() {
         subscription.remove();
       }
     };
-  }, [mode, useLiveLocation, editingSpotId]);
+  }, [mode, useLiveLocation, editingSpotId, locationRetryTick]);
 
   const pickImages = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -567,10 +594,35 @@ export default function SpotsScreen() {
                     hideControls={true}
                   />
                 </View>
+              ) : locationError ? (
+                /* The fetch failed. Say so, and offer the way out. */
+                <View style={{ minHeight: 200, borderRadius: RAD.md, backgroundColor: SC.bgCard, justifyContent: 'center', marginBottom: 12, borderWidth: 1, borderColor: SC.border }}>
+                  <LoadFailed
+                    message={locationError}
+                    onRetry={() => setLocationRetryTick((t) => t + 1)}
+                    what="your location"
+                    compact
+                  />
+                </View>
               ) : (
                 <View style={{ height: 200, borderRadius: RAD.md, backgroundColor: SC.bgCard, justifyContent: 'center', alignItems: 'center', marginBottom: 12, borderWidth: 1, borderColor: SC.border }}>
-                  <ActivityIndicator color={SC.accent} size="small" />
-                  <Text style={{ color: SC.textMuted, fontSize: 12, marginTop: 8, fontWeight: '700' }}>Waiting for GPS signal...</Text>
+                  {/*
+                    Only claim to be waiting when something actually is. The
+                    watcher runs for a NEW spot with live location on; with a
+                    custom pin chosen and no coordinates yet, nothing is
+                    acquiring anything and "Waiting for GPS signal" was the
+                    same kind of untruth as the eternal spinner above.
+                  */}
+                  {useLiveLocation && !editingSpotId ? (
+                    <>
+                      <ActivityIndicator color={SC.accent} size="small" />
+                      <Text style={{ color: SC.textMuted, fontSize: 12, marginTop: 8, fontWeight: '700' }}>Waiting for GPS signal...</Text>
+                    </>
+                  ) : (
+                    <Text style={{ color: SC.textMuted, fontSize: 12, fontWeight: '700', textAlign: 'center', paddingHorizontal: 24 }}>
+                      Enter the coordinates below, or switch Live GPS back on.
+                    </Text>
+                  )}
                 </View>
               )}
 
