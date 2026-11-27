@@ -16,10 +16,35 @@
 import React, { useState } from 'react';
 import { View, Text, Image, TouchableOpacity, StyleSheet, Linking } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import * as DocPicker from 'expo-document-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { SC, ICON } from '../../constants/SpotterTheme';
 import type { PickedDoc } from '../../api/spotVerification';
+
+/**
+ * expo-document-picker is a NATIVE module, so it exists only inside a dev build
+ * made after it entered package.json. A plain top-level import throws
+ * "Cannot find native module 'ExpoDocumentPicker'" on an older build, and that
+ * throw lands while this module is still evaluating -- so the route importing
+ * it never finishes, which Expo Router then reports as a missing default
+ * export. One cause, two errors. Requiring it lazily costs a stale build the
+ * PDF button and nothing else: the screen loads and photos still work.
+ */
+type DocPickerModule = typeof import('expo-document-picker');
+let docPickerModule: DocPickerModule | null = null;
+let docPickerResolved = false;
+
+function getDocPicker(): DocPickerModule | null {
+  if (!docPickerResolved) {
+    docPickerResolved = true;
+    try {
+      const m = require('expo-document-picker') as DocPickerModule;
+      docPickerModule = typeof m?.getDocumentAsync === 'function' ? m : null;
+    } catch {
+      docPickerModule = null;
+    }
+  }
+  return docPickerModule;
+}
 
 const IMAGE_MIME = /^image\/(jpe?g|png|webp)$/;
 
@@ -40,11 +65,17 @@ export default function DocumentPickerField({
   disabled?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
+  const canPickFiles = getDocPicker() !== null;
 
   const pickFile = async () => {
+    const docPicker = getDocPicker();
+    if (!docPicker) {
+      onError('This app build cannot open files yet. Please take a photo of the document instead.');
+      return;
+    }
     setBusy(true);
     try {
-      const res = await DocPicker.getDocumentAsync({ type: ACCEPTED, copyToCacheDirectory: true });
+      const res = await docPicker.getDocumentAsync({ type: ACCEPTED, copyToCacheDirectory: true });
       if (res.canceled || !res.assets?.[0]) return;
 
       const a = res.assets[0];
@@ -114,11 +145,17 @@ export default function DocumentPickerField({
   return (
     <View style={{ gap: 10 }}>
       {/* First, because it is what owners actually have. */}
-      <TouchableOpacity style={s.pdfBtn} onPress={pickFile} disabled={disabled || busy}>
-        <Ionicons name="document-attach" size={ICON.tile} color="#fff" />
-        <Text style={s.pdfBtnText}>{busy ? 'Opening…' : 'Choose a PDF or file'}</Text>
-      </TouchableOpacity>
-      <Text style={s.or}>or take a photo of the document</Text>
+      {canPickFiles ? (
+        <>
+          <TouchableOpacity style={s.pdfBtn} onPress={pickFile} disabled={disabled || busy}>
+            <Ionicons name="document-attach" size={ICON.tile} color="#fff" />
+            <Text style={s.pdfBtnText}>{busy ? 'Opening…' : 'Choose a PDF or file'}</Text>
+          </TouchableOpacity>
+          <Text style={s.or}>or take a photo of the document</Text>
+        </>
+      ) : (
+        <Text style={s.or}>Take a photo of the document</Text>
+      )}
       <View style={{ flexDirection: 'row', gap: 10 }}>
         <TouchableOpacity style={s.pickBtn} onPress={() => pickImage('camera')} disabled={disabled}>
           <Ionicons name="camera" size={ICON.tile} color={SC.textPrimary} />
