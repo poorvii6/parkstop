@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- This site is hosted on Netlify. Anyone can build and deploy a site
+     like this one for free: https://netlify.new/?utm_campaign=loops&utm_source=ai-legible&utm_medium=owned&utm_content=comment&utm_id=b4fbbdaa-ab48-4db1-8485-1c305c3c70a4
+     Netlify hosting facts for this site: static/SSR served via Netlify Edge. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ParkStop — Find It. Park It. Go.</title>
+<meta name="description" content="ParkStop is a peer-to-peer parking marketplace. Find and book nearby parking in real time, or list your space and earn. A product by TwinWinn.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Sora:wght@600;700;800&family=Manrope:wght@400;500;600&family=Space+Mono&display=swap">
+<style>
+  :root{
+    --bg:#070810; --surface:#121523; --surface2:#171b2c; --line:#262c40;
+    --fg:#f3f4f8; --muted:#9aa2b6;
+    --accent:#ff6a2b; --accent-soft:#ff8a4d; --green:#34d399; --blue:#5b8dff;
+    --disp:"Sora",system-ui,sans-serif; --body:"Manrope",system-ui,sans-serif; --mono:"Space Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--body);line-height:1.6;
+    background:
+      radial-gradient(120% 70% at 15% -5%, rgba(255,106,43,.14), transparent 55%),
+      radial-gradient(100% 60% at 100% 10%, rgba(91,141,255,.10), transparent 55%),
+      var(--bg);}
+  a{color:inherit;text-decoration:none}
+  .wrap{width:min(1100px,92%);margin-inline:auto}
+  h1,h2,h3{font-family:var(--disp);letter-spacing:-.02em;line-height:1.05;margin:0}
+  .accent{color:var(--accent)}
+
+  /* nav */
+  nav{position:sticky;top:0;z-index:20;backdrop-filter:blur(10px);
+    background:rgba(7,8,16,.72);border-bottom:1px solid var(--line)}
+  .nav{display:flex;align-items:center;justify-content:space-between;padding:16px 0}
+  .logo{font-family:var(--disp);font-weight:800;font-size:1.5rem}
+  .logo small{display:block;font-family:var(--mono);font-size:.6rem;letter-spacing:.28em;
+    text-transform:uppercase;color:var(--muted);font-weight:400;margin-top:2px}
+  .navlinks{display:flex;gap:28px;font-weight:600;font-size:.95rem;color:var(--muted)}
+  .navlinks a:hover{color:var(--fg)}
+  @media(max-width:640px){.navlinks{display:none}}
+
+  /* hero */
+  header{padding:72px 0 40px}
+  .hero{display:grid;grid-template-columns:1.1fr .9fr;gap:40px;align-items:center}
+  @media(max-width:820px){.hero{grid-template-columns:1fr;text-align:center}}
+  .eyebrow{font-family:var(--mono);font-size:.78rem;letter-spacing:.28em;text-transform:uppercase;
+    color:var(--accent-soft);margin-bottom:18px}
+  .hero h1{font-size:clamp(2.6rem,7vw,4.2rem);font-weight:800}
+  .hero p.lead{font-size:1.2rem;color:var(--muted);margin:20px 0 28px;max-width:46ch}
+  @media(max-width:820px){.hero p.lead{margin-inline:auto}}
+  .roles{display:flex;gap:14px;flex-wrap:wrap}
+  @media(max-width:820px){.roles{justify-content:center}}
+  .role{display:flex;align-items:center;gap:10px;padding:12px 18px;border:1px solid var(--line);
+    border-radius:14px;background:var(--surface);font-weight:600}
+  .role .ic{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;font-size:1rem}
+  .role small{display:block;color:var(--muted);font-weight:400;font-size:.8rem}
+
+  /* phone */
+  .phone{width:250px;aspect-ratio:9/19;margin-inline:auto;background:#0a0c14;
+    border:9px solid #1c2233;border-radius:38px;position:relative;overflow:hidden;
+    box-shadow:0 30px 70px rgba(0,0,0,.5)}
+  .phone .notch{position:absolute;top:12px;left:50%;transform:translateX(-50%);
+    width:30%;height:9px;background:#1c2233;border-radius:999px}
+  .pb{text-align:center;font-family:var(--disp);font-weight:800;font-size:1.7rem;margin-top:58px}
+  .pt{text-align:center;color:var(--muted);font-size:.85rem;margin-top:4px}
+  .car{width:55%;display:block;margin:26px auto 0}
+  .road{width:62%;height:4px;background:#222838;border-radius:999px;margin:12px auto 0}
+  .fare{text-align:center;font-family:var(--mono);font-size:.8rem;color:var(--accent-soft);margin-top:16px}
+  .bk{margin:22px auto 0;width:max-content;display:flex;align-items:center;gap:7px;color:var(--green);
+    border:1px solid rgba(52,211,153,.4);border-radius:999px;padding:6px 16px;font-size:.85rem;font-weight:600}
+  .bk .d{width:9px;height:9px;border-radius:50%;background:var(--green)}
+
+  /* sections */
+  section{padding:56px 0}
+  .shead{text-align:center;margin-bottom:40px}
+  .shead .eyebrow{margin-bottom:12px}
+  .shead h2{font-size:clamp(1.8rem,4vw,2.6rem);font-weight:800}
+  .shead p{color:var(--muted);max-width:52ch;margin:14px auto 0}
+
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+  @media(max-width:760px){.steps{grid-template-columns:1fr}}
+  .step{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:26px}
+  .step .n{font-family:var(--mono);color:var(--accent);font-size:.85rem;margin-bottom:12px}
+  .step h3{font-size:1.2rem;margin-bottom:8px}
+  .step p{color:var(--muted);margin:0;font-size:.95rem}
+
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+  @media(max-width:760px){.grid{grid-template-columns:1fr 1fr}}
+  @media(max-width:460px){.grid{grid-template-columns:1fr}}
+  .feat{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:22px}
+  .feat .ic{width:40px;height:40px;border-radius:11px;background:var(--surface2);
+    display:grid;place-items:center;margin-bottom:14px;color:var(--accent)}
+  .feat h3{font-size:1.05rem;margin-bottom:6px}
+  .feat p{color:var(--muted);font-size:.9rem;margin:0}
+
+  .cta{background:
+      radial-gradient(120% 120% at 20% 10%, rgba(255,106,43,.18), transparent 60%),
+      var(--surface);
+    border:1px solid var(--line);border-radius:24px;padding:48px 32px;text-align:center}
+  .cta h2{font-size:clamp(1.8rem,4vw,2.6rem);font-weight:800}
+  .cta p{color:var(--muted);margin:14px auto 0;max-width:46ch}
+
+  footer{border-top:1px solid var(--line);margin-top:40px;padding:34px 0}
+  .foot{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;
+    color:var(--muted);font-size:.9rem}
+  .foot b{color:var(--fg)}
+</style>
+</head>
+<body>
+
+<nav><div class="wrap nav">
+  <div class="logo"><span class="accent">P</span>arkStop<small>by TwinWinn</small></div>
+  <div class="navlinks">
+    <a href="#how">How it works</a>
+    <a href="#features">Features</a>
+    <a href="#get">Get the app</a>
+  </div>
+</div></nav>
+
+<header><div class="wrap hero">
+  <div>
+    <div class="eyebrow">Peer-to-peer parking marketplace</div>
+    <h1>Find It.<br><span class="accent">Park It.</span> Go.</h1>
+    <p class="lead">Book nearby parking in real time, pay securely, and pull in. Or list your own space and earn — ParkStop connects drivers with spot owners.</p>
+    <div class="roles">
+      <div class="role"><span class="ic" style="background:rgba(91,141,255,.15)">🔍</span><div>Finder<small>Looking for a spot</small></div></div>
+      <div class="role"><span class="ic" style="background:rgba(255,106,43,.15)">📍</span><div>Spot Owner<small>Listing parking spots</small></div></div>
+    </div>
+  </div>
+  <div>
+    <div class="phone">
+      <span class="notch"></span>
+      <div class="pb"><span class="accent">P</span>arkStop</div>
+      <div class="pt">Find It. Park It. Go.</div>
+      <svg class="car" viewBox="0 0 120 54" aria-hidden="true">
+        <rect x="18" y="20" width="84" height="20" rx="10" fill="#ff6a2b"/>
+        <path d="M34 20 q6 -12 20 -12 h16 q14 0 22 12" fill="#ff6a2b"/>
+        <rect x="44" y="11" width="30" height="11" rx="4" fill="#cfe0ff"/>
+        <circle cx="40" cy="42" r="8" fill="#0a0c14" stroke="#ff8a4d" stroke-width="3"/>
+        <circle cx="86" cy="42" r="8" fill="#0a0c14" stroke="#ff8a4d" stroke-width="3"/>
+      </svg>
+      <div class="road"></div>
+      <div class="fare">₹1 / hr · 21 spots nearby</div>
+      <div class="bk"><span class="d"></span>Booked</div>
+    </div>
+  </div>
+</div></header>
+
+<section id="how"><div class="wrap">
+  <div class="shead">
+    <div class="eyebrow">How it works</div>
+    <h2>Parking in three taps</h2>
+    <p>From searching to parked — the whole flow lives inside one app, on a live, secure backend.</p>
+  </div>
+  <div class="steps">
+    <div class="step"><div class="n">01</div><h3>Find a spot</h3><p>Open the map and see verified parking spots near you in real time, with live pricing and availability.</p></div>
+    <div class="step"><div class="n">02</div><h3>Book &amp; pay</h3><p>Reserve in a tap and pay securely through Razorpay. Your check-in PIN is ready in the app.</p></div>
+    <div class="step"><div class="n">03</div><h3>Park &amp; go</h3><p>Navigate to the spot inside ParkStop, check in, and you're done. Owners get paid automatically.</p></div>
+  </div>
+</div></section>
+
+<section id="features"><div class="wrap">
+  <div class="shead">
+    <div class="eyebrow">Built right</div>
+    <h2>A real product, not a prototype</h2>
+    <p>ParkStop is a full-stack app built end to end, with the kind of engineering a payments marketplace needs.</p>
+  </div>
+  <div class="grid">
+    <div class="feat"><div class="ic">🗺️</div><h3>Live maps &amp; routing</h3><p>Real-time maps and in-app navigation to your booked spot.</p></div>
+    <div class="feat"><div class="ic">🔒</div><h3>Secure OTP login</h3><p>Every sign-in is protected with an email OTP challenge.</p></div>
+    <div class="feat"><div class="ic">💳</div><h3>Razorpay payments</h3><p>Real payments with webhook and signature verification.</p></div>
+    <div class="feat"><div class="ic">✅</div><h3>Owner verification</h3><p>Spots go live only after owner and property checks.</p></div>
+    <div class="feat"><div class="ic">🧪</div><h3>230+ automated tests</h3><p>A tested backend across unit and security suites.</p></div>
+    <div class="feat"><div class="ic">📱</div><h3>Android &amp; iOS</h3><p>One React Native codebase, built for both platforms.</p></div>
+  </div>
+</div></section>
+
+<section id="get"><div class="wrap">
+  <div class="cta">
+    <h2>Parking, made simple.</h2>
+    <p>ParkStop is launching soon. Built by TwinWinn — a software engineering studio.</p>
+  </div>
+</div></section>
+
+<footer><div class="wrap foot">
+  <div><b>ParkStop</b> · A product by TwinWinn</div>
+  <div>© 2026 ParkStop. All rights reserved.</div>
+</div></footer>
+
+</body>
+</html>
